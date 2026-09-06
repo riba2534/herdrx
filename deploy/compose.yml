@@ -1,0 +1,30 @@
+services:
+  herdrx:
+    image: ${HERDRX_IMAGE:?请在 .env 中填写已发布镜像的完整引用}
+    restart: unless-stopped
+    ports:
+      - "${HERDRX_BIND_ADDR:-0.0.0.0}:${HERDRX_PORT:-8080}:8080"
+    environment:
+      HERDRX_ADDR: 0.0.0.0:8080
+      HERDRX_DATA_DIR: /data
+      HERDRX_PUBLIC_URL: ${HERDRX_PUBLIC_URL:-http://127.0.0.1:8080}
+      HERDRX_COOKIE_SECURE: ${HERDRX_COOKIE_SECURE:-false}
+      HERDRX_ALLOWED_ORIGINS: ${HERDRX_ALLOWED_ORIGINS:-}
+      HERDRX_TRUSTED_PROXIES: ${HERDRX_TRUSTED_PROXIES:-}
+      HERDRX_HOST_DIAL_CONCURRENCY: ${HERDRX_HOST_DIAL_CONCURRENCY:-4}
+      HERDRX_MAX_HOST_CONNECTIONS: ${HERDRX_MAX_HOST_CONNECTIONS:-20}
+      HERDRX_HOST_DIAL_TIMEOUT: ${HERDRX_HOST_DIAL_TIMEOUT:-30s}
+      HERDRX_HOST_IDLE_TIMEOUT: ${HERDRX_HOST_IDLE_TIMEOUT:-2m}
+      HERDRX_AUTH_HASH_CONCURRENCY: ${HERDRX_AUTH_HASH_CONCURRENCY:-2}
+      HERDRX_SESSION_TTL: ${HERDRX_SESSION_TTL:-720h}
+      HERDRX_DERP_HOST: ${HERDRX_DERP_HOST:-}
+      HERDRX_DERP_REGION_ID: ${HERDRX_DERP_REGION_ID:-304}
+      HERDRX_ALLOW_PRIVATE_HOSTS: ${HERDRX_ALLOW_PRIVATE_HOSTS:-true}
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        bind:
+          create_host_path: false
+    security_opt:
+      - no-new-privileges:true

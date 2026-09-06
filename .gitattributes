@@ -1,0 +1,5 @@
+# Keep upstream license text byte-for-byte, including its original line endings.
+THIRD_PARTY_NOTICES.md -text -whitespace
+licenses/*.txt -text -whitespace
+# Built frontend output includes upstream license banners.
+internal/webassets/dist/** -whitespace linguist-generated=true

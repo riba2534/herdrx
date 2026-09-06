@@ -1,0 +1,11 @@
+# 本地源码构建：与 compose.yml 一起使用。
+services:
+  herdrx:
+    image: herdrx-server:local
+    pull_policy: never
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        VERSION: ${HERDRX_BUILD_VERSION:-dev}
+        REVISION: ${HERDRX_BUILD_REVISION:-local}

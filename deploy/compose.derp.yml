@@ -1,0 +1,28 @@
+# Optional production DERP. It owns host ports 80/443/3478 and therefore
+# cannot share one public IP with the Caddy profile in compose.yml.
+services:
+  derper:
+    build:
+      context: ..
+      dockerfile: deploy/derper.Dockerfile
+    image: herdrx-derper:local
+    restart: unless-stopped
+    command:
+      - -hostname=${HERDRX_DERP_HOSTNAME:?set the DERP hostname}
+      - -a=:443
+      - -http-port=80
+      - -stun-port=3478
+      - -certmode=letsencrypt
+      - -certdir=/certs
+    ports:
+      - "80:80"
+      - "443:443"
+      - "3478:3478/udp"
+    volumes:
+      - type: bind
+        source: ./derp/certs
+        target: /certs
+        bind:
+          create_host_path: false
+    security_opt:
+      - no-new-privileges:true
