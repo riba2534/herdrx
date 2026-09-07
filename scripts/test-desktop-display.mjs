@@ -128,6 +128,66 @@ async function metrics(page, index = 0) {
   })
 }
 
+async function gridState(page, index = 0) {
+  return page.locator('.terminal-viewport').nth(index).evaluate((el) => {
+    const screen = el.querySelector('.xterm-screen').getBoundingClientRect()
+    const rowsEl = el.querySelector('.xterm-rows')
+    const rows = [...el.querySelectorAll('.xterm-rows > div')]
+    const first = rows[0]
+    const last = rows[37]
+    const trim = (row) => (row?.textContent || '').replace(/\s+$/, '')
+    const endBox = (row) => {
+      if (!row) return null
+      const raw = row.textContent || ''
+      const match = raw.match(/END\s*$/)
+      if (!match) return null
+      const start = raw.length - match[0].length
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+      let pos = 0
+      let beginNode = null, beginOff = 0, endNode = null, endOff = 0
+      let node
+      while ((node = walker.nextNode())) {
+        const next = pos + node.data.length
+        if (!beginNode && start >= pos && start < next) { beginNode = node; beginOff = start - pos }
+        if (start + 3 > pos && start + 3 <= next) { endNode = node; endOff = start + 3 - pos; break }
+        pos = next
+      }
+      if (!beginNode || !endNode) return null
+      const range = document.createRange()
+      range.setStart(beginNode, beginOff)
+      range.setEnd(endNode, endOff)
+      const rects = [...range.getClientRects()]
+      const rect = rects.at(-1)
+      return rect ? { right: rect.right, bottom: rect.bottom } : null
+    }
+    const lastEnd = endBox(last)
+    const box = el.getBoundingClientRect()
+    const firstText = trim(first)
+    const lastText = trim(last)
+    return {
+      clientWidth: el.clientWidth, clientHeight: el.clientHeight,
+      scrollWidth: el.scrollWidth, scrollHeight: el.scrollHeight,
+      scrollLeft: el.scrollLeft, scrollTop: el.scrollTop,
+      screenWidth: screen.width, screenHeight: screen.height,
+      screenRight: screen.right, screenBottom: screen.bottom,
+      font: parseFloat(getComputedStyle(rowsEl).fontSize),
+      rowCount: rowsEl.childElementCount,
+      firstText, lastText, firstLen: firstText.length, lastLen: lastText.length,
+      lastEnd: !!lastEnd,
+      endRight: lastEnd?.right ?? null, endBottom: lastEnd?.bottom ?? null,
+      boxRight: box.right, boxBottom: box.bottom,
+    }
+  })
+}
+
+function gridReady(g) {
+  return !!g && g.rowCount === 38 && g.font === 14
+    && g.firstLen === 295 && g.lastLen === 295
+    && g.firstText.startsWith('TOP r01') && g.firstText.endsWith('END')
+    && g.lastText.startsWith('TOP r38') && g.lastText.endsWith('END')
+    && g.lastEnd && g.endRight != null && g.endBottom != null
+}
+
 async function screenshot(page, name) {
   if (!artifacts) return
   await mkdir(artifacts, { recursive: true })
@@ -189,18 +249,25 @@ try {
         assert.equal(resizes(f.messages).length, 0, `${c.name} sent remote resize`)
         assert.equal(opens(f.messages).length, 2, `${c.name} unexpected terminal.open`)
         assert.ok(opens(f.messages).every((item) => !item.responsive), `${c.name} opened responsive`)
+        await expect.poll(async () => {
+          const g = await gridState(f.page)
+          return gridReady(g) ? true : g
+        }, { timeout: 15000 }).toBe(true)
         const viewport = f.page.locator('.terminal-viewport').first()
         await viewport.evaluate((el) => { el.scrollLeft = el.scrollWidth; el.scrollTop = el.scrollHeight })
-        const edge = await viewport.evaluate((el) => {
-          const rows = [...el.querySelectorAll('.xterm-rows > div')]
-          const last = rows.at(-1)
-          const end = last?.lastElementChild?.getBoundingClientRect() || last?.getBoundingClientRect()
-          const box = el.getBoundingClientRect()
-          return { endRight: end?.right || 0, boxRight: box.right, endBottom: end?.bottom || 0, boxBottom: box.bottom, overflowX: el.scrollWidth > el.clientWidth + 1 }
-        })
-        assert.ok(edge.overflowX, `${c.name} 295-col pane did not overflow locally`)
-        assert.ok(edge.endRight <= edge.boxRight + 2, `${c.name} right edge not reachable: ${JSON.stringify(edge)}`)
-        assert.ok(edge.endBottom <= edge.boxBottom + 2, `${c.name} bottom edge not reachable: ${JSON.stringify(edge)}`)
+        const edge = await gridState(f.page)
+        assert.ok(gridReady(edge), `${c.name} 295×38 END not presented: ${JSON.stringify(edge)}`)
+        const screenOverflows = edge.screenWidth > edge.clientWidth + 1
+        if (c.viewport.width === 1440) {
+          assert.ok(screenOverflows, `${c.name} 1440 295-col screen did not exceed viewport: ${JSON.stringify(edge)}`)
+        }
+        if (screenOverflows) {
+          assert.ok(edge.endRight <= edge.boxRight + 2, `${c.name} right edge not reachable: ${JSON.stringify(edge)}`)
+        } else {
+          assert.ok(edge.screenRight <= edge.boxRight + 2, `${c.name} fitted 295-col screen clipped: ${JSON.stringify(edge)}`)
+          assert.ok(edge.endRight <= edge.boxRight + 2, `${c.name} fitted 295-col END clipped: ${JSON.stringify(edge)}`)
+        }
+        assert.ok(edge.endBottom <= edge.boxBottom + 2, `${c.name} last-row END not reachable: ${JSON.stringify(edge)}`)
         await screenshot(f.page, `${name}-${c.name}-fixed`)
         await f.page.getByRole('button', { name: '适应窗口', exact: true }).click()
         await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
