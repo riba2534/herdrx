@@ -35,7 +35,24 @@ describe('display preferences', () => {
     localStorage.setItem(DISPLAY_STORAGE_KEY, '{broken')
     expect(readDisplayProfiles()).toEqual(DEFAULT_DISPLAY)
     localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { mode: 'unsupported', fontSize: -50, zoom: 900 }, mobile: { fontSize: '12', zoom: null } }))
-    expect(readDisplayProfiles()).toEqual({ desktop: { mode: 'fit', fontSize: 10, zoom: 200 }, mobile: DEFAULT_DISPLAY.mobile })
+    expect(readDisplayProfiles()).toEqual({ desktop: { mode: 'fixed', fontSize: 10, zoom: 200 }, mobile: DEFAULT_DISPLAY.mobile })
+  })
+
+  it('migrates only the legacy desktop fit 14/100 default and keeps later explicit fit', () => {
+    localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ desktop: { fontSize: 14, zoom: 100, mode: 'fit' }, mobile: { fontSize: 14, zoom: 100, mode: 'responsive' } }))
+    expect(readDisplayProfiles().desktop).toEqual(DEFAULT_DISPLAY.desktop)
+    localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ desktop: { fontSize: 16, zoom: 100, mode: 'fit' }, mobile: { fontSize: 14, zoom: 100, mode: 'responsive' } }))
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 16, zoom: 100, mode: 'fit' })
+    localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ desktop: { fontSize: 14, zoom: 120, mode: 'fit' }, mobile: { fontSize: 14, zoom: 100, mode: 'responsive' } }))
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 120, mode: 'fit' })
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { fontSize: 14, zoom: 100, mode: 'fit' }, mobile: DEFAULT_DISPLAY.mobile }))
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 100, mode: 'fit' })
+    const { result, unmount } = renderHook(() => useTerminalDisplay(false))
+    expect(result.current.display).toEqual({ fontSize: 14, zoom: 100, mode: 'fit' })
+    act(() => result.current.update({ mode: 'fixed', zoom: 100 }))
+    act(() => result.current.update({ mode: 'fit', zoom: 100 }))
+    unmount()
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 100, mode: 'fit' })
   })
 
   it('follows the software keyboard viewport while leaving native pinch zoom alone', () => {

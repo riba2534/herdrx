@@ -525,7 +525,7 @@ describe('TerminalPane paste interception', () => {
     const client = new WorkbenchClient('hst_test')
     const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
-    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, sourceCols: 150, sourceRows: 40, onFocus: () => {}, theme: {}, enhancedContrast: false }
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, sourceCols: 150, sourceRows: 40, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'fit' as const } }
     terminalHarness.instances = 0
     const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
@@ -560,6 +560,31 @@ describe('TerminalPane paste interception', () => {
     expect(open).toHaveBeenCalledTimes(1)
     expect(font).toHaveBeenLastCalledWith(18)
     unmount()
+  })
+
+  it('follows observed frame cols/rows without reopening or resizing the remote PTY', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const close = vi.spyOn(client, 'closeTerminal')
+    const resize = vi.spyOn(client, 'resize')
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, sourceCols: 295, sourceRows: 40, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'fixed' as const } }
+    const { rerender } = render(<TerminalPane {...props}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    expect(open).toHaveBeenCalledExactlyOnceWith(mockPane.pane_id, 295, 40)
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: new Uint8Array([0x1b, 0x48]) }))
+    expect(terminalHarness.last?.cols).toBe(80)
+    expect(terminalHarness.last?.rows).toBe(24)
+    rerender(<TerminalPane {...props} sourceCols={147} sourceRows={79} layoutVersion={1}/>)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(terminalHarness.last?.cols).toBe(80)
+    expect(terminalHarness.last?.rows).toBe(24)
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 295, rows: 38, ansi: new Uint8Array([0x1b, 0x48]) }))
+    expect(terminalHarness.last?.cols).toBe(295)
+    expect(terminalHarness.last?.rows).toBe(38)
+    expect(resize).not.toHaveBeenCalled()
+    expect(close).not.toHaveBeenCalled()
+    expect(frames).toHaveBeenCalledTimes(1)
   })
 
   it('sends one newline for Shift+Enter without submitting or duplicating keyup', async () => {
@@ -602,6 +627,29 @@ describe('TerminalPane paste interception', () => {
     fireEvent.click(screen.getByRole('button', { name: '返回实时' }))
     await waitFor(() => expect(open).toHaveBeenCalledTimes(2))
   })
+
+  it('pans clipped xterm content before sending wheel to history or a fullscreen app', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const call = vi.spyOn(client, 'call')
+    render(<TerminalPane client={client} pane={{ ...mockPane, scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 38 } }} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    const host = document.querySelector('.terminal-host') as HTMLElement
+    const screen = document.createElement('div')
+    screen.className = 'xterm-screen'
+    host.appendChild(screen)
+    Object.defineProperty(viewport, 'scrollTop', { configurable: true, value: 254 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 389 })
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 646 })
+    vi.spyOn(viewport, 'getBoundingClientRect').mockReturnValue({ top: 254, bottom: 643, left: 0, right: 800, width: 800, height: 389, x: 0, y: 254, toJSON() { return {} } })
+    vi.spyOn(screen, 'getBoundingClientRect').mockReturnValue({ top: 0, bottom: 640, left: 0, right: 800, width: 800, height: 640, x: 0, y: 0, toJSON() { return {} } })
+    vi.spyOn(screen, 'getClientRects').mockReturnValue([{ top: 0, bottom: 640, left: 0, right: 800, width: 800, height: 640, x: 0, y: 0, toJSON() { return {} } }] as unknown as DOMRectList)
+    expect(fireEvent.wheel(host, { deltaY: -3000, cancelable: true })).toBe(true)
+    expect(call).not.toHaveBeenCalled()
+  })
+
   it('ignores plain text paste and does not call pasteImage', () => {
     const pasteSpy = vi.spyOn(api, 'pasteImage').mockResolvedValue({ ok: true, path: '/test.png', injected: true })
     const client = new WorkbenchClient('hst_test')

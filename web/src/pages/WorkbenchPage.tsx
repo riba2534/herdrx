@@ -56,8 +56,15 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [prefix, setPrefix] = useState(false)
   const [terminalInput, setTerminalInput] = useState<((data: string) => void) | null>(null)
-  const [composerOpen, setComposerOpen] = useState(mobile)
-  const [directInput, setDirectInput] = useState(!mobile)
+  const [desktopInput, setDesktopInput] = useState({ composerOpen: false, directInput: true })
+  const [mobileInput, setMobileInput] = useState({ composerOpen: true, directInput: false })
+  const composerOpen = mobile ? mobileInput.composerOpen : desktopInput.composerOpen
+  const directInput = mobile ? mobileInput.directInput : desktopInput.directInput
+  const patchInput = (patch: { composerOpen?: boolean; directInput?: boolean }) => {
+    const apply = (current: { composerOpen: boolean; directInput: boolean }) => ({ ...current, ...patch })
+    if (mobile) setMobileInput(apply)
+    else setDesktopInput(apply)
+  }
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeName, setThemeName] = useState(() => localStorage.getItem('herdrx.terminal-theme') || 'Cobalt2')
   const terminalTheme = terminalThemes[themeName] || terminalThemes.Cobalt2
@@ -98,11 +105,6 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
 
   useEffect(() => { localStorage.setItem('herdrx.sidebar-open', String(sidebarOpen)) }, [sidebarOpen])
-  useEffect(() => {
-    if (!mobile) return
-    setComposerOpen(true)
-    setDirectInput(false)
-  }, [mobile])
 
 
 
@@ -480,7 +482,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {!mobile && <header className="tabbar">
         <div className="tabs">{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => { selectTab(tab); openContextMenu(event, { kind: 'tab', tab }) }}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {panes?.length || 0} panes</span>
-        <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => { setComposerOpen((value) => !value); setDirectInput(composerOpen) }}>本地输入</Button>
+        <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
       </header>}
 
       <section className="terminal-surface" aria-label="终端工作区">
@@ -489,7 +491,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
           const sourceRect = layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
-            <TerminalPane client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} theme={terminalTheme} enhancedContrast={enhancedContrast} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={() => setDirectInput(true)}/>
+            <TerminalPane client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} theme={terminalTheme} enhancedContrast={enhancedContrast} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={() => patchInput({ directInput: true })}/>
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
@@ -498,7 +500,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {prefix && <div className="mode-bar"><strong>PREFIX</strong><span>esc cancel</span><span>v split right</span><span>− split down</span><span>hjkl focus</span><span>z zoom</span><span>x close</span><span>w switch</span></div>}
       {actionError && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {(composerOpen || mobile) && <div className="workbench-dock">
-      <Composer hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={() => setDirectInput(true)} onLocalInput={() => { setComposerOpen(true); setDirectInput(false) }} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
+      <Composer hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={() => patchInput({ directInput: true })} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
       {mobile && <div className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
         ['Enter', '\r'], ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
       ].map(([label, data]) => <button key={label} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}<button className={prefix ? 'key-active' : ''} onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}

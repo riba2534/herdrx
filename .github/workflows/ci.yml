@@ -62,6 +62,7 @@ jobs:
           node scripts/test-terminal-rendering.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-composer.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-desktop-display.mjs
           node scripts/test-terminal-flicker.mjs
           node scripts/test-mobile-terminal-scroll.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-pwa.mjs

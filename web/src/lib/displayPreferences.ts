@@ -2,23 +2,37 @@ import { useEffect, useState } from 'react'
 
 export type TerminalDisplay = { fontSize: number; zoom: number; mode: 'fit' | 'fixed' | 'responsive' }
 type DisplayProfiles = { desktop: TerminalDisplay; mobile: TerminalDisplay }
-export const DISPLAY_STORAGE_KEY = 'herdrx.terminal-display.v2'
+export const DISPLAY_STORAGE_KEY = 'herdrx.terminal-display.v3'
+const DISPLAY_STORAGE_V2 = 'herdrx.terminal-display.v2'
+const DISPLAY_STORAGE_V1 = 'herdrx.terminal-display.v1'
 export const DEFAULT_DISPLAY: DisplayProfiles = {
-  desktop: { fontSize: 14, zoom: 100, mode: 'fit' },
+  desktop: { fontSize: 14, zoom: 100, mode: 'fixed' },
   mobile: { fontSize: 14, zoom: 100, mode: 'responsive' },
 }
+export const LEGACY_DESKTOP_DEFAULT: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fit' }
 
 function bounded(value: unknown, fallback: number, min: number, max: number) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.round(value))) : fallback
 }
 
+function isLegacyDesktopDefault(value: unknown) {
+  if (!value || typeof value !== 'object') return false
+  const item = value as { fontSize?: unknown; zoom?: unknown; mode?: unknown }
+  return item.mode === 'fit' && item.fontSize === 14 && item.zoom === 100
+}
+
 export function readDisplayProfiles(): DisplayProfiles {
   try {
     const current = localStorage.getItem(DISPLAY_STORAGE_KEY)
-    const stored = JSON.parse(current || localStorage.getItem('herdrx.terminal-display.v1') || '{}')
-    // v1 persisted the old mobile default even when it was never selected.
-    // Migrate existing visitors to reflow while retaining their chosen font.
-    if (!current && stored?.mobile) stored.mobile = { ...stored.mobile, mode: 'responsive', zoom: 100 }
+    const previous = localStorage.getItem(DISPLAY_STORAGE_V2)
+    const stored = JSON.parse(current || previous || localStorage.getItem(DISPLAY_STORAGE_V1) || '{}')
+    if (!current) {
+      // v1 persisted the old mobile default even when it was never selected.
+      // Migrate existing visitors to reflow while retaining their chosen font.
+      if (!previous && stored?.mobile) stored.mobile = { ...stored.mobile, mode: 'responsive', zoom: 100 }
+      // Old v1/v2 cannot tell "never changed" from "explicitly chose fit 14/100".
+      if (isLegacyDesktopDefault(stored?.desktop)) stored.desktop = { ...DEFAULT_DISPLAY.desktop }
+    }
     const profile = (key: keyof DisplayProfiles): TerminalDisplay => {
       const value = stored?.[key]
       const fallback = DEFAULT_DISPLAY[key]
@@ -29,7 +43,7 @@ export function readDisplayProfiles(): DisplayProfiles {
       }
     }
     return { desktop: profile('desktop'), mobile: profile('mobile') }
-  } catch { return { ...DEFAULT_DISPLAY } }
+  } catch { return { desktop: { ...DEFAULT_DISPLAY.desktop }, mobile: { ...DEFAULT_DISPLAY.mobile } } }
 }
 
 export function useTerminalDisplay(mobile: boolean) {

@@ -15,7 +15,7 @@ import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { Button, StatusDot } from './ui'
 
-const defaultDisplay: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fit' }
+const defaultDisplay: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fixed' }
 
 export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls, directInput = true, onDirectInput }: { client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
@@ -25,8 +25,11 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
   const fontMeasureRef = useRef<ReturnType<typeof createFontMeasure> | null>(null)
   const streamRef = useRef<number | null>(null)
   const responsive = display.mode === 'responsive'
-  const observedCols = responsive ? undefined : sourceCols
-  const observedRows = responsive ? undefined : sourceRows
+  const sourceColsRef = useRef(sourceCols)
+  const sourceRowsRef = useRef(sourceRows)
+  sourceColsRef.current = sourceCols
+  sourceRowsRef.current = sourceRows
+  const observedGridRef = useRef<{ cols: number; rows: number } | null>(null)
   const desiredSizeRef = useRef({ cols: 80, rows: 24 })
   const sentSizeRef = useRef({ cols: 0, rows: 0 })
   const resizeTimerRef = useRef(0)
@@ -263,8 +266,9 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       lineHeight: terminal.options.lineHeight || 1, letterSpacing: terminal.options.letterSpacing || 0,
     }
     const size = responsive ? responsiveTerminalSize(bounds, fontMeasureRef.current.measure, display.fontSize * display.zoom / 100) : null
-    const cols = size?.cols ?? Math.max(10, sourceCols || terminal.cols)
-    const rows = size?.rows ?? Math.max(3, sourceRows || terminal.rows)
+    const observed = observedGridRef.current
+    const cols = size?.cols ?? Math.max(10, observed?.cols || sourceCols || terminal.cols)
+    const rows = size?.rows ?? Math.max(3, observed?.rows || sourceRows || terminal.rows)
     const baseSize = display.mode !== 'fit' ? display.fontSize : fittedTerminalFont({ ...bounds, cols, rows }, fontMeasureRef.current.measure, display.fontSize)
     const fontSize = baseSize === null ? null : Math.round(baseSize * display.zoom) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
@@ -391,6 +395,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       inputBlockedRef.current = false
       setStreamFailed(false)
       setStatus('正在连接终端…')
+      observedGridRef.current = null
       fitRef.current()
       const terminal = termRef.current!
       applyStdin()
@@ -405,8 +410,8 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         setStreamFailed(true)
       }
       try {
-        const cols = responsive ? desiredSizeRef.current.cols : Math.max(10, observedCols || terminal.cols)
-        const rows = responsive ? desiredSizeRef.current.rows : Math.max(3, observedRows || terminal.rows)
+        const cols = responsive ? desiredSizeRef.current.cols : Math.max(10, sourceColsRef.current || terminal.cols)
+        const rows = responsive ? desiredSizeRef.current.rows : Math.max(3, sourceRowsRef.current || terminal.rows)
         sentSizeRef.current = { cols, rows }
         const streamID = await (responsive ? client.openTerminal(pane.pane_id, cols, rows, true) : client.openTerminal(pane.pane_id, cols, rows))
         if (cancelled) { client.closeTerminal(streamID); return }
@@ -415,11 +420,17 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
           const ack = () => client.acknowledge(streamID, frame.seq)
-          const needsResize = responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)
+          const validFrame = frame.cols >= 10 && frame.rows >= 3
+          const followObserved = !responsive && validFrame
+          const needsResize = validFrame && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)
           const deliver = () => {
             if (cancelled || writeSessionRef.current.closed || termRef.current !== terminal) return
             if (historyRef.current.active) { ack(); return }
-            if (responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) terminal.resize(frame.cols, frame.rows)
+            if (followObserved) observedGridRef.current = { cols: frame.cols, rows: frame.rows }
+            if (validFrame && (responsive || followObserved) && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) {
+              terminal.resize(frame.cols, frame.rows)
+              if (followObserved) fitRef.current()
+            }
             let bytes: string | Uint8Array = frame.ansi
             if (resetStream) {
               // Reset once, in the same parser write as the new stream's first
@@ -464,7 +475,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         streamRef.current = null
       }
     }
-  }, [client, pane.pane_id, connectionEpoch, observedCols, observedRows, responsive, streamGeneration])
+  }, [client, pane.pane_id, connectionEpoch, responsive, streamGeneration])
 
   useEffect(() => {
     applyStdin()
@@ -527,10 +538,22 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       queuedLines = Math.max(-100, Math.min(100, queuedLines + lines))
       if (queuedLines && !timer) timer = window.requestAnimationFrame(flush)
     }
+    const canPan = (deltaY: number) => {
+      const max = Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+      if (max <= 1) return false
+      return deltaY < 0 ? viewport.scrollTop > 1 : viewport.scrollTop < max - 1
+    }
+    const screenClipped = (deltaY: number) => {
+      const screen = host.querySelector<HTMLElement>('.xterm-screen')
+      if (!screen?.getClientRects().length) return canPan(deltaY)
+      const box = screen.getBoundingClientRect()
+      const view = viewport.getBoundingClientRect()
+      return deltaY < 0 ? box.top < view.top - 1 : box.bottom > view.bottom + 1
+    }
     const wheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) { event.stopImmediatePropagation(); return }
       if (!event.deltaY || event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) { event.stopImmediatePropagation(); return }
-      if (event.deltaY < 0 ? viewport.scrollTop > 0 : viewport.scrollTop + viewport.clientHeight < viewport.scrollHeight - 1) {
+      if (canPan(event.deltaY) && screenClipped(event.deltaY)) {
         event.stopImmediatePropagation()
         return
       }

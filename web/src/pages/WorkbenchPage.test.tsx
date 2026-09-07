@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
@@ -118,6 +118,25 @@ describe('workbench composer', () => {
     render(<WorkbenchPage hostID="host"/>)
     expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('restores desktop direct input after a compact visit and keeps an explicit desktop composer', async () => {
+    const media = { matches: false, listeners: [] as Array<() => void>, addEventListener(_type: string, fn: () => void) { this.listeners.push(fn) }, removeEventListener(_type: string, fn: () => void) { this.listeners = this.listeners.filter((item) => item !== fn) }, set(next: boolean) { this.matches = next; this.listeners.forEach((fn) => fn()) } }
+    vi.stubGlobal('matchMedia', () => media)
+    const { rerender } = render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
+    await act(async () => { media.set(true); rerender(<WorkbenchPage hostID="host"/>) })
+    expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    await act(async () => { media.set(false); rerender(<WorkbenchPage hostID="host"/>) })
+    await screen.findByRole('button', { name: '本地输入框' })
+    expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '本地输入框' }))
+    expect(screen.getByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    await act(async () => { media.set(true); rerender(<WorkbenchPage hostID="host"/>) })
+    expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    await act(async () => { media.set(false); rerender(<WorkbenchPage hostID="host"/>) })
+    expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
   })
 
   it('lets the user edit a pane draft while the host is still connecting', async () => {

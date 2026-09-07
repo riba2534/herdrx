@@ -231,7 +231,9 @@ try {
       const desktop = await fixture(browser, { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
       const { page, messages } = desktop
       const initial = await metrics(page)
-      assert.ok(initial.screenWidth <= initial.width && initial.screenHeight <= initial.height)
+      assert.equal(initial.font, 14, 'desktop default font must stay 14px')
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'page has horizontal overflow')
+      await expect(page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
       await assertMergedHeaders(page, 32)
       await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       const originalTerminals = await page.locator('.terminal-host > .xterm').elementHandles()
@@ -331,6 +333,8 @@ try {
       const nativeSnapshot = { ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 40 } })) }
       const native = await fixture(browser, { viewport: { width: 1440, height: 900 } }, nativeSnapshot)
       const nativePane = native.page.locator('.terminal-pane').first()
+      await native.page.getByRole('button', { name: '适应窗口', exact: true }).click()
+      await expect.poll(async () => { const m = await metrics(native.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
       await nativePane.locator('.xterm-rows > div').nth(5).hover()
       await native.page.mouse.wheel(0, -120)
       await expect(nativePane.locator('.xterm-rows')).toContainText('Native wheel -')
