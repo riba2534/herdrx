@@ -7,6 +7,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { chooseOption } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const host = { id: 'display-test', name: '测试主机', transport: 'ssh' }
@@ -97,18 +98,19 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
   })
   await page.goto(base + '/h/display-test')
   await expect(page.locator('.xterm-rows').first()).toContainText('Terminal')
-  await expect(page.getByRole('img', { name: '可输入', exact: true }).first()).toBeVisible()
+  await expect(page.locator('.terminal-pane').first()).toHaveAttribute('data-terminal-status', '可输入')
   return { context, page, messages, errors, closePane: (paneID, reason) => closePane(paneID, reason) }
 }
 
 async function assertTerminalRecovery(f, paneID, index = 0) {
   const pane = f.page.locator('.terminal-pane').nth(index)
+  await closePaneTools(f.page, index)
   const terminal = await pane.locator('.xterm').elementHandle()
   const viewportBefore = await pane.locator('.terminal-viewport').boundingBox()
   const before = f.messages.length
   f.closePane(paneID, '远程终端观察进程已退出，请检查 Herdr 后重试。' + '远程路径信息/'.repeat(35))
   await expect(pane.getByRole('alert')).toContainText('终端连接已关闭')
-  await expect(pane.getByRole('button', { name: '聚焦终端输入' })).toHaveCount(0)
+  await expect(pane.locator('button[aria-label="聚焦终端输入"]')).toHaveCount(0)
   await assertContained(f.page, ['.terminal-connection-feedback', '.terminal-connection-feedback button'])
   assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), viewportBefore, 'terminal error changed terminal geometry')
   await pane.locator('.xterm-helper-textarea').focus()
@@ -116,7 +118,10 @@ async function assertTerminalRecovery(f, paneID, index = 0) {
   assert.equal(f.messages.slice(before).filter(m => m.op === 3 || m.t === 'terminal.open' || m.method === 'pane.send_text').length, 0, 'closed stream sent input or retried automatically')
   await pane.getByRole('button', { name: '重连终端' }).click()
   await expect(pane.getByRole('alert')).toHaveCount(0)
+  await expect(pane).toHaveAttribute('data-terminal-status', '可输入')
+  await openPaneTools(f.page, index)
   await expect(pane.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
+  await closePaneTools(f.page, index)
   await expect(pane.locator('.xterm-rows')).toContainText('Terminal')
   assert.equal(f.messages.slice(before).filter(m => m.t === 'terminal.open').length, 1)
   assert.equal(f.messages.slice(before).filter(m => m.op === 3 || m.method === 'pane.send_text').length, 0, 'retry replayed input')
@@ -155,16 +160,58 @@ async function screenshot(page, name) {
   await page.screenshot({ path: join(process.env.HERDRX_DISPLAY_SCREENSHOTS, name + '.png') })
 }
 
-async function assertMergedHeaders(page, expectedHeight) {
+async function openPaneTools(page, index = 0) {
+  const pane = page.locator('.terminal-pane').nth(index)
+  if (!(await pane.locator('.terminal-titlebar').isVisible())) {
+    const mobileToggle = page.getByRole('button', { name: '终端工具', exact: true })
+    if (await mobileToggle.isVisible()) await mobileToggle.click()
+    else {
+      await pane.hover()
+      await pane.getByRole('button', { name: '分屏工具', exact: true }).click()
+    }
+  }
+  await expect(pane.locator('.terminal-titlebar')).toBeVisible()
+}
+
+async function closePaneTools(page, index = 0) {
+  const close = page.locator('.terminal-pane').nth(index).getByRole('button', { name: '收起终端工具', exact: true })
+  if (await close.isVisible()) await close.click()
+}
+
+async function clickPaneTool(page, name, index = 0) {
+  await openPaneTools(page, index)
+  await page.locator('.terminal-pane').nth(index).getByRole('button', { name, exact: true }).click()
+}
+
+async function showAuxiliaryKeys(page) {
+  const toggle = page.getByRole('button', { name: '终端辅助键', exact: true })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toBeVisible()
+}
+
+async function setDisplayMode(page, mode) {
+  await page.getByRole('button', { name: '工作台设置', exact: true }).click()
+  await chooseOption(page.getByRole('combobox', { name: '显示方式', exact: true }), mode)
+  await page.getByRole('button', { name: '完成', exact: true }).click()
+}
+
+async function assertNoReservedHeaders(page) {
   await expect(page.locator('.workbench-main > .display-toolbar')).toHaveCount(0)
-  for (const pane of await page.locator('.terminal-pane').all()) {
+  const panes = await page.locator('.terminal-pane').all()
+  for (const [index, pane] of panes.entries()) {
     const header = pane.locator('.terminal-titlebar')
-    const box = await header.boundingBox()
-    assert.equal(box.height, expectedHeight, 'terminal header grew beyond one row')
+    await expect(header).toBeHidden()
+    const paneBox = await pane.boundingBox()
     const content = await pane.locator('.terminal-viewport').boundingBox()
-    assert.ok(Math.abs(content.y - box.y - box.height) <= 1, 'extra row remains above terminal')
+    assert.ok(Math.abs(content.y - paneBox.y) <= 1, 'hidden terminal tools still reserve a header row')
+    await openPaneTools(page, index)
+    assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'opening terminal tools changed terminal geometry')
+    assert.equal(await header.evaluate(el => getComputedStyle(el).position), 'absolute', 'terminal tools must float above the terminal')
+    const box = await header.boundingBox()
     const children = await header.locator('button, .terminal-title').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom } }))
     for (const child of children) assert.ok(child.x >= box.x - 1 && child.right <= box.x + box.width + 1 && child.y >= box.y - 1 && child.bottom <= box.y + box.height + 1, `control escaped its pane header: ${JSON.stringify({ box, child })}`)
+    await closePaneTools(page, index)
+    assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'closing terminal tools changed terminal geometry')
   }
 }
 
@@ -180,7 +227,8 @@ async function touchAndKeyboardChecks(context, page) {
   }
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeGreaterThan(40)
-  await page.getByRole('button', { name: '聚焦终端输入' }).click()
+  await showAuxiliaryKeys(page)
+  await clickPaneTool(page, '聚焦终端输入')
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
   await page.getByRole('button', { name: 'Enter', exact: true }).click()
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
@@ -233,16 +281,18 @@ try {
       const initial = await metrics(page)
       assert.equal(initial.font, 14, 'desktop default font must stay 14px')
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'page has horizontal overflow')
+      await assertNoReservedHeaders(page)
+      await openPaneTools(page)
       await expect(page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
-      await assertMergedHeaders(page, 32)
       await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
+      await closePaneTools(page)
       const originalTerminals = await page.locator('.terminal-host > .xterm').elementHandles()
       const originalViewports = await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       const focusStart = messages.length
-      await page.locator('.terminal-pane').nth(1).locator('.terminal-title').click()
+      await page.locator('.terminal-pane').nth(1).locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 2')
       await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
-      await page.locator('.terminal-pane').first().locator('.terminal-title').click()
+      await page.locator('.terminal-pane').first().locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 1')
       assert.deepEqual(await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } })), originalViewports, 'pane focus moved or resized terminal content')
       for (const terminal of originalTerminals) assert.ok(await terminal.evaluate((el) => el.isConnected), 'pane focus replaced the terminal DOM')
@@ -267,7 +317,7 @@ try {
       await expect(firstPane.locator('.xterm-rows')).toContainText('Terminal')
       messages.length = 0
       const opens = messages.filter((m) => m.t === 'terminal.open').length
-      await page.getByRole('button', { name: '调整终端字号' }).click()
+      await clickPaneTool(page, '调整终端字号')
       const dialog = page.getByRole('dialog', { name: '工作台设置' })
       const terminalBackground = await firstPane.evaluate((el) => getComputedStyle(el).backgroundColor)
       await page.getByRole('button', { name: '切换为浅色', exact: true }).click()
@@ -281,10 +331,11 @@ try {
       await page.getByRole('button', { name: '完成', exact: true }).click()
       await expect.poll(async () => (await metrics(page)).font).toBe(33)
       assert.ok((await metrics(page)).contentWidth > initial.width)
-      await page.getByRole('button', { name: '缩小终端', exact: true }).click()
+      await clickPaneTool(page, '缩小终端')
       await expect.poll(async () => Math.abs((await metrics(page)).font - 30.8)).toBeLessThan(0.05)
-      await page.getByRole('button', { name: '重置终端缩放' }).click()
+      await clickPaneTool(page, '重置终端缩放')
       await expect.poll(async () => (await metrics(page)).font).toBe(22)
+      await closePaneTools(page)
       await page.locator('.terminal-viewport').first().evaluate((el) => { el.scrollLeft = 0; el.scrollTop = 0 })
       await page.locator('.terminal-viewport').first().hover()
       await page.mouse.wheel(200, 12)
@@ -295,7 +346,7 @@ try {
       assert.ok(await page.locator('.terminal-viewport').first().evaluate((el) => el.scrollLeft > 0 && el.scrollTop > 0), 'enlarged frame cannot be panned')
       await page.reload()
       await expect.poll(async () => (await metrics(page)).font).toBe(22)
-      await page.getByRole('button', { name: '适应窗口', exact: true }).click()
+      await clickPaneTool(page, '适应窗口')
       await expect.poll(async () => { const m = await metrics(page); return m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
       await page.getByRole('button', { name: '工作台设置', exact: true }).click()
       await page.getByRole('button', { name: '关闭设置' }).focus()
@@ -311,9 +362,9 @@ try {
 
       const singleSnapshot = { ...snapshot, panes: [{ ...snapshot.panes[0], label: '开发终端', cwd: '/workspace/example' }], layouts: [{ ...snapshot.layouts[0], panes: [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 160, height: 40 } }] }] }
       const single = await fixture(browser, { viewport: { width: 1440, height: 900 } }, singleSnapshot)
-      await assertMergedHeaders(single.page, 32)
+      await assertNoReservedHeaders(single.page)
       const tabbar = await single.page.locator('.tabbar').boundingBox()
-      assert.ok((await single.page.locator('.terminal-viewport').boundingBox()).y - tabbar.y - tabbar.height <= 34, 'single pane still reserves a separate display row')
+      assert.ok((await single.page.locator('.terminal-viewport').boundingBox()).y - tabbar.y - tabbar.height <= 2, 'single pane still reserves a separate display row')
       await screenshot(single.page, `${name}-single-pane`)
       await assertTerminalRecovery(single, 'p1')
       assert.deepEqual(single.errors, [])
@@ -321,9 +372,10 @@ try {
 
       const longSnapshot = { ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, label: '很长的终端名称'.repeat(12), cwd: '/workspace/example/'.repeat(12) })) }
       const narrow = await fixture(browser, { viewport: { width: 900, height: 700 } }, longSnapshot)
-      await assertMergedHeaders(narrow.page, 32)
+      await assertNoReservedHeaders(narrow.page)
+      await openPaneTools(narrow.page)
       await expect(narrow.page.getByRole('button', { name: '缩小终端', exact: true })).toBeHidden()
-      await narrow.page.getByRole('button', { name: '调整终端字号' }).click()
+      await clickPaneTool(narrow.page, '调整终端字号')
       await expect(narrow.page.getByRole('slider', { name: '终端缩放', exact: true })).toBeVisible()
       await narrow.page.getByRole('button', { name: '完成', exact: true }).click()
       await screenshot(narrow.page, `${name}-narrow-split`)
@@ -333,7 +385,8 @@ try {
       const nativeSnapshot = { ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 40 } })) }
       const native = await fixture(browser, { viewport: { width: 1440, height: 900 } }, nativeSnapshot)
       const nativePane = native.page.locator('.terminal-pane').first()
-      await native.page.getByRole('button', { name: '适应窗口', exact: true }).click()
+      await clickPaneTool(native.page, '适应窗口')
+      await closePaneTools(native.page)
       await expect.poll(async () => { const m = await metrics(native.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
       await nativePane.locator('.xterm-rows > div').nth(5).hover()
       await native.page.mouse.wheel(0, -120)
@@ -354,7 +407,12 @@ try {
       const assertReflow = async () => {
         await expect.poll(async () => { const m = await metrics(reflow.page); return m.font === 14 && m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
         const lastRow = reflow.page.locator('.xterm-rows > div').last()
-        await expect(lastRow).toContainText('END')
+        try {
+          await expect(lastRow, `responsive last row at ${JSON.stringify(reflow.page.viewportSize())}`).toContainText('END')
+        } catch (error) {
+          console.error('Responsive reflow failure', JSON.stringify({ viewport: reflow.page.viewportSize(), metrics: await metrics(reflow.page), messages: reflow.messages.slice(-20), rowCount: await reflow.page.locator('.xterm-rows > div').count(), lastRows: await reflow.page.locator('.xterm-rows > div').evaluateAll(rows => rows.slice(-5).map(row => row.textContent)) }))
+          throw error
+        }
         await expect.poll(() => lastRow.evaluate(row => {
           const edge = row.lastElementChild?.getBoundingClientRect()
           const viewport = row.closest('.terminal-viewport')?.getBoundingClientRect()
@@ -370,6 +428,17 @@ try {
         await reflow.page.setViewportSize({ width, height })
         await assertReflow()
       }
+      // Rapid rotations can overlap the remote resize debounce and a pending
+      // frame parse. The authoritative repaint must still fill every row.
+      const rapidSizes = [[390, 844], [320, 720], [700, 390], [479, 847]]
+      for (let index = 0; index < 40; index++) {
+        const [width, height] = rapidSizes[index % rapidSizes.length]
+        await reflow.page.setViewportSize({ width, height })
+      }
+      await reflow.page.waitForTimeout(200)
+      assert.deepEqual(reflow.errors, [], 'rapid responsive rotation caused a browser error')
+      await assertReflow()
+      await showAuxiliaryKeys(reflow.page)
       await reflow.page.evaluate(() => {
         Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 360 })
         window.visualViewport.dispatchEvent(new Event('resize'))
@@ -393,16 +462,21 @@ try {
           await expect(f.page.locator('.workbench')).not.toHaveClass(/workbench-sidebar-closed/)
         }
         await expect(f.page.locator('.terminal-pane')).toHaveCount(compact ? 1 : 2)
-        await assertMergedHeaders(f.page, 44)
+        await assertNoReservedHeaders(f.page)
         if (compact) {
           assert.equal((await metrics(f.page)).font, 14, 'mobile default must remain readable')
           await expect(f.page.locator('.display-toolbar')).toHaveCount(0)
-          await expect(f.page.locator('.mobile-tabs')).toBeVisible()
+          await expect(f.page.locator('.mobile-topbar')).toBeVisible()
+          assert.equal((await f.page.locator('.mobile-topbar').boundingBox()).height, 44, 'mobile navigation must remain one 44px row')
           await expect(f.page.getByRole('button', { name: '切换工作区或终端', exact: true })).toBeVisible()
           const terminalBox = await f.page.locator('.terminal-viewport').boundingBox()
           await expect(f.page.getByRole('region', { name: '本地输入' })).toBeVisible()
           await expect(f.page.getByRole('button', { name: '发送', exact: true })).toBeVisible()
           assert.ok(terminalBox.height >= (height < 500 ? 64 : 160), `mobile terminal was collapsed: ${JSON.stringify(terminalBox)}`)
+          await expect(f.page.locator('.keybar')).toHaveCount(0)
+          const foldedComposer = await f.page.locator('.composer').boundingBox()
+          assert.ok(Math.abs(foldedComposer.y + foldedComposer.height - height) <= 1, 'folded auxiliary keys must not reserve bottom space')
+          await showAuxiliaryKeys(f.page)
           const keybar = await f.page.locator('.keybar').boundingBox()
           const composer = await f.page.locator('.composer').boundingBox()
           const send = await f.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
@@ -410,24 +484,27 @@ try {
           assert.ok(composer.y + composer.height <= keybar.y + 1, 'composer covered the auxiliary keys')
           assert.ok(send.y + send.height <= height + 1 && send.x + send.width <= width + 1, 'send button was covered or overflowed')
           if (height >= 500) {
-            await expect(f.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
-            await expect(f.page.getByRole('button', { name: '自适应', exact: true })).toHaveAttribute('aria-pressed', 'true')
+            await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
+            await expect(f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
+            await f.page.getByRole('button', { name: '关闭切换位置', exact: true }).click()
             await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
-            await f.page.getByRole('button', { name: '自适应', exact: true }).click()
-            await f.page.getByRole('button', { name: '原始画面', exact: true }).click()
+            await setDisplayMode(f.page, 'fixed')
+            await setDisplayMode(f.page, 'responsive')
             await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
           }
         }
-        await assertContained(f.page, ['.hostbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.composer', '.hostbar button', '.display-toolbar button', '.terminal-titlebar button', '.composer-send'])
+        await openPaneTools(f.page)
+        await assertContained(f.page, ['.hostbar', '.mobile-topbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.composer', '.hostbar button', '.mobile-topbar button', '.display-toolbar button', '.terminal-titlebar button', '.composer-send'])
         if (touch) {
-          const sizes = await f.page.locator('.display-toolbar button, .terminal-titlebar button').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })))
+          const sizes = await f.page.locator('.mobile-topbar button, .display-toolbar button, .terminal-titlebar button').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })))
           assert.ok(sizes.every((s) => s.height >= 44 && s.width >= 44), `touch target smaller than 44px: ${JSON.stringify(sizes)}`)
         }
+        await closePaneTools(f.page)
         await screenshot(f.page, `${name}-${width}x${height}`)
         if (name === 'chromium' && width === 390) {
-          await f.page.getByRole('button', { name: '自适应', exact: true }).click()
+          await setDisplayMode(f.page, 'fixed')
           await touchAndKeyboardChecks(f.context, f.page)
-          await f.page.getByRole('button', { name: '原始画面', exact: true }).click()
+          await setDisplayMode(f.page, 'responsive')
         }
         await f.page.getByRole('button', { name: '工作台设置', exact: true }).click()
         await expect(f.page.getByRole('slider', { name: '终端字号', exact: true })).toBeVisible()
@@ -443,10 +520,10 @@ try {
           await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
           await f.page.locator('.switcher button[aria-pressed]').filter({ hasText: '终端 2' }).click()
           await expect(f.page.locator('.terminal-title')).toContainText('终端 2')
-          await f.page.getByRole('button', { name: '终端操作', exact: true }).click()
+          await clickPaneTool(f.page, '终端操作')
           await expect(f.page.getByRole('menu')).toBeVisible()
           await f.page.keyboard.press('Escape')
-          await f.page.getByRole('button', { name: '查看终端历史' }).click()
+          await clickPaneTool(f.page, '查看终端历史')
           await expect(f.page.getByRole('toolbar', { name: '终端历史导航' })).toBeVisible()
           await expect(f.page.locator('.xterm-rows')).toContainText('history line')
           assertNoPageError('after history snapshot')
@@ -462,13 +539,13 @@ try {
           await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
           await f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true }).click()
           await expect.poll(() => f.messages.filter(m => m.t === 'terminal.open').at(-1)?.pane_id).toBe('created-pane')
-          await expect(f.page.locator('.mobile-tabs .mobile-tab-active')).toContainText('新标签页')
+          await expect(f.page.locator('.mobile-location')).toContainText('新标签页')
           assertNoPageError('after create workspace')
         }
         assert.deepEqual(f.errors, [], `${name} ${width}x${height} compact loop: ${f.errors.join(' | ')}`)
         await f.context.close()
       }
-      console.log(`${name}: merged header, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
+      console.log(`${name}: floating tools without reserved header space, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, 40 rapid responsive rotations, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
     } finally { await browser.close() }
   }
 } finally { await new Promise((done) => server.close(done)) }

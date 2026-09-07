@@ -1,0 +1,104 @@
+.composer.composer-compact {
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-areas: 'mode input send';
+  gap: 4px;
+  padding: 4px max(6px, env(safe-area-inset-right)) 4px max(6px, env(safe-area-inset-left));
+}
+
+.composer.composer-compact:has(.composer-meta) {
+  grid-template-areas: 'mode input send' 'meta meta meta';
+}
+
+.composer.composer-compact .composer-input {
+  min-height: 44px;
+  max-height: 104px;
+  padding: 10px;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.composer.composer-compact .composer-send {
+  min-width: 52px;
+  min-height: 44px;
+  padding-inline: 8px;
+  border-radius: 4px;
+}
+
+.composer-mode-picker {
+  grid-area: mode;
+  position: relative;
+}
+
+.composer-mode-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--terminal);
+  color: var(--text);
+}
+
+.composer-mode-trigger:hover,
+.composer-mode-trigger[aria-expanded=true] {
+  background: var(--panel-strong);
+}
+
+.composer-mode-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: min(240px, calc(100vw - 24px));
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-raised, var(--panel));
+}
+
+.composer-mode-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 13px;
+}
+
+.composer-mode-menu > button:hover,
+.composer-mode-menu > button[aria-checked=true] {
+  background: var(--accent-soft);
+}
+
+.composer-mode-menu > button > span {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-mode-menu small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer.composer-compact .composer-meta {
+  min-height: 0;
+}
+
+.composer.composer-compact .composer-status {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  font-size: 11px;
+  line-height: 16px;
+}

@@ -225,6 +225,15 @@ async function revealClippedTop(page, pane) {
 function opens(messages) { return messages.filter((item) => item.t === 'terminal.open') }
 function resizes(messages) { return messages.filter((item) => item.op === 4) }
 
+async function openPaneTools(page, index = 0) {
+  const pane = page.locator('.terminal-pane').nth(index)
+  if (!(await pane.locator('.terminal-titlebar').isVisible())) {
+    await pane.hover()
+    await pane.getByRole('button', { name: '分屏工具', exact: true }).click()
+  }
+  await expect(pane.locator('.terminal-titlebar')).toBeVisible()
+}
+
 const cases = [
   { name: '1440x900-dpr1', viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   { name: '1920x1080-dpr1', viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 },
@@ -244,7 +253,9 @@ try {
         const first = await metrics(f.page, 0)
         assert.equal(first.font, 14, `${c.name} desktop default shrunk to ${first.font}`)
         assert.ok(await f.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${c.name} page overflow`)
+        await openPaneTools(f.page)
         await expect(f.page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
+        await f.page.getByRole('button', { name: '收起终端工具', exact: true }).click()
         await expect(f.page.locator('.composer')).toHaveCount(0)
         assert.equal(resizes(f.messages).length, 0, `${c.name} sent remote resize`)
         assert.equal(opens(f.messages).length, 2, `${c.name} unexpected terminal.open`)
@@ -269,6 +280,7 @@ try {
         }
         assert.ok(edge.endBottom <= edge.boxBottom + 2, `${c.name} last-row END not reachable: ${JSON.stringify(edge)}`)
         await screenshot(f.page, `${name}-${c.name}-fixed`)
+        await openPaneTools(f.page)
         await f.page.getByRole('button', { name: '适应窗口', exact: true }).click()
         await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
         await expect(f.page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'true')
@@ -303,7 +315,7 @@ try {
       await observed.context.close()
 
       const typing = await fixture(browser, { viewport: { width: 1440, height: 900 } })
-      await typing.page.locator('.terminal-pane').nth(1).locator('.terminal-title').click()
+      await typing.page.locator('.terminal-pane').nth(1).locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await typing.page.locator('.terminal-pane-active .xterm-helper-textarea').focus()
       const beforeType = typing.messages.filter((item) => item.op === 3).length
       await typing.page.keyboard.type('xyz')

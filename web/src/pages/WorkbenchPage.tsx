@@ -4,7 +4,7 @@ import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Bell, Columns2, FolderOpen, GitBranchPlus, Image as ImageIcon, Maximize2, Menu, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Server, Settings, Trash2, X, ZoomIn } from 'lucide-react'
+import { Bell, Columns2, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Server, Settings, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane } from '../components/TerminalPane'
@@ -54,6 +54,10 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [paneID, setPaneID] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('herdrx.sidebar-open') !== 'false')
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
+  const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
+  const mobileToolsTrigger = useRef<HTMLButtonElement>(null)
+  const [inputFocusRequest, setInputFocusRequest] = useState(0)
   const [prefix, setPrefix] = useState(false)
   const [terminalInput, setTerminalInput] = useState<((data: string) => void) | null>(null)
   const [desktopInput, setDesktopInput] = useState({ composerOpen: false, directInput: true })
@@ -65,6 +69,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     if (mobile) setMobileInput(apply)
     else setDesktopInput(apply)
   }
+  const focusDirectInput = () => { patchInput({ directInput: true }); setInputFocusRequest((request) => request + 1) }
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themeName, setThemeName] = useState(() => localStorage.getItem('herdrx.terminal-theme') || 'Cobalt2')
   const terminalTheme = terminalThemes[themeName] || terminalThemes.Cobalt2
@@ -111,7 +116,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     hostTabsRef.current?.querySelector<HTMLElement>('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
-  }, [hostID, availableHosts])
+  }, [hostID, availableHosts, mobile])
 
   useEffect(() => {
     const tabs = hostTabsRef.current
@@ -125,7 +130,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     }
     tabs.addEventListener('wheel', wheel, { passive: false })
     return () => tabs.removeEventListener('wheel', wheel)
-  }, [])
+  }, [mobile])
 
   useEffect(() => {
     let disposed = false
@@ -425,12 +430,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
 
   const selectWorkspace = (workspace: Workspace) => {
+    setMobileToolsOpen(false)
     setWorkspaceID(workspace.workspace_id)
     setTabID(workspace.active_tab_id)
     setSwitcherOpen(false)
   }
-  const selectTab = (tab: Tab) => { setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false) }
-  const selectAgent = (agent: Agent) => { setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false) }
+  const selectTab = (tab: Tab) => { setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false) }
+  const selectAgent = (agent: Agent) => { setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false) }
 
   const workspaces = snapshot?.workspaces || []
   const visibleWorkspaces = workspaces.filter((workspace) => !workspace.worktree?.is_linked_worktree || !collapsedGroups.has(workspace.worktree.repo_key))
@@ -440,11 +446,19 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const panes = layout?.panes.map((entry) => snapshot?.panes.find((pane) => pane.pane_id === entry.pane_id)).filter(Boolean) as Pane[] | undefined
   const activeWorkspace = workspaces.find((workspace) => workspace.workspace_id === workspaceID)
   const activeTab = tabs.find((tab) => tab.tab_id === tabID)
+  const activePane = panes?.find((pane) => pane.pane_id === paneID)
   const visiblePanes = mobile ? panes?.filter((pane) => pane.pane_id === paneID) : panes
   const hostEntries = availableHosts.some((item) => item.id === hostID) ? availableHosts : [{ id: hostID, name: host?.name || '加载主机…' }, ...availableHosts]
 
   return <div className={`workbench ${mobile ? 'workbench-compact' : ''} ${mobile && viewportHeight < 500 ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
-    <header className="hostbar" aria-label="主机导航">
+    {mobile ? <header className="mobile-topbar" aria-label="工作台导航">
+      <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
+        <Menu size={18}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
+      </button>
+      <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((value) => !value)}><Keyboard size={18}/></Button>
+      <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
+      <Button className="tool-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={18}/></Button>
+    </header> : <header className="hostbar" aria-label="主机导航">
       <button className="hostbar-home" aria-label="返回主机列表" data-tooltip="管理主机" onClick={() => navigate('/')}><BrandIcon/><span>herdrx</span></button>
       {!mobile && <Button className="tool-button" aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} data-tooltip="切换侧边栏 · Ctrl+B B" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? <PanelLeftClose size={14}/> : <PanelLeftOpen size={14}/>}</Button>}
       <nav className="host-tabs" ref={hostTabsRef} aria-label="选择主机">
@@ -456,7 +470,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       </nav>
       <Button className="tool-button" aria-label="重命名当前主机" data-tooltip="重命名当前主机" disabled={!host} onClick={() => { if (host) openPrompt({ title: '重命名主机', label: '主机名称', value: host.name, submitLabel: '保存名称', onSubmit: async (name) => { const result = await api.renameHost(hostID, name); setHost(result.host); setAvailableHosts((current) => current.map((item) => item.id === hostID ? result.host : item)) } }) }}><Pencil size={13}/></Button>
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostListError ? '主机列表加载失败' : connection === 'ready' ? host?.transport : connection}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => window.location.reload()}><RefreshCw size={13}/></Button></div>
-    </header>
+    </header>}
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>
       <SidebarSection title="工作区" action={<button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={14}/><span>{workspaceBusy ? '创建中…' : '新建'}</span></button>}>
         {visibleWorkspaces.map((workspace) => <button className={`sidebar-row workspace-row ${workspace.workspace_id === workspaceID ? 'sidebar-row-active' : ''}`} key={workspace.workspace_id} aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} data-tooltip={`${workspace.label} · ${workspace.pane_count} panes · ${workspace.tab_count} tabs`} onClick={() => selectWorkspace(workspace)} onContextMenu={(event) => openWorkspaceContextMenu(event, workspace)}><StatusDot status={workspace.agent_status}/><span className="workspace-number">{workspace.number}</span><strong>{workspace.label}</strong>{workspace.tab_count > 1 && <small className="workspace-count">{workspace.tab_count}</small>}</button>)}
@@ -468,17 +482,6 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     </aside>}
 
     <main className="workbench-main">
-      {mobile && <>
-        <div className="mobile-header">
-          <button className="mobile-location" aria-label="选择工作区和分屏" onClick={() => setSwitcherOpen(true)}><Menu size={16}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{workspaces.length} 个工作区 · {panes?.length || 0} 个分屏</small></span></button>
-          <button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span>新建</span></button>
-          <button className="mobile-fit" aria-pressed={display.mode === 'responsive'} data-tooltip="自适应会让当前远端终端按手机宽度换行" onClick={() => updateDisplay({ mode: display.mode === 'responsive' ? 'fixed' : 'responsive', zoom: 100 })}>{display.mode === 'responsive' ? '自适应' : '原始画面'}</button>
-        </div>
-        <nav className="mobile-tabs" aria-label="标签页">
-          <div>{tabs.map((tab) => <button key={tab.tab_id} className={tab.tab_id === tabID ? 'mobile-tab-active' : ''} aria-pressed={tab.tab_id === tabID} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span>{tab.label}</span></button>)}</div>
-          <button aria-label="新建标签页" onClick={() => runAction(createTab)}><Plus size={16}/></button>
-        </nav>
-      </>}
       {!mobile && <header className="tabbar">
         <div className="tabs">{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => { selectTab(tab); openContextMenu(event, { kind: 'tab', tab }) }}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {panes?.length || 0} panes</span>
@@ -491,24 +494,32 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
           const sourceRect = layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
-            <TerminalPane client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} theme={terminalTheme} enhancedContrast={enhancedContrast} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={() => patchInput({ directInput: true })}/>
+            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} theme={terminalTheme} enhancedContrast={enhancedContrast} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput}/>
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
       </section>
 
       {prefix && <div className="mode-bar"><strong>PREFIX</strong><span>esc cancel</span><span>v split right</span><span>− split down</span><span>hjkl focus</span><span>z zoom</span><span>x close</span><span>w switch</span></div>}
-      {actionError && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
+      {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {(composerOpen || mobile) && <div className="workbench-dock">
-      <Composer hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={() => patchInput({ directInput: true })} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
-      {mobile && <div className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
+      <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
+      {mobile && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
         ['Enter', '\r'], ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
       ].map(([label, data]) => <button key={label} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}<button className={prefix ? 'key-active' : ''} onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}
       </div>}
       <Input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} onChange={(event) => void handleImageUpload(event)} />
     </main>
 
-    {switcherOpen && <div className="switcher-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target) setSwitcherOpen(false) }}><section className="switcher" role="dialog" aria-modal="true" aria-label="切换 Herdr 位置"><div className="switcher-header"><strong>切换位置</strong><button onClick={() => setSwitcherOpen(false)}>关闭 <X size={15}/></button></div><SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agent.agent_status}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspace.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{tab.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{pane.label || pane.terminal_title_stripped || pane.pane_id}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="操作"><button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup></section></div>}
+    {switcherOpen && <Modal title="切换 Herdr 位置" className="switcher" closeLabel="关闭切换位置" onClose={() => setSwitcherOpen(false)}>
+      <SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{pane.label || pane.terminal_title_stripped || pane.pane_id}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup>
+      <SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button aria-pressed={tab.tab_id === tabID} key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{tab.pane_count} panes</small></span></button>)}</SwitcherGroup>
+      <SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspace.pane_count} panes</small></span></button>)}</SwitcherGroup>
+      {agents.length > 0 && <SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agent.agent_status}</small></span></button>)}</SwitcherGroup>}
+      <SwitcherGroup title="主机"><a className="switcher-host-manage" href="/" onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('/') }}><Server size={16}/><span><strong>管理主机</strong></span></a>{hostEntries.map((item) => <a key={item.id} href={`/h/${encodeURIComponent(item.id)}`} className={item.id === hostID ? 'host-tab-active' : ''} aria-current={item.id === hostID ? 'page' : undefined} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); setSwitcherOpen(false); navigate(`/h/${encodeURIComponent(item.id)}`) }}><Server size={16}/><span><strong>{item.name}</strong></span></a>)}</SwitcherGroup>
+      <SwitcherGroup title="操作">{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
+      {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
+    </Modal>}
     {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>满足可读性要求，但会轻微修正主题中的低对比色。</small></span></label><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'}</small></span><Button className="button-secondary" disabled={notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationPermission === 'granted' ? '已启用' : '启用'}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={`${contextMenu.target.kind} 右键菜单`} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
@@ -530,11 +541,19 @@ function currentLayout(snapshot: Snapshot | null, tabID: string): Layout | undef
 function paneStyle(layout: Layout, paneID: string) {
   const pane = layout.panes.find((item) => item.pane_id === paneID)
   if (!pane || !layout.area.width || !layout.area.height) return {}
+  // Herdr's layout includes terminal-cell-sized separator gaps. Let each web
+  // pane meet its neighbour; the CSS border supplies a single-pixel divider.
+  const right = Math.min(layout.area.x + layout.area.width, ...layout.panes
+    .filter((item) => item.rect.x >= pane.rect.x + pane.rect.width && item.rect.y < pane.rect.y + pane.rect.height && item.rect.y + item.rect.height > pane.rect.y)
+    .map((item) => item.rect.x))
+  const bottom = Math.min(layout.area.y + layout.area.height, ...layout.panes
+    .filter((item) => item.rect.y >= pane.rect.y + pane.rect.height && item.rect.x < pane.rect.x + pane.rect.width && item.rect.x + item.rect.width > pane.rect.x)
+    .map((item) => item.rect.y))
   return {
     left: `${((pane.rect.x - layout.area.x) / layout.area.width) * 100}%`,
     top: `${((pane.rect.y - layout.area.y) / layout.area.height) * 100}%`,
-    width: `${(pane.rect.width / layout.area.width) * 100}%`,
-    height: `${(pane.rect.height / layout.area.height) * 100}%`,
+    width: `${((right - pane.rect.x) / layout.area.width) * 100}%`,
+    height: `${((bottom - pane.rect.y) / layout.area.height) * 100}%`,
   }
 }
 

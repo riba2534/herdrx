@@ -90,6 +90,18 @@ async function screenshot(page, name) {
   await page.screenshot({ path: join(artifacts, name + '.png'), fullPage: true })
 }
 
+async function selectMobileHost(page, name) {
+  await page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
+  await page.locator('.switcher').getByRole('link', { name, exact: true }).click()
+  await expect(page.locator('.mobile-location')).toContainText(name)
+}
+
+async function showAuxiliaryKeys(page) {
+  const toggle = page.getByRole('button', { name: '终端辅助键', exact: true })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toBeVisible()
+}
+
 function sendCalls(messages) {
   return messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
 }
@@ -145,7 +157,7 @@ try {
       assert.deepEqual(sendCalls(f.messages)[1].params, { pane_id: 'p1', text: '切换前再发', keys: ['Enter'] })
       await f.page.waitForTimeout(600)
       await expect(f.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('切换前再发')
-      await expect(f.page.getByRole('status')).not.toContainText('发送中')
+      await expect(f.page.getByRole('status')).toHaveCount(0)
       assert.equal(inputFrames(f.messages).length, 0, 'composer submit used keystroke frames')
       await screenshot(f.page, `${name}-mobile-390-composer`)
       assert.deepEqual(f.errors, [])
@@ -173,9 +185,8 @@ try {
       await hop.page.getByRole('textbox', { name: '本地输入内容' }).fill('host hop draft')
       await hop.page.getByRole('button', { name: '发送', exact: true }).click()
       await expect(hop.page.getByRole('status')).toContainText('发送中')
-      await hop.page.getByRole('link', { name: '另一台主机' }).click()
-      await expect(hop.page.locator('.host-tab-active')).toContainText('另一台主机')
-      await hop.page.getByRole('link', { name: '输入框测试' }).click()
+      await selectMobileHost(hop.page, '另一台主机')
+      await selectMobileHost(hop.page, '输入框测试')
       await expect(hop.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('host hop draft')
       await expect(hop.page.getByRole('status')).toContainText('结果未知')
       assert.equal(sendCalls(hop.messages).length, 1, 'returning to the host replayed composer submit')
@@ -188,9 +199,8 @@ try {
       await expect(eof.page.getByRole('status')).not.toContainText('发送失败')
       await expect(eof.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('EOF_RECEIPT already written')
       assert.equal(sendCalls(eof.messages).length, 1)
-      await eof.page.getByRole('link', { name: '另一台主机' }).click()
-      await expect(eof.page.locator('.host-tab-active')).toContainText('另一台主机')
-      await eof.page.getByRole('link', { name: '输入框测试' }).click()
+      await selectMobileHost(eof.page, '另一台主机')
+      await selectMobileHost(eof.page, '输入框测试')
       await expect(eof.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('EOF_RECEIPT already written')
       await expect(eof.page.getByRole('status')).toContainText('结果未知')
       await expect(eof.page.getByRole('status')).not.toContainText('发送失败')
@@ -199,6 +209,11 @@ try {
 
       for (const [width, height] of [[320, 720], [390, 844], [479, 847], [844, 390]]) {
         const view = await fixture(browser, { viewport: { width, height }, hasTouch: true, ...(name !== 'firefox' ? { isMobile: true } : {}) })
+        await expect(view.page.locator('.keybar')).toHaveCount(0)
+        await expect(view.page.getByRole('status')).toHaveCount(0)
+        const foldedComposer = await view.page.locator('.composer').boundingBox()
+        assert.ok(foldedComposer && Math.abs(foldedComposer.y + foldedComposer.height - height) <= 1, `composer does not meet viewport bottom at ${width}x${height}`)
+        await showAuxiliaryKeys(view.page)
         const send = await view.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
         const composer = await view.page.locator('.composer').boundingBox()
         const keybar = await view.page.locator('.keybar').boundingBox()
@@ -211,7 +226,13 @@ try {
         const keyboard = Math.min(360, height)
         await expect.poll(() => view.page.locator('.keybar').evaluate((el) => el.getBoundingClientRect().bottom)).toBe(keyboard)
         await expect.poll(() => view.page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(keyboard + 1)
-        await expect(view.page.getByRole('status')).toBeVisible()
+        await expect(view.page.getByRole('status')).toHaveCount(0)
+        await view.page.getByRole('button', { name: '输入方式：本地输入', exact: true }).click()
+        await view.page.getByRole('menuitemradio', { name: /^直接输入终端/ }).click()
+        await expect(view.page.locator('.xterm-helper-textarea')).toBeFocused()
+        await view.page.getByRole('button', { name: '输入方式：直接输入终端', exact: true }).click()
+        await view.page.getByRole('menuitemradio', { name: /^本地输入/ }).click()
+        await expect(view.page.getByRole('textbox', { name: '本地输入内容' })).toBeFocused()
         await view.context.close()
       }
 
@@ -220,6 +241,7 @@ try {
         [390, 'unknown', { closeOnSend: true }],
       ]) {
         const view = await fixture(browser, { viewport: { width, height: 844 }, hasTouch: true, ...(name !== 'firefox' ? { isMobile: true } : {}) }, options)
+        await showAuxiliaryKeys(view.page)
         await view.page.evaluate(() => {
           Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 360 })
           window.visualViewport.dispatchEvent(new Event('resize'))

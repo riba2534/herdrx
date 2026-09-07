@@ -5,7 +5,7 @@ import { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], last: null as { options: { disableStdin: boolean }, cols: number, rows: number } | null }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], last: null as { options: { disableStdin: boolean }, cols: number, rows: number, focus: () => void } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
@@ -168,13 +168,14 @@ describe('TerminalPane paste interception', () => {
     act(() => send!('sent once'))
     act(() => frames.mock.calls[0][2]!('herdr: command not found'))
     expect(screen.getByText('终端连接已关闭：herdr: command not found')).toBeVisible()
-    expect(screen.queryByRole('button', { name: '聚焦终端输入' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '聚焦终端输入', hidden: true })).not.toBeInTheDocument()
     act(() => send!('discard while closed'))
     expect(open).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: '重连终端' }))
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(2))
     expect(input.mock.calls).toEqual([[7, 'sent once']])
     expect(call).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
     expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
@@ -187,6 +188,27 @@ describe('TerminalPane paste interception', () => {
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} directInput={false}/>)
     await waitFor(() => expect(frames).toHaveBeenCalled())
     expect(terminalHarness.last?.options.disableStdin).toBe(true)
+    expect(input).not.toHaveBeenCalled()
+  })
+  it('focuses the connected terminal again when direct input is explicitly selected in the same mode', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const close = vi.spyOn(client, 'closeTerminal').mockImplementation(() => {})
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput')
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, directInput: true }
+    const { rerender } = render(<TerminalPane {...props} inputFocusRequest={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const focus = vi.spyOn(terminalHarness.last!, 'focus')
+    rerender(<TerminalPane {...props} inputFocusRequest={1}/>)
+    expect(focus).toHaveBeenCalledTimes(1)
+    rerender(<TerminalPane {...props} inputFocusRequest={1}/>)
+    expect(focus).toHaveBeenCalledTimes(1)
+    rerender(<TerminalPane {...props} inputFocusRequest={2}/>)
+    expect(focus).toHaveBeenCalledTimes(2)
+    expect(terminalHarness.last?.options.disableStdin).toBe(false)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
     expect(input).not.toHaveBeenCalled()
   })
   it('replaces history and returning live content in-band while skipping live updates during history', async () => {
@@ -202,6 +224,7 @@ describe('TerminalPane paste interception', () => {
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
     act(() => terminalHarness.writeCallbacks.shift()!())
 
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(terminalHarness.writes).toHaveLength(2))
     expect(read).toHaveBeenCalledExactlyOnceWith('pane.read', { pane_id: 'p1', source: 'recent', format: 'ansi', lines: 10000 })
@@ -236,6 +259,7 @@ describe('TerminalPane paste interception', () => {
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
     act(() => terminalHarness.writeCallbacks.shift()!())
 
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(terminalHarness.writes).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: '返回实时' }))
@@ -346,6 +370,7 @@ describe('TerminalPane paste interception', () => {
     terminalHarness.deferWrites = true
     terminalHarness.writes = []
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 80, rows: 24, ansi: encode('pending') }))
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(read).toHaveBeenCalled())
     expect(terminalHarness.writes.map(visible)).toEqual(['pending'])
@@ -358,7 +383,7 @@ describe('TerminalPane paste interception', () => {
     expect(screen.getByRole('button', { name: '返回实时' })).toBeVisible()
     expect(screen.getByRole('toolbar', { name: '终端历史导航' })).toBeVisible()
   })
-  it('applies the latest local fit when the viewport returns to the current grid before a pending write completes', async () => {
+  it('keeps the current frame when the viewport returns to its grid before a pending write completes', async () => {
     let width = 673
     let height = 337
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
@@ -385,6 +410,38 @@ describe('TerminalPane paste interception', () => {
     act(() => { while (terminalHarness.writeCallbacks.length) terminalHarness.writeCallbacks.shift()!() })
     expect(terminalHarness.last!.cols).toBe(80)
     expect(terminalHarness.last!.rows).toBe(24)
+  })
+  it('waits for an authoritative responsive frame before changing the live terminal grid', async () => {
+    let width = 673
+    let height = 337
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const emit = (seq: bigint, cols: number, rows: number) => act(() => frames.mock.calls[0][1]({ streamID: 7, seq, full: true, cols, rows, ansi: new TextEncoder().encode('authoritative frame') }))
+    emit(1n, 80, 24)
+    width = 337
+    height = 169
+    rerender(<TerminalPane {...props} layoutVersion={1}/>)
+    // Changing only the local viewport must not truncate the existing frame
+    // while the remote resize request is still waiting for its response.
+    expect([terminalHarness.last!.cols, terminalHarness.last!.rows]).toEqual([80, 24])
+    await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 40, 12))
+    emit(2n, 40, 12)
+    expect([terminalHarness.last!.cols, terminalHarness.last!.rows]).toEqual([40, 12])
+    width = 673
+    height = 337
+    rerender(<TerminalPane {...props} layoutVersion={2}/>)
+    expect([terminalHarness.last!.cols, terminalHarness.last!.rows]).toEqual([40, 12])
+    await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 80, 24))
+    emit(3n, 80, 24)
+    expect([terminalHarness.last!.cols, terminalHarness.last!.rows]).toEqual([80, 24])
   })
   it('routes fullscreen application wheel through Herdr without freezing a snapshot or guessing input bytes', async () => {
     const client = new WorkbenchClient('hst_test')

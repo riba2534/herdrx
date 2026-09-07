@@ -144,6 +144,11 @@ try {
         await expect(page.locator('.xterm-rows > div').first()).toContainText('DELTA')
         assert.equal(streamCount, 1, 'painting reopened or remounted the terminal')
         sendSnapshot({ ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, scroll: { ...pane.scroll, max_offset_from_bottom: 300 } })) })
+        if (mobile) await page.getByRole('button', { name: '终端工具', exact: true }).click()
+        else {
+          await page.locator('.terminal-pane').hover()
+          await page.getByRole('button', { name: '分屏工具', exact: true }).click()
+        }
         await page.evaluate(() => { window.flickerPhase = 'history-entry' })
         await page.getByRole('button', { name: '查看终端历史', exact: true }).click()
         await expect(page.locator('.xterm-rows > div').first()).toContainText('FRAME 0400')

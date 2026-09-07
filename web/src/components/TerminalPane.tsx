@@ -1,6 +1,6 @@
 import { useConfirm } from './useConfirm'
 import { Input, Form } from './Form'
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from 'react'
 import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -17,8 +17,44 @@ import { Button, StatusDot } from './ui'
 
 const defaultDisplay: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fixed' }
 
-export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls, directInput = true, onDirectInput }: { client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls, directInput = true, onDirectInput }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
+  const [localControlsOpen, setLocalControlsOpen] = useState(false)
+  const toolbarOpen = controlsOpen ?? localControlsOpen
+  const setToolbarOpen = onControlsOpenChange ?? setLocalControlsOpen
+  const toolbarRef = useRef<HTMLElement>(null)
+  const controlsTriggerRef = useRef<HTMLButtonElement>(null)
+  const toolbarOpenerRef = useRef<HTMLElement | null>(null)
+  const setToolbarOpenRef = useRef(setToolbarOpen)
+  setToolbarOpenRef.current = setToolbarOpen
+  useLayoutEffect(() => {
+    if (!toolbarOpen) return
+    toolbarOpenerRef.current = document.activeElement as HTMLElement | null
+    toolbarRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  }, [toolbarOpen])
+  const restoreToolbarFocus = () => {
+    const opener = externalControlsTrigger?.current || controlsTriggerRef.current || toolbarOpenerRef.current
+    requestAnimationFrame(() => { if (opener?.isConnected) opener.focus() })
+  }
+  useEffect(() => {
+    if (!toolbarOpen) return
+    const outside = (event: PointerEvent) => {
+      const target = event.target as HTMLElement
+      if (toolbarRef.current?.contains(target) || target.closest('[data-terminal-controls-trigger], [data-ui-overlay], .terminal-search, .context-menu')) return
+      setToolbarOpenRef.current(false)
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || (event.target as HTMLElement).closest('[data-ui-overlay], .terminal-search, .context-menu')) return
+      event.preventDefault()
+      event.stopPropagation()
+      setToolbarOpenRef.current(false)
+      restoreToolbarFocus()
+    }
+    document.addEventListener('pointerdown', outside, true)
+    window.addEventListener('keydown', escape, true)
+    return () => { document.removeEventListener('pointerdown', outside, true); window.removeEventListener('keydown', escape, true) }
+  }, [toolbarOpen])
+  const closeToolbar = () => { setToolbarOpen(false); restoreToolbarFocus() }
   const viewportRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -41,6 +77,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
   const inputBlockedRef = useRef(false)
   const directInputRef = useRef(directInput)
   const wasDirectInputRef = useRef(directInput)
+  const previousFocusRequest = useRef(inputFocusRequest)
   directInputRef.current = directInput
   const applyStdin = () => {
     const terminal = termRef.current
@@ -276,10 +313,15 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       if (termRef.current !== terminal || writeSessionRef.current.closed) return
       if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows)
     }
-    const sizeChanged = terminal.cols !== cols || terminal.rows !== rows
-    const hasQueuedFit = writeSessionRef.current.waiters.some((waiter) => waiter.kind === 'fit')
-    if (writeSessionRef.current.pending === 0) applyResize()
-    else if (sizeChanged || hasQueuedFit) whenTerminalIdle(applyResize, { kind: 'fit' })
+    // A responsive live grid belongs to the incoming frame. Speculatively
+    // shrinking it can discard rows before a debounced remote resize arrives,
+    // and interleave local reflow with an older frame's parser state.
+    if (!responsive || streamRef.current === null) {
+      const sizeChanged = terminal.cols !== cols || terminal.rows !== rows
+      const hasQueuedFit = writeSessionRef.current.waiters.some((waiter) => waiter.kind === 'fit')
+      if (writeSessionRef.current.pending === 0) applyResize()
+      else if (sizeChanged || hasQueuedFit) whenTerminalIdle(applyResize, { kind: 'fit' })
+    }
     if (size) {
       desiredSizeRef.current = size
       if (streamRef.current !== null && (sentSizeRef.current.cols !== cols || sentSizeRef.current.rows !== rows)) {
@@ -481,7 +523,9 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     applyStdin()
     const becameDirect = directInput && !wasDirectInputRef.current
     wasDirectInputRef.current = directInput
-    if (becameDirect && active && !inputBlockedRef.current) {
+    const focusRequested = inputFocusRequest !== previousFocusRequest.current
+    previousFocusRequest.current = inputFocusRequest
+    if (directInput && (becameDirect || focusRequested) && active && !inputBlockedRef.current) {
       revealCursorRef.current()
       termRef.current?.focus()
     }
@@ -493,7 +537,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     }
     host.addEventListener('focusin', block)
     return () => host.removeEventListener('focusin', block)
-  }, [directInput, connectionEpoch, streamGeneration, active])
+  }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -619,7 +663,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     }
   }, [client, pane.pane_id, active])
 
-  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'}`} onPointerDown={onFocus} onContextMenu={(event) => {
+  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
     const overTerminal = (event.target as HTMLElement).closest('.terminal-host')
     if (overTerminal && pane.right_click_passthrough) {
       event.preventDefault()
@@ -627,18 +671,20 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     }
     onContextMenu?.(event)
   }}>
-    <header className="terminal-titlebar">
+    {!compact && <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="分屏工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 分屏工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>}
+    <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
       <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={pane.label || pane.agent || pane.terminal_title_stripped || pane.pane_id}>{pane.label || pane.agent || pane.terminal_title_stripped || pane.pane_id}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>
       {headerControls}
       <div className="terminal-tools">
-        {historyActive && <Button className="tool-button" data-tooltip="正在查看 Herdr 保留的历史；继续输入会返回实时终端" onClick={() => returnToLiveRef.current()}>返回实时</Button>}
-        {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
+        {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
         <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
         {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
-        <Button className="tool-button" onClick={(event) => { event.stopPropagation(); setSearchOpen((value) => !value) }} aria-label="搜索终端"><Search size={14}/></Button>
+        <Button className="tool-button" onClick={(event) => { event.stopPropagation(); setToolbarOpen(false); setSearchOpen((value) => !value) }} aria-label="搜索终端"><Search size={14}/></Button>
         {onContextMenu && <Button className="tool-button pane-menu-button" aria-label="终端操作" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
+        <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
       </div>
     </header>
+    {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
     {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
     {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
     <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; termRef.current?.focus() }}/>
@@ -648,7 +694,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       {!imageFeedback.pending && <button aria-label="关闭图片提示" onClick={() => setImageFeedback(null)}><X size={14}/></button>}
     </div>}
     {searchOpen && <Form className="terminal-search" onSubmit={(event) => { event.preventDefault(); const query = new FormData(event.currentTarget).get('query'); if (typeof query === 'string') searchRef.current?.findNext(query) }}><Input name="query" aria-label="搜索内容" autoFocus placeholder="搜索当前缓冲…"/><button type="submit">查找</button><button type="button" aria-label="关闭搜索" onClick={() => setSearchOpen(false)}><X size={14}/></button></Form>}
-    {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
+    {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
     <div className="terminal-viewport" ref={viewportRef} tabIndex={0} role="region" aria-label="终端画面，可滚动查看"><div className="terminal-host" ref={hostRef}/></div>
     {confirmationDialog}
   </section>

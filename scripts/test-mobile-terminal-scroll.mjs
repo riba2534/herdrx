@@ -153,7 +153,7 @@ async function workbenchChecks(browser, engine, history) {
   try {
     await page.goto(base + '/h/mobile-test')
     await expect(page.locator('.xterm-rows')).toContainText('Mobile live')
-    await expect(page.getByRole('img', { name: '可输入', exact: true })).toBeVisible()
+    await expect(page.locator('.terminal-pane')).toHaveAttribute('data-terminal-status', '可输入')
     await page.getByRole('button', { name: '工作台设置', exact: true }).click()
     await chooseOption(page.getByRole('combobox', { name: /显示方式/ }), 'fit')
     await page.getByRole('button', { name: '完成', exact: true }).click()
@@ -209,6 +209,7 @@ async function workbenchChecks(browser, engine, history) {
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     assert.equal(messages.filter((m) => m.method === 'terminal.scroll').length, scrollCalls, 'pinch replayed an unsent one-finger scroll')
     assert.equal(await first(), beforePinch, 'pinch replayed unsent history movement')
+    await page.getByRole('button', { name: '终端工具', exact: true }).click()
     await page.getByRole('button', { name: '聚焦终端输入' }).click()
     await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
     assert.deepEqual(errors, [])

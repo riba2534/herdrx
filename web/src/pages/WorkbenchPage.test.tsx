@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
@@ -118,6 +118,18 @@ describe('workbench composer', () => {
     render(<WorkbenchPage hostID="host"/>)
     expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('keeps a failed workspace creation visible inside the mobile switcher', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    call.mockRejectedValueOnce(new Error('没有创建工作区的权限'))
+    render(<WorkbenchPage hostID="host"/>)
+    fireEvent.click(await screen.findByRole('button', { name: '切换工作区或终端' }))
+    const switcher = screen.getByRole('dialog', { name: '切换 Herdr 位置' })
+    fireEvent.click(within(switcher).getByRole('button', { name: '新建工作区' }))
+    expect(await within(switcher).findByRole('alert')).toHaveTextContent('没有创建工作区的权限')
+    expect(within(switcher).getByRole('button', { name: '新建工作区' })).toBeEnabled()
+    expect(call).toHaveBeenCalledWith('workspace.create', expect.anything())
   })
 
   it('restores desktop direct input after a compact visit and keeps an explicit desktop composer', async () => {
