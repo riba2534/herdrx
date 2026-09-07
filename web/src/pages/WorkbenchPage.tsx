@@ -63,6 +63,9 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: ContextTarget } | null>(null)
   const [prompt, setPrompt] = useState<PromptState | null>(null)
   const [promptBusy, setPromptBusy] = useState(false)
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const creatingWorkspace = useRef(false)
+  const pendingWorkspaceSelection = useRef<string | null>(null)
   const [promptError, setPromptError] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
@@ -145,6 +148,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     if (!snapshot) return
+    if (pendingWorkspaceSelection.current) {
+      const created = snapshot.workspaces.find((item) => item.workspace_id === pendingWorkspaceSelection.current)
+      if (!created) return // The RPC result can precede its snapshot.
+      pendingWorkspaceSelection.current = null
+      setWorkspaceID(created.workspace_id)
+      setTabID(created.active_tab_id)
+      const pane = snapshot.panes.find((item) => item.tab_id === created.active_tab_id)
+      if (pane) setPaneID(pane.pane_id)
+      return
+    }
     const pendingTab = pendingTabSelection.current
     if (pendingTab) {
       const created = snapshot.tabs.find((item) => item.workspace_id === pendingTab.workspaceID && !pendingTab.existing.has(item.tab_id))
@@ -238,13 +251,21 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
 
   const createWorkspace = async () => {
+    if (creatingWorkspace.current) return
+    creatingWorkspace.current = true
+    setWorkspaceBusy(true)
     try {
       const result = await client.call<{ workspace?: Workspace; tab?: Tab; root_pane?: Pane }>('workspace.create', { focus: false })
-      if (result.workspace) setWorkspaceID(result.workspace.workspace_id)
+      if (result.workspace) {
+        pendingWorkspaceSelection.current = result.workspace.workspace_id
+        setWorkspaceID(result.workspace.workspace_id)
+      }
+      setSwitcherOpen(false)
       if (result.tab) setTabID(result.tab.tab_id)
       if (result.root_pane) setPaneID(result.root_pane.pane_id)
       setActionError('')
-    } catch (reason) { setActionError(reason instanceof Error ? reason.message : '无法创建 workspace') }
+    } catch (reason) { setActionError(reason instanceof Error ? reason.message : '无法创建工作区') }
+    finally { creatingWorkspace.current = false; setWorkspaceBusy(false) }
   }
 
   const runAction = (action: () => Promise<void>) => {
@@ -407,7 +428,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const visiblePanes = mobile ? panes?.filter((pane) => pane.pane_id === paneID) : panes
   const hostEntries = availableHosts.some((item) => item.id === hostID) ? availableHosts : [{ id: hostID, name: host?.name || '加载主机…' }, ...availableHosts]
 
-  return <div className={`workbench ${mobile ? 'workbench-compact' : ''} ${mobile && viewportHeight < 430 ? 'workbench-short' : ''} ${sidebarOpen ? '' : 'workbench-sidebar-closed'}`} style={{ '--workbench-height': `${viewportHeight}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
+  return <div className={`workbench ${mobile ? 'workbench-compact' : ''} ${mobile && viewportHeight < 430 ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
     <header className="hostbar" aria-label="主机导航">
       <button className="hostbar-home" aria-label="返回主机列表" data-tooltip="管理主机" onClick={() => navigate('/')}><BrandIcon/><span>herdrx</span></button>
       {!mobile && <Button className="tool-button" aria-label={sidebarOpen ? '收起侧边栏' : '展开侧边栏'} data-tooltip="切换侧边栏 · Ctrl+B B" onClick={() => setSidebarOpen((value) => !value)}>{sidebarOpen ? <PanelLeftClose size={14}/> : <PanelLeftOpen size={14}/>}</Button>}
@@ -422,7 +443,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostListError ? '主机列表加载失败' : connection === 'ready' ? host?.transport : connection}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => window.location.reload()}><RefreshCw size={13}/></Button></div>
     </header>
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>
-      <SidebarSection title="工作区" action={<button aria-label="新建 workspace" data-tooltip="新建工作区" onClick={() => void createWorkspace()}><Plus size={14}/></button>}>
+      <SidebarSection title="工作区" action={<button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={14}/><span>{workspaceBusy ? '创建中…' : '新建'}</span></button>}>
         {visibleWorkspaces.map((workspace) => <button className={`sidebar-row workspace-row ${workspace.workspace_id === workspaceID ? 'sidebar-row-active' : ''}`} key={workspace.workspace_id} aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} data-tooltip={`${workspace.label} · ${workspace.pane_count} panes · ${workspace.tab_count} tabs`} onClick={() => selectWorkspace(workspace)} onContextMenu={(event) => openWorkspaceContextMenu(event, workspace)}><StatusDot status={workspace.agent_status}/><span className="workspace-number">{workspace.number}</span><strong>{workspace.label}</strong>{workspace.tab_count > 1 && <small className="workspace-count">{workspace.tab_count}</small>}</button>)}
       </SidebarSection>
       <SidebarSection title="Agent 状态">
@@ -432,6 +453,17 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     </aside>}
 
     <main className="workbench-main">
+      {mobile && <>
+        <div className="mobile-header">
+          <button className="mobile-location" aria-label="选择工作区和分屏" onClick={() => setSwitcherOpen(true)}><Menu size={16}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{workspaces.length} 个工作区 · {panes?.length || 0} 个分屏</small></span></button>
+          <button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span>新建</span></button>
+          <button className="mobile-fit" aria-pressed={display.mode === 'fit'} onClick={() => updateDisplay({ mode: display.mode === 'fit' ? 'fixed' : 'fit', zoom: 100 })}>{display.mode === 'fit' ? '可读字号' : '全屏内容'}</button>
+        </div>
+        <nav className="mobile-tabs" aria-label="标签页">
+          <div>{tabs.map((tab) => <button key={tab.tab_id} className={tab.tab_id === tabID ? 'mobile-tab-active' : ''} aria-pressed={tab.tab_id === tabID} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span>{tab.label}</span></button>)}</div>
+          <button aria-label="新建标签页" onClick={() => runAction(createTab)}><Plus size={16}/></button>
+        </nav>
+      </>}
       {!mobile && <header className="tabbar">
         <div className="tabs">{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => { selectTab(tab); openContextMenu(event, { kind: 'tab', tab }) }}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {panes?.length || 0} panes</span>
@@ -451,13 +483,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
       {prefix && <div className="mode-bar"><strong>PREFIX</strong><span>esc cancel</span><span>v split right</span><span>− split down</span><span>hjkl focus</span><span>z zoom</span><span>x close</span><span>w switch</span></div>}
       {actionError && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
-      {mobile && <div className="keybar" role="toolbar" aria-label="终端辅助键">{[
-        ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
+      {mobile && <div className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
+        ['Enter', '\r'], ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
       ].map(([label, data]) => <button key={label} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}<button className={prefix ? 'key-active' : ''} onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}
       <Input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} onChange={(event) => void handleImageUpload(event)} />
     </main>
 
-    {switcherOpen && <div className="switcher-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target) setSwitcherOpen(false) }}><section className="switcher" role="dialog" aria-modal="true" aria-label="切换 Herdr 位置"><div className="switcher-header"><strong>切换位置</strong><button onClick={() => setSwitcherOpen(false)}>关闭 <X size={15}/></button></div><SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agent.agent_status}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="工作区">{workspaces.map((workspace) => <button key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspace.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="标签页">{tabs.map((tab) => <button key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{tab.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{pane.label || pane.terminal_title_stripped || pane.pane_id}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="操作"><button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup></section></div>}
+    {switcherOpen && <div className="switcher-backdrop" onPointerDown={(event) => { if (event.currentTarget === event.target) setSwitcherOpen(false) }}><section className="switcher" role="dialog" aria-modal="true" aria-label="切换 Herdr 位置"><div className="switcher-header"><strong>切换位置</strong><button onClick={() => setSwitcherOpen(false)}>关闭 <X size={15}/></button></div><SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agent.agent_status}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspace.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{tab.pane_count} panes</small></span></button>)}</SwitcherGroup><SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{pane.label || pane.terminal_title_stripped || pane.pane_id}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup><SwitcherGroup title="操作"><button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup></section></div>}
     {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>满足可读性要求，但会轻微修正主题中的低对比色。</small></span></label><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'}</small></span><Button className="button-secondary" disabled={notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationPermission === 'granted' ? '已启用' : '启用'}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={`${contextMenu.target.kind} 右键菜单`} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}

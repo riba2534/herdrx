@@ -135,7 +135,7 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .setting-row small { color: var(--muted); margin-top: 3px; }
 
 .workbench {
-  --sidebar-width: 184px;
+  --sidebar-width: clamp(220px, 18vw, 300px);
   --hostbar-height: 32px;
   --tabbar-height: 28px;
   --pane-bar-height: 32px;
@@ -184,12 +184,15 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .sidebar-row-active { background: var(--accent-soft) !important; }
 .agent-row { grid-template-columns: 16px minmax(0, 1fr) auto; }
 .agent-meta { min-width: 0; display: grid; }
-.agent-state { align-self: start; padding-top: 2px; font-size: 11px; color: var(--muted); }
-.sidebar-row strong, .sidebar-row small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent-state { white-space: nowrap; min-width: 3em; text-align: right; align-self: start; padding-top: 2px; font-size: 11px; color: var(--muted); }
+.sidebar-row strong, .sidebar-row small { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 .sidebar-row strong { font-size: 12px; font-weight: 500; }
 .sidebar-row small { color: var(--muted); font-size: 11px; margin-top: 1px; }
 .workspace-row { min-height: 28px; display: flex; gap: 4px; }
-.workspace-row strong { flex: 1; }
+.workspace-row strong { min-width: 0; flex: 1; }
+.workspace-row .status-dot, .workspace-number, .workspace-count { flex-shrink: 0; }
+.sidebar-section-title .workspace-create { width: auto; padding: 0 7px; display: flex; gap: 3px; color: var(--text); background: var(--panel-strong); }
+.workspace-create:disabled { opacity: .5; cursor: wait; }
 .workspace-number { min-width: 14px; color: var(--muted); font-size: 11px; }
 .workspace-count { margin-left: auto; padding: 0 3px; }
 .sidebar-empty { padding: 4px 8px; color: var(--muted); font-size: 11px; }
@@ -283,7 +286,7 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .switcher-group > div { display: grid; gap: 3px; }
 .switcher-group button { min-height: 48px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; display: flex; align-items: center; gap: 7px; text-align: left; }
 .switcher-group button:hover { background: var(--panel); }
-.switcher-group button > span:last-child { display: grid; }
+.switcher-group button > span:last-child { display: grid; min-width: 0; overflow-wrap: anywhere; }
 .switcher-group small { color: var(--muted); }
 .mobile-header, .keybar { display: none; }
 
@@ -344,25 +347,33 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
   .workbench { --hostbar-height: calc(44px + env(safe-area-inset-top)); --pane-bar-height: 44px; grid-template-columns: minmax(0, 1fr); height: var(--workbench-height, 100dvh); background: var(--terminal); }
   .hostbar { padding-top: env(safe-area-inset-top); gap: 2px; }
   .hostbar-home { min-width: 40px; min-height: 44px; justify-content: center; }
-  .hostbar-home span, .hostbar .connection > span, .hostbar .hostbar-switcher, .hostbar .hostbar-reconnect { display: none; }
+  .hostbar-home span, .hostbar .connection > span, .hostbar .hostbar-reconnect { display: none; }
   .host-tab { min-width: 80px; max-width: 180px; min-height: 44px; padding: 0 12px; font-size: 13px; }
   .hostbar .connection { padding: 0; margin: 0; }
   .workbench-sidebar { display: none; }
-  .workbench-main { height: 100%; display: grid; grid-template-rows: 44px auto minmax(0, 1fr) auto; }
+  .workbench-main { height: 100%; display: flex; flex-direction: column; }
   .tabbar { display: none; }
-  .mobile-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 44px; padding: 0 8px 0 12px; color: var(--text); background: var(--panel); border-bottom: 1px solid var(--border); }
-  .mobile-header > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
-  .mobile-header strong, .mobile-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-header span { color: var(--muted); font-size: 12px; }
-  .mobile-header p { display: none; }
-  .mobile-switch { grid-column: 2; grid-row: 1; align-self: center; min-height: 44px; background: var(--panel); color: var(--text); }
-  .terminal-surface { margin: 0; border-radius: 0; box-shadow: none; }
+  .mobile-header { flex: 0 0 auto; min-width: 0; min-height: 52px; display: flex; align-items: center; gap: 4px; padding: 2px max(6px, env(safe-area-inset-right)) 2px max(6px, env(safe-area-inset-left)); background: var(--panel); border-bottom: 1px solid var(--border); }
+  .mobile-header button { min-height: 44px; flex-shrink: 0; padding: 4px 8px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 0; border-radius: 4px; color: var(--text); background: transparent; font-size: 12px; }
+  .mobile-header .mobile-location { min-width: 0; flex: 1; justify-content: start; text-align: left; }
+  .mobile-location > svg { flex-shrink: 0; }
+  .mobile-location > span { min-width: 0; display: grid; gap: 3px; }
+  .mobile-location strong { font-size: 12px; font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .mobile-location small { color: var(--muted); font-size: 10px; white-space: nowrap; }
+  .mobile-header .workspace-create, .mobile-header .mobile-fit { background: var(--panel-strong); }
+  .mobile-fit[aria-pressed=true] { color: var(--accent); }
+  .mobile-tabs { flex: 0 0 44px; min-width: 0; display: flex; padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); border-bottom: 1px solid var(--border); background: var(--panel); }
+  .mobile-tabs > div { min-width: 0; display: flex; flex: 1; overflow-x: auto; scrollbar-width: thin; }
+  .mobile-tabs button { min-height: 44px; min-width: 44px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; }
+  .mobile-tabs .mobile-tab-active { color: var(--text); background: var(--accent-soft); box-shadow: inset 0 -2px var(--accent); }
+  .mobile-tabs > button { position: sticky; right: 0; background: var(--panel); }
+  .terminal-surface { flex: 1; margin: 0; border-radius: 0; box-shadow: none; }
   .pane-position { position: absolute; inset: 0; padding: 0; }
   .terminal-pane { border-width: 0; grid-template-rows: var(--pane-bar-height) minmax(0, 1fr); }
   .terminal-titlebar { padding-left: 9px; }
   .terminal-title small { display: none; }
   .ownership { font-size: 9px; }
-  .keybar { min-height: calc(52px + env(safe-area-inset-bottom)); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
+  .keybar { flex: 0 0 auto; min-height: calc(52px + env(safe-area-inset-bottom)); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
   .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal); color: var(--text); font: 12px monospace; }
   .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
   .mode-bar { left: 5px; right: 5px; bottom: calc(58px + env(safe-area-inset-bottom)); overflow-x: auto; white-space: nowrap; }
@@ -456,7 +467,6 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .workbench-compact .terminal-viewport { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }
 .workbench-short .mobile-header { display: none; }
-.workbench-short .workbench-main { grid-template-rows: auto minmax(0, 1fr) auto; }
 .workbench-short .hostbar .hostbar-switcher { display: inline-flex; }
 @media (pointer: coarse) {
   .workbench .display-toolbar .tool-button, .workbench .history-navigation .tool-button { min-height: 44px; min-width: 44px; }

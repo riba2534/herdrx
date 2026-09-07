@@ -249,7 +249,6 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .admin-user-row .admin-row-actions { grid-column: auto; }
   .admin-user-state p { flex-basis: auto; }
   .admin-pager { justify-content: center; }
-  .workbench-compact .workbench-main, .workbench-short .workbench-main { grid-template-rows: minmax(0,1fr) auto; }
   .workbench-compact .hostbar .hostbar-switcher { display: inline-flex; }
   .workbench-compact .hostbar .connection { gap: 2px; }
   .workbench-compact .hostbar > .tool-button, .workbench-compact .hostbar .tool-button { min-width: 44px; min-height: 44px; padding: 0 6px; }

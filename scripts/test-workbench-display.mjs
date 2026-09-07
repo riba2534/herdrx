@@ -34,6 +34,7 @@ await new Promise((done) => server.listen(0, '127.0.0.1', done))
 const base = `http://127.0.0.1:${server.address().port}`
 
 async function fixture(browser, options, fixtureSnapshot = snapshot) {
+  fixtureSnapshot = structuredClone(fixtureSnapshot)
   const context = await browser.newContext(options)
   const page = await context.newPage()
   const messages = [], errors = []
@@ -67,6 +68,18 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
         ws.send(JSON.stringify({ t: 'terminal.opened', id: message.id, stream_id: id }))
         emitFrame(id, ansi)
       } else if (message.t === 'call') {
+        if (message.method === 'workspace.create') {
+          const workspace = { ...fixtureSnapshot.workspaces[0], workspace_id: 'created-workspace', active_tab_id: 'created-tab', number: 2, label: '新建工作区', pane_count: 1, tab_count: 1 }
+          const tab = { ...fixtureSnapshot.tabs[0], tab_id: 'created-tab', workspace_id: workspace.workspace_id, number: 1, label: '新标签页', pane_count: 1 }
+          const root_pane = { ...fixtureSnapshot.panes[0], pane_id: 'created-pane', workspace_id: workspace.workspace_id, tab_id: tab.tab_id }
+          fixtureSnapshot.workspaces.push(workspace); fixtureSnapshot.tabs.push(tab); fixtureSnapshot.panes.push(root_pane)
+          fixtureSnapshot.layouts.push({ ...fixtureSnapshot.layouts[0], tab_id: tab.tab_id, workspace_id: workspace.workspace_id, focused_pane_id: root_pane.pane_id, panes: [{ pane_id: root_pane.pane_id, rect: { x: 0, y: 0, width: 80, height: 40 } }] })
+          ws.send(JSON.stringify({ t: 'result', id: message.id, result: { workspace, tab, root_pane } }))
+          // Exercise the real ordering: the creation result arrives before the
+          // refreshed snapshot, so selection must not revert to the old pane.
+          setTimeout(() => ws.send(JSON.stringify({ t: 'snapshot', snapshot: fixtureSnapshot })), 200)
+          return
+        }
         if (message.method === 'terminal.scroll') emitFrame(message.params.stream_id, `\x1b[2J\x1b[HNative wheel ${message.params.lines}`)
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: message.method === 'pane.read' ? { read: { text: Array.from({ length: 100 }, (_, i) => `history line ${i}`).join('\n') } } : {} }))
       }
@@ -159,6 +172,8 @@ async function touchAndKeyboardChecks(context, page) {
   await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeGreaterThan(40)
   await page.getByRole('button', { name: '聚焦终端输入' }).click()
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
+  await page.getByRole('button', { name: 'Enter', exact: true }).click()
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
   await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeLessThan(100)
 
   // Exercise the browser's visual-viewport keyboard event contract separately
@@ -186,6 +201,22 @@ try {
   for (const name of engines) {
     const browser = await ({ chromium, firefox, webkit })[name].launch({ headless: true, ...(name === 'chromium' && process.env.HERDRX_TEST_CHROMIUM ? { executablePath: process.env.HERDRX_TEST_CHROMIUM } : {}) })
     try {
+      const labels = structuredClone(snapshot)
+      labels.workspaces[0].label = 'workspace-with-a-very-long-name-工作区名称应完整展示'
+      labels.agents = [{ pane_id: 'p1', workspace_id: 'w1', tab_id: 't1', agent: 'codex', name: 'Agent-with-a-long-name-中文测试', agent_status: 'blocked' }]
+      const sidebar = await fixture(browser, { viewport: { width: 1024, height: 768 } }, labels)
+      await expect(sidebar.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
+      for (const selector of ['.workspace-row strong', '.agent-meta strong', '.agent-meta small', '.agent-state']) {
+        const clipped = await sidebar.page.locator(selector).evaluateAll(els => els.some(el => {
+          const box = el.getBoundingClientRect(), row = el.closest('.sidebar-row').getBoundingClientRect()
+          return el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1 || box.right > row.right + 1
+        }))
+        assert.equal(clipped, false, `sidebar text clipped: ${selector}`)
+      }
+      await screenshot(sidebar.page, `${name}-sidebar-long-labels`)
+      await sidebar.page.getByRole('button', { name: '新建工作区', exact: true }).click()
+      await expect.poll(() => sidebar.messages.filter(m => m.t === 'terminal.open').at(-1)?.pane_id).toBe('created-pane')
+      await sidebar.context.close()
       const desktop = await fixture(browser, { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
       const { page, messages } = desktop
       const initial = await metrics(page)
@@ -303,13 +334,29 @@ try {
         const fixtureOptions = { viewport: { width, height }, deviceScaleFactor: touch ? 2 : 1, hasTouch: touch, ...(name !== 'firefox' ? { isMobile: touch } : {}) }
         const f = await fixture(browser, fixtureOptions)
         const compact = width < 768 || (touch && width < 1024 && height <= 600)
+        if (compact) {
+          await f.page.evaluate(() => localStorage.setItem('herdrx.sidebar-open', 'false'))
+          await f.page.reload()
+          await expect(f.page.locator('.xterm-rows').first()).toContainText('Terminal')
+          await expect(f.page.locator('.workbench')).not.toHaveClass(/workbench-sidebar-closed/)
+        }
         await expect(f.page.locator('.terminal-pane')).toHaveCount(compact ? 1 : 2)
         await assertMergedHeaders(f.page, 44)
         if (compact) {
           assert.equal((await metrics(f.page)).font, 14, 'mobile default must remain readable')
-          await expect(f.page.locator('.display-toolbar, .mobile-header')).toHaveCount(0)
+          await expect(f.page.locator('.display-toolbar')).toHaveCount(0)
+          await expect(f.page.locator('.mobile-tabs')).toBeVisible()
           await expect(f.page.getByRole('button', { name: '切换工作区或终端', exact: true })).toBeVisible()
-          assert.ok((await f.page.locator('.terminal-viewport').boundingBox()).y <= 90, 'compact chrome must leave only host and pane bars above the terminal')
+          const terminalBox = await f.page.locator('.terminal-viewport').boundingBox()
+          assert.ok(terminalBox.height >= height - 245, `mobile terminal was collapsed: ${JSON.stringify(terminalBox)}`)
+          assert.ok(Math.abs((await f.page.locator('.keybar').boundingBox()).y + (await f.page.locator('.keybar').boundingBox()).height - height) <= 1, 'keyboard toolbar must stay at the viewport bottom')
+          if (height >= 430) {
+            await expect(f.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
+            await f.page.getByRole('button', { name: '全屏内容', exact: true }).click()
+            await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
+            await f.page.getByRole('button', { name: '可读字号', exact: true }).click()
+            await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
+          }
         }
         await assertContained(f.page, ['.hostbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.hostbar button', '.display-toolbar button', '.terminal-titlebar button'])
         if (touch) {
@@ -340,6 +387,13 @@ try {
           await expect(f.page.locator('.xterm-rows')).toContainText('Terminal')
         }
         await assertTerminalRecovery(f, compact ? 'p2' : 'p1')
+        if (compact) {
+          // The switcher remains available in landscape and with the keyboard.
+          await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
+          await f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true }).click()
+          await expect.poll(() => f.messages.filter(m => m.t === 'terminal.open').at(-1)?.pane_id).toBe('created-pane')
+          await expect(f.page.locator('.mobile-tabs .mobile-tab-active')).toContainText('新标签页')
+        }
         assert.deepEqual(f.errors, [])
         await f.context.close()
       }

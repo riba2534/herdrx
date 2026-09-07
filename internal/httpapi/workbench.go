@@ -88,9 +88,11 @@ type terminalStream struct {
 	mode     string
 	process  herdr.TerminalProcess
 	scroll   *herdr.ScrollController
+	input    *herdr.InputQueue
 	stdin    io.WriteCloser
 	lastAck  atomic.Uint64
 	closed   atomic.Bool
+	closing  atomic.Bool
 	creditMu sync.Mutex
 	inFlight int
 	pending  []pendingCredit
@@ -279,7 +281,7 @@ func (s *workbenchSession) handleText(message workbenchMessage) {
 	case "terminal.open":
 		s.openTerminal(message)
 	case "terminal.close":
-		s.closeStream(message.StreamID)
+		s.finishStream(message.StreamID)
 	case "call":
 		s.call(message)
 	default:
@@ -306,11 +308,13 @@ func (s *workbenchSession) handleBinary(encoded []byte) {
 	}
 	switch frame.Opcode {
 	case terminalwire.OpcodeInput:
-		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-		_, err := s.endpoint.Call(ctx, "pane.send_text", map[string]any{"pane_id": stream.paneID, "text": string(frame.Payload)})
-		cancel()
-		if err != nil {
-			_ = s.writer.JSON(s.ctx, map[string]any{"t": "error", "code": "pane_input_failed", "stream_id": stream.id, "message": err.Error()})
+		if stream.closing.Load() {
+			return
+		}
+		if stream.input != nil {
+			if err := stream.input.Enqueue(frame.Payload); err != nil && s.ctx.Err() == nil {
+				s.failInput(stream, err)
+			}
 		}
 	case terminalwire.OpcodeResize:
 		cols, rows, err := terminalwire.Dimensions(frame.Payload)
@@ -319,7 +323,7 @@ func (s *workbenchSession) handleBinary(encoded []byte) {
 		}
 		s.writeTerminalCommand(stream, map[string]any{"type": "terminal.resize", "cols": cols, "rows": rows})
 	case terminalwire.OpcodeRelease:
-		s.closeStream(stream.id)
+		s.finishStream(stream.id)
 	}
 }
 
@@ -341,6 +345,7 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 	}
 	stream.process = process
 	stream.scroll = herdr.NewScrollController(s.ctx, s.endpoint, message.PaneID)
+	stream.input = herdr.NewInputQueue(s.ctx, s.endpoint, message.PaneID, func(err error) { s.failInput(stream, err) })
 	stream.stdin = process.Stdin()
 	s.api.store.Audit(s.ctx, s.owner, "terminal.connected", "pane", stream.paneID, "", `{"mode":"`+stream.mode+`"}`)
 	s.streamsMu.Lock()
@@ -390,6 +395,9 @@ func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 	}
 	// A stalled observer must be detached before waiting for its process. Waiting
 	// first can deadlock on a full output pipe and retain an unused remote client.
+	if stream.input != nil {
+		stream.input.Close()
+	}
 	_ = stream.process.Close()
 	if err := scanner.Err(); err != nil && closedReason == "" {
 		closedReason = err.Error()
@@ -397,7 +405,7 @@ func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 	if err := stream.process.Wait(); err != nil && !errors.Is(err, context.Canceled) && closedReason == "" {
 		closedReason = err.Error()
 	}
-	if s.ctx.Err() == nil && !stream.closed.Load() {
+	if s.ctx.Err() == nil && stream.closed.CompareAndSwap(false, true) {
 		if closedReason == "" {
 			closedReason = "终端观察进程已退出，请重新连接"
 		}
@@ -519,15 +527,47 @@ func (s *workbenchSession) writeRequestError(requestID, code, message string) {
 	_ = s.writer.JSON(s.ctx, map[string]any{"t": "error", "id": requestID, "code": code, "message": message})
 }
 
-func (s *workbenchSession) closeStream(id uint32) {
+func (s *workbenchSession) finishStream(id uint32) {
+	s.streamsMu.Lock()
+	stream := s.streams[id]
+	s.streamsMu.Unlock()
+	if stream == nil || !stream.closing.CompareAndSwap(false, true) {
+		return
+	}
+	if stream.input == nil {
+		s.closeStream(id)
+		return
+	}
+	done := stream.input.Finish()
+	go func() {
+		select {
+		case <-done:
+		case <-s.ctx.Done():
+		}
+		s.closeStream(id)
+	}()
+}
+
+func (s *workbenchSession) closeStream(id uint32) bool {
 	s.streamsMu.Lock()
 	stream := s.streams[id]
 	s.streamsMu.Unlock()
 	if stream == nil || !stream.closed.CompareAndSwap(false, true) {
-		return
+		return false
+	}
+	if stream.input != nil {
+		stream.input.Close()
 	}
 	_ = stream.process.Close()
 	s.removeStream(id)
+	return true
+}
+
+func (s *workbenchSession) failInput(stream *terminalStream, err error) {
+	if !s.closeStream(stream.id) {
+		return
+	}
+	_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.closed", "stream_id": stream.id, "reason": "输入未能确认送达，已停止后续输入。请检查终端内容并手动重连：" + err.Error()})
 }
 
 func (s *workbenchSession) removeStream(id uint32) {
@@ -536,6 +576,10 @@ func (s *workbenchSession) removeStream(id uint32) {
 	delete(s.streams, id)
 	s.streamsMu.Unlock()
 	if stream != nil {
+		stream.closed.Store(true)
+		if stream.input != nil {
+			stream.input.Close()
+		}
 		if stream.scroll != nil {
 			stream.scroll.Close()
 		}
