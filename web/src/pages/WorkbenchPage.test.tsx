@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
+import { clearComposerDrafts } from '../lib/composerDrafts'
 
-const { call } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}) }))
+const { call, connection } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string } }))
 const snapshot: Snapshot = {
   version: 'test', protocol: 1,
   focused_workspace_id: 'w1', focused_tab_id: 'w1:t1', focused_pane_id: 'w1:p1',
@@ -19,22 +20,29 @@ vi.mock('../lib/workbench', () => ({
   WorkbenchClient: class {
     call = call
     onSnapshot(handler: (value: Snapshot) => void) { handler(snapshot); return () => {} }
-    onState(handler: (state: string) => void) { handler('ready'); return () => {} }
+    onState(handler: (state: string) => void) { handler(connection.state); return () => {} }
     onEpoch() { return () => {} }
     connect() {}
     dispose() {}
   },
 }))
-vi.mock('../lib/api', () => ({ api: {
-  host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
-  hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
-  renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
-} }))
+vi.mock('../lib/api', () => ({
+  api: {
+    host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
+    hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
+    renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
+  },
+  currentSessionID: () => 'workbench-session',
+  onAuthEvent: () => () => {},
+}))
 vi.mock('../components/TerminalPane', () => ({ TerminalPane: () => null }))
 
 beforeEach(() => {
   localStorage.clear()
+  sessionStorage.clear()
+  clearComposerDrafts()
   call.mockClear()
+  connection.state = 'ready'
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
 afterEach(() => vi.unstubAllGlobals())
@@ -90,5 +98,36 @@ describe('workbench sidebar context menus', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '名称' }), { target: { value: 'renamed-agent' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('pane.rename', { pane_id: 'w2:p1', label: 'renamed-agent' }))
+  })
+})
+
+describe('workbench composer', () => {
+  it('hides the local composer on desktop until it is opened, then submits the current pane once', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '本地输入框' }))
+    const box = screen.getByRole('textbox', { name: '本地输入内容' })
+    fireEvent.change(box, { target: { value: '整段提交' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '整段提交', keys: ['Enter'] }))
+  })
+
+  it('shows the local composer by default on a compact workbench', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+  })
+
+  it('lets the user edit a pane draft while the host is still connecting', async () => {
+    connection.state = 'connecting'
+    render(<WorkbenchPage hostID="host"/>)
+    fireEvent.click(await screen.findByRole('button', { name: '本地输入框' }))
+    const box = screen.getByRole('textbox', { name: '本地输入内容' })
+    expect(box).not.toBeDisabled()
+    fireEvent.change(box, { target: { value: 'while connecting' } })
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    expect(call).not.toHaveBeenCalledWith('pane.send_input', expect.anything())
   })
 })

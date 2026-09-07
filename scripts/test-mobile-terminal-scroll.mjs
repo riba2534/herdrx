@@ -159,6 +159,10 @@ async function workbenchChecks(browser, engine, history) {
     await page.getByRole('button', { name: '完成', exact: true }).click()
     const input = await touchInput(context, page, engine, '.terminal-viewport')
     const first = () => page.locator('.xterm-rows > div').first().innerText()
+    const viewport = page.locator('.terminal-viewport')
+    // Composer chrome can leave a locally scrollable frame. Pan to the edge
+    // first so remaining finger movement still reaches Herdr.
+    await viewport.evaluate((el) => { el.scrollTop = 0 })
     await input.swipe(110)
     if (history) {
       await expect(page.locator('.xterm-rows')).toContainText('mobile history')
@@ -172,6 +176,7 @@ async function workbenchChecks(browser, engine, history) {
       assert.equal(messages.filter((m) => m.method === 'terminal.scroll').length, 0, 'history gesture reached fullscreen app')
     } else {
       await expect(page.locator('.xterm-rows')).toContainText('Mobile native -')
+      await viewport.evaluate((el) => { el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight) })
       await input.swipe(-80)
       await expect(page.locator('.xterm-rows')).toContainText(/Mobile native [1-9]/)
       const calls = messages.filter((m) => m.method === 'terminal.scroll')

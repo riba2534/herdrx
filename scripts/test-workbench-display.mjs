@@ -193,6 +193,7 @@ async function touchAndKeyboardChecks(context, page) {
     window.visualViewport.dispatchEvent(new Event('resize'))
   })
   await expect.poll(() => page.locator('.keybar').evaluate((el) => el.getBoundingClientRect().bottom)).toBe(360)
+  await expect.poll(() => page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360)
   await expect(page.locator('.workbench')).toHaveClass(/workbench-short/)
   await page.getByRole('button', { name: '工作台设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '工作台设置' })
@@ -351,8 +352,9 @@ try {
         const lastRow = reflow.page.locator('.xterm-rows > div').last()
         await expect(lastRow).toContainText('END')
         await expect.poll(() => lastRow.evaluate(row => {
-          const edge = row.lastElementChild?.getBoundingClientRect(), viewport = row.closest('.terminal-viewport').getBoundingClientRect()
-          return Boolean(row.textContent.includes('END') && edge && edge.width > 0 && edge.right <= viewport.right + 1)
+          const edge = row.lastElementChild?.getBoundingClientRect()
+          const viewport = row.closest('.terminal-viewport')?.getBoundingClientRect()
+          return Boolean(row.textContent.includes('END') && edge && viewport && edge.width > 0 && edge.right <= viewport.right + 1)
         })).toBe(true)
       }
       await assertReflow()
@@ -369,6 +371,7 @@ try {
         window.visualViewport.dispatchEvent(new Event('resize'))
       })
       await expect.poll(() => reflow.page.locator('.keybar').evaluate(el => el.getBoundingClientRect().bottom)).toBe(360)
+      await expect.poll(() => reflow.page.getByRole('button', { name: '发送', exact: true }).evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360)
       await assertReflow()
       await expect.poll(() => reflow.messages.filter(m => m.op === 4).length).toBeGreaterThan(0)
       assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').length, openCount, 'rotation or keyboard reopened the responsive terminal')
@@ -393,9 +396,16 @@ try {
           await expect(f.page.locator('.mobile-tabs')).toBeVisible()
           await expect(f.page.getByRole('button', { name: '切换工作区或终端', exact: true })).toBeVisible()
           const terminalBox = await f.page.locator('.terminal-viewport').boundingBox()
-          assert.ok(terminalBox.height >= height - 245, `mobile terminal was collapsed: ${JSON.stringify(terminalBox)}`)
-          assert.ok(Math.abs((await f.page.locator('.keybar').boundingBox()).y + (await f.page.locator('.keybar').boundingBox()).height - height) <= 1, 'keyboard toolbar must stay at the viewport bottom')
-          if (height >= 430) {
+          await expect(f.page.getByRole('region', { name: '本地输入' })).toBeVisible()
+          await expect(f.page.getByRole('button', { name: '发送', exact: true })).toBeVisible()
+          assert.ok(terminalBox.height >= (height < 500 ? 64 : 160), `mobile terminal was collapsed: ${JSON.stringify(terminalBox)}`)
+          const keybar = await f.page.locator('.keybar').boundingBox()
+          const composer = await f.page.locator('.composer').boundingBox()
+          const send = await f.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
+          assert.ok(Math.abs(keybar.y + keybar.height - height) <= 1, 'keyboard toolbar must stay at the viewport bottom')
+          assert.ok(composer.y + composer.height <= keybar.y + 1, 'composer covered the auxiliary keys')
+          assert.ok(send.y + send.height <= height + 1 && send.x + send.width <= width + 1, 'send button was covered or overflowed')
+          if (height >= 500) {
             await expect(f.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
             await expect(f.page.getByRole('button', { name: '自适应', exact: true })).toHaveAttribute('aria-pressed', 'true')
             await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
@@ -404,7 +414,7 @@ try {
             await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
           }
         }
-        await assertContained(f.page, ['.hostbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.hostbar button', '.display-toolbar button', '.terminal-titlebar button'])
+        await assertContained(f.page, ['.hostbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.composer', '.hostbar button', '.display-toolbar button', '.terminal-titlebar button', '.composer-send'])
         if (touch) {
           const sizes = await f.page.locator('.display-toolbar button, .terminal-titlebar button').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })))
           assert.ok(sizes.every((s) => s.height >= 44 && s.width >= 44), `touch target smaller than 44px: ${JSON.stringify(sizes)}`)

@@ -132,7 +132,7 @@ func TestBootstrapTokenPersistsAcrossRestart(t *testing.T) {
 
 func TestWorkbenchMethodAllowlistIncludesInteractiveMenus(t *testing.T) {
 	for _, method := range []string{
-		"pane.input.set", "pane.send_text", "pane.rename", "pane.swap",
+		"pane.input.set", "pane.send_text", "pane.send_input", "pane.rename", "pane.swap",
 		"tab.create", "tab.rename", "workspace.rename",
 		"worktree.list", "worktree.create", "worktree.open", "worktree.remove",
 	} {

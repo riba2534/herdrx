@@ -195,6 +195,9 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .workbench .tab-active { background: var(--ui-background); }
 .workbench .keybar button { background: var(--ui-input); border-color: var(--ui-control-border); }
 .workbench .keybar .key-active { background: var(--ui-accent); color: var(--ui-accent-ink); }
+.workbench .composer-input { background: var(--ui-input); border-color: var(--ui-control-border); color: var(--ui-text); }
+.workbench .composer-modes > button { background: var(--ui-input); border-color: var(--ui-control-border); }
+.workbench .composer-modes > .composer-mode-active { background: var(--ui-selected); color: var(--ui-text); border-color: var(--ui-accent); }
 .workbench .ownership-control { color: var(--ui-accent); }
 .workbench .display-font { font-family: var(--ui-font); }
 .workbench .terminal-title small { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }

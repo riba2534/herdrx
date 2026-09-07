@@ -200,6 +200,22 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .sidebar-footer button { min-height: 24px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); display: flex; align-items: center; gap: 5px; font-size: 11px; }
 .sidebar-footer button:hover { color: var(--text); background: var(--panel-strong); }
 .workbench-main { min-width: 0; min-height: 0; position: relative; display: grid; grid-template-rows: var(--tabbar-height) minmax(0, 1fr); }
+.workbench-main:has(.workbench-dock) { grid-template-rows: var(--tabbar-height) minmax(0, 1fr) auto; }
+.workbench-dock { min-width: 0; display: flex; flex-direction: column; background: var(--panel); border-top: 1px solid var(--border); }
+.composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'input send' 'meta meta'; gap: 6px; padding: 6px 8px; align-items: end; }
+.composer-input { grid-area: input; min-height: 44px; max-height: 120px; resize: none; font-size: 16px; line-height: 1.4; }
+.composer-side { grid-area: send; }
+.composer-send { min-width: 64px; min-height: 44px; }
+.composer-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.composer-modes { display: flex; flex-wrap: wrap; gap: 6px; }
+.composer-modes > button { min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal); color: var(--muted); }
+.composer-modes > .composer-mode-active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.composer-status { min-width: 0; flex: 1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.composer-status-compact { display: none; }
+.composer-status-sending { color: var(--working); }
+.composer-status-delivered { color: var(--idle); }
+.composer-status-failed, .composer-status-unknown { color: var(--blocked); }
+.terminal-pane-composer .xterm-helper-textarea { pointer-events: none; }
 .tabbar { min-width: 0; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); background: var(--panel); }
 .tabs { min-width: 0; flex: 1; display: flex; align-items: end; overflow: auto hidden; scrollbar-width: none; }
 .tab { flex: 0 0 auto; min-width: 76px; max-width: 220px; height: 100%; display: flex; align-items: center; border-right: 1px solid var(--border); background: transparent; color: var(--muted); font-size: 12px; }
@@ -373,10 +389,13 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
   .terminal-titlebar { padding-left: 9px; }
   .terminal-title small { display: none; }
   .ownership { font-size: 9px; }
+  .workbench-dock { flex: 0 0 auto; }
+  .composer { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); }
+  .composer-modes > button { min-height: 44px; }
   .keybar { flex: 0 0 auto; min-height: calc(52px + env(safe-area-inset-bottom)); padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
   .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal); color: var(--text); font: 12px monospace; }
   .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
-  .mode-bar { left: 5px; right: 5px; bottom: calc(58px + env(safe-area-inset-bottom)); overflow-x: auto; white-space: nowrap; }
+  .mode-bar { left: 5px; right: 5px; bottom: calc(132px + env(safe-area-inset-bottom)); overflow-x: auto; white-space: nowrap; }
   .context-menu-item { min-height: 44px; font-size: 14px; }
   .workbench .tool-button, .workbench .image-paste-feedback button, .workbench .terminal-search button { min-width: 44px; min-height: 44px; }
   .workbench .context-menu-item { min-height: 44px; }
@@ -468,6 +487,14 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }
 .workbench-short .mobile-header { display: none; }
 .workbench-short .hostbar .hostbar-switcher { display: inline-flex; }
+.workbench-short .composer { padding-top: 4px; padding-bottom: 4px; gap: 4px; grid-template-areas: 'input send' 'meta meta'; }
+.workbench-short .composer-input { min-height: 40px; max-height: 48px; }
+.workbench-short .composer-modes { display: none; }
+.workbench-short .composer-meta { display: flex; min-height: 16px; }
+.workbench-short .composer-status-full { display: none; }
+.workbench-short .composer-status-compact { display: inline; }
+.workbench-short .composer-status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 16px; }
+.workbench-short .mode-bar { bottom: calc(108px + env(safe-area-inset-bottom)); }
 @media (pointer: coarse) {
   .workbench .display-toolbar .tool-button, .workbench .history-navigation .tool-button { min-height: 44px; min-width: 44px; }
   .pane-menu-button { display: inline-flex; }

@@ -560,7 +560,7 @@ func allowedMethod(method string) bool {
 		"pane.split": {}, "pane.close": {}, "pane.zoom": {}, "pane.focus_direction": {}, "pane.swap": {}, "pane.resize": {}, "pane.rename": {}, "pane.input.set": {},
 		"layout.set_split_ratio": {}, "tab.create": {}, "tab.close": {}, "tab.rename": {}, "workspace.create": {}, "workspace.close": {}, "workspace.rename": {},
 		"worktree.list": {}, "worktree.create": {}, "worktree.open": {}, "worktree.remove": {},
-		"pane.send_text": {}, "pane.send_keys": {}, "pane.read": {}, "agent.prompt": {}, "agent.wait": {}, "agent.send_keys": {},
+		"pane.send_text": {}, "pane.send_keys": {}, "pane.send_input": {}, "pane.read": {}, "agent.prompt": {}, "agent.wait": {}, "agent.send_keys": {},
 	}[method]
 	return ok
 }

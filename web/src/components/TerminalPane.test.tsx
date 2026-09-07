@@ -5,7 +5,7 @@ import { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void> }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, last: null as { options: { disableStdin: boolean } } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
@@ -13,6 +13,7 @@ vi.mock('@xterm/xterm', () => {
       options = { fontSize: 14, theme: {}, minimumContrastRatio: 1, disableStdin: false }
       constructor() {
         terminalHarness.instances++
+        terminalHarness.last = this
         let size = 14
         Object.defineProperty(this.options, 'fontSize', { get: () => size, set: (value: number) => { size = value; terminalHarness.fontWrites.push(value) } })
       }
@@ -162,6 +163,16 @@ describe('TerminalPane paste interception', () => {
     expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
+  })
+  it('keeps xterm stdin disabled in composer mode so local typing is not sent as keystrokes', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput')
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} directInput={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    expect(terminalHarness.last?.options.disableStdin).toBe(true)
+    expect(input).not.toHaveBeenCalled()
   })
   it('replaces history and returning live content in-band while skipping live updates during history', async () => {
     terminalHarness.deferWrites = true

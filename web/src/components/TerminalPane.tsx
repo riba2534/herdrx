@@ -17,7 +17,7 @@ import { Button, StatusDot } from './ui'
 
 const defaultDisplay: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fit' }
 
-export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls }: { client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode }) {
+export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls, directInput = true, onDirectInput }: { client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const viewportRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -36,6 +36,14 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
   const [status, setStatus] = useState('正在连接终端…')
   const [streamFailed, setStreamFailed] = useState(false)
   const inputBlockedRef = useRef(false)
+  const directInputRef = useRef(directInput)
+  const wasDirectInputRef = useRef(directInput)
+  directInputRef.current = directInput
+  const applyStdin = () => {
+    const terminal = termRef.current
+    if (!terminal) return
+    terminal.options.disableStdin = inputBlockedRef.current || !directInputRef.current
+  }
   const [searchOpen, setSearchOpen] = useState(false)
   const [historyActive, setHistoryActive] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -333,7 +341,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       setStatus('正在连接终端…')
       fitRef.current()
       const terminal = termRef.current!
-      terminal.options.disableStdin = false
+      applyStdin()
       const failed = (reason: string) => {
         if (cancelled) return
         inputBlockedRef.current = true
@@ -393,6 +401,24 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       }
     }
   }, [client, pane.pane_id, connectionEpoch, observedCols, observedRows, responsive, streamGeneration])
+
+  useEffect(() => {
+    applyStdin()
+    const becameDirect = directInput && !wasDirectInputRef.current
+    wasDirectInputRef.current = directInput
+    if (becameDirect && active && !inputBlockedRef.current) {
+      revealCursorRef.current()
+      termRef.current?.focus()
+    }
+    const host = hostRef.current
+    if (!host || directInput) return
+    const block = (event: FocusEvent) => {
+      const target = event.target
+      if (target instanceof HTMLTextAreaElement && target.classList.contains('xterm-helper-textarea')) target.blur()
+    }
+    host.addEventListener('focusin', block)
+    return () => host.removeEventListener('focusin', block)
+  }, [directInput, connectionEpoch, streamGeneration, active])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -506,7 +532,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     }
   }, [client, pane.pane_id, active])
 
-  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''}`} onPointerDown={onFocus} onContextMenu={(event) => {
+  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'}`} onPointerDown={onFocus} onContextMenu={(event) => {
     const overTerminal = (event.target as HTMLElement).closest('.terminal-host')
     if (overTerminal && pane.right_click_passthrough) {
       event.preventDefault()
@@ -519,7 +545,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       {headerControls}
       <div className="terminal-tools">
         {historyActive && <Button className="tool-button" data-tooltip="正在查看 Herdr 保留的历史；继续输入会返回实时终端" onClick={() => returnToLiveRef.current()}>返回实时</Button>}
-        {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip="回到光标并打开键盘" onClick={() => { revealCursorRef.current(); termRef.current?.focus() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
+        {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
         <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
         {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
         <Button className="tool-button" onClick={(event) => { event.stopPropagation(); setSearchOpen((value) => !value) }} aria-label="搜索终端"><Search size={14}/></Button>
