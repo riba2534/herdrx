@@ -5,7 +5,7 @@ import { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, last: null as { options: { disableStdin: boolean } } | null }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], last: null as { options: { disableStdin: boolean }, cols: number, rows: number } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
@@ -15,7 +15,16 @@ vi.mock('@xterm/xterm', () => {
         terminalHarness.instances++
         terminalHarness.last = this
         let size = 14
+        let scrollback = 0
         Object.defineProperty(this.options, 'fontSize', { get: () => size, set: (value: number) => { size = value; terminalHarness.fontWrites.push(value) } })
+        Object.defineProperty(this.options, 'scrollback', {
+          configurable: true,
+          get: () => scrollback,
+          set: (value: number) => {
+            if (terminalHarness.writeCallbacks.length) terminalHarness.scrollbackDuringWrite.push(value)
+            scrollback = value
+          },
+        })
       }
       unicode = { activeVersion: '11' }
       cols = 80
@@ -39,7 +48,10 @@ vi.mock('@xterm/xterm', () => {
       scrollToBottom() { this.buffer.active.viewportY = this.buffer.active.baseY }
       scrollLines(lines: number) { terminalHarness.scrolls.push(lines); this.buffer.active.viewportY = Math.max(0, Math.min(this.buffer.active.baseY, this.buffer.active.viewportY + lines)) }
       refresh() {}
-      dispose() {}
+      dispose() {
+        terminalHarness.disposals++
+        terminalHarness.disposalsWhileWrites.push(terminalHarness.writeCallbacks.length)
+      }
       focus() {}
       attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { terminalHarness.keyHandler = handler }
       onData() {
@@ -85,6 +97,9 @@ describe('TerminalPane paste interception', () => {
     terminalHarness.writes = []
     terminalHarness.deferWrites = false
     terminalHarness.writeCallbacks = []
+    terminalHarness.scrollbackDuringWrite = []
+    terminalHarness.disposals = 0
+    terminalHarness.disposalsWhileWrites = []
   })
   it('opens links only from the custom confirmation click without restarting the terminal', async () => {
     const client = new WorkbenchClient('hst_test')
@@ -207,6 +222,169 @@ describe('TerminalPane paste interception', () => {
     expect(terminalHarness.resets).toBe(0)
     act(() => { for (const callback of terminalHarness.writeCallbacks.splice(0)) callback() })
     expect(acknowledge.mock.calls).toEqual([[7, 1n], [7, 2n], [8, 1n], [8, 2n]])
+  })
+  it('does not change scrollback or dispose xterm while a parser write is still queued', async () => {
+    terminalHarness.deferWrites = true
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValueOnce(7).mockResolvedValue(8)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'history line\nnext' } })
+    const { unmount } = render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const live = new TextEncoder().encode('\x1b[Hlive')
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
+    act(() => terminalHarness.writeCallbacks.shift()!())
+
+    fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
+    await waitFor(() => expect(terminalHarness.writes).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: '返回实时' }))
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(2))
+    act(() => frames.mock.calls[1][1]({ streamID: 8, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
+    expect(terminalHarness.scrollbackDuringWrite).toEqual([])
+    expect(terminalHarness.writes).toHaveLength(2)
+
+    act(() => terminalHarness.writeCallbacks.shift()!())
+    await waitFor(() => expect(terminalHarness.writes).toHaveLength(3))
+    expect(terminalHarness.writes[2]).toEqual(new Uint8Array([0x1b, 0x63, ...live]))
+    expect(terminalHarness.scrollbackDuringWrite).toEqual([])
+
+    act(() => frames.mock.calls[1][1]({ streamID: 8, seq: 2n, full: false, cols: 80, rows: 24, ansi: live }))
+    expect(terminalHarness.writes).toHaveLength(4)
+    expect(terminalHarness.writeCallbacks.length).toBeGreaterThan(0)
+    const disposalsBeforeUnmount = terminalHarness.disposals
+    unmount()
+    expect(terminalHarness.disposals).toBe(disposalsBeforeUnmount)
+    act(() => { for (const callback of terminalHarness.writeCallbacks.splice(0)) callback() })
+    expect(terminalHarness.disposals).toBe(disposalsBeforeUnmount + 1)
+    expect(terminalHarness.disposalsWhileWrites.at(-1)).toBe(0)
+    expect(terminalHarness.scrollbackDuringWrite).toEqual([])
+  })
+  it('preserves frame order across shrinking and restoring columns while a write is queued', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const encode = (text: string) => new TextEncoder().encode(text)
+    const visible = (data: string | Uint8Array) => {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      const start = bytes.length >= 2 && bytes[0] === 0x1b && bytes[1] === 0x63 ? 2 : 0
+      return new TextDecoder().decode(bytes.subarray(start))
+    }
+    terminalHarness.last!.cols = 80
+    terminalHarness.last!.rows = 24
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: encode('init') }))
+    terminalHarness.deferWrites = true
+    terminalHarness.writes = []
+    act(() => {
+      frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 80, rows: 24, ansi: encode('pending') })
+      frames.mock.calls[0][1]({ streamID: 7, seq: 3n, full: true, cols: 40, rows: 24, ansi: encode('A') })
+      frames.mock.calls[0][1]({ streamID: 7, seq: 4n, full: true, cols: 80, rows: 24, ansi: encode('B') })
+    })
+    expect(terminalHarness.writes.map(visible)).toEqual(['pending'])
+    act(() => { while (terminalHarness.writeCallbacks.length) terminalHarness.writeCallbacks.shift()!() })
+    expect(terminalHarness.writes.map(visible)).toEqual(['pending', 'A', 'B'])
+    expect(terminalHarness.last!.cols).toBe(80)
+    expect(terminalHarness.last!.rows).toBe(24)
+  })
+  it('keeps more than 32 queued terminal deltas instead of dropping the oldest with ACK', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const acknowledge = vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const encode = (text: string) => new TextEncoder().encode(text)
+    const visible = (data: string | Uint8Array) => {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      const start = bytes.length >= 2 && bytes[0] === 0x1b && bytes[1] === 0x63 ? 2 : 0
+      return new TextDecoder().decode(bytes.subarray(start))
+    }
+    terminalHarness.last!.cols = 80
+    terminalHarness.last!.rows = 24
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: encode('init') }))
+    terminalHarness.deferWrites = true
+    terminalHarness.writes = []
+    acknowledge.mockClear()
+    act(() => {
+      frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 80, rows: 24, ansi: encode('pending') })
+      for (let index = 0; index < 40; index++) {
+        frames.mock.calls[0][1]({ streamID: 7, seq: BigInt(index + 3), full: false, cols: 40, rows: 24, ansi: encode(`D${index}`) })
+      }
+    })
+    expect(terminalHarness.writes.map(visible)).toEqual(['pending'])
+    expect(acknowledge).not.toHaveBeenCalled()
+    act(() => { while (terminalHarness.writeCallbacks.length) terminalHarness.writeCallbacks.shift()!() })
+    const labels = Array.from({ length: 40 }, (_, index) => `D${index}`)
+    expect(terminalHarness.writes.map(visible)).toEqual(['pending', ...labels])
+    expect(acknowledge.mock.calls.map(([, seq]) => seq)).toEqual([2n, ...labels.map((_, index) => BigInt(index + 3))])
+    expect(terminalHarness.last!.cols).toBe(40)
+  })
+  it('does not drop a queued history snapshot when many local resizes arrive during a pending write', async () => {
+    let width = 479
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const read = vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'history-keep' } })
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const encode = (text: string) => new TextEncoder().encode(text)
+    const visible = (data: string | Uint8Array) => {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      const start = bytes.length >= 2 && bytes[0] === 0x1b && bytes[1] === 0x63 ? 2 : 0
+      return new TextDecoder().decode(bytes.subarray(start))
+    }
+    terminalHarness.last!.cols = 80
+    terminalHarness.last!.rows = 24
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: encode('init') }))
+    terminalHarness.deferWrites = true
+    terminalHarness.writes = []
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 80, rows: 24, ansi: encode('pending') }))
+    fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
+    await waitFor(() => expect(read).toHaveBeenCalled())
+    expect(terminalHarness.writes.map(visible)).toEqual(['pending'])
+    for (let index = 0; index < 40; index++) {
+      width = 320 + index
+      rerender(<TerminalPane {...props} layoutVersion={index + 1}/>)
+    }
+    act(() => { while (terminalHarness.writeCallbacks.length) terminalHarness.writeCallbacks.shift()!() })
+    expect(terminalHarness.writes.map(visible).some((text) => text.includes('history-keep'))).toBe(true)
+    expect(screen.getByRole('button', { name: '返回实时' })).toBeVisible()
+    expect(screen.getByRole('toolbar', { name: '终端历史导航' })).toBeVisible()
+  })
+  it('applies the latest local fit when the viewport returns to the current grid before a pending write completes', async () => {
+    let width = 673
+    let height = 337
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    expect(terminalHarness.last!.cols).toBe(80)
+    expect(terminalHarness.last!.rows).toBe(24)
+    const encode = (text: string) => new TextEncoder().encode(text)
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: encode('init') }))
+    terminalHarness.deferWrites = true
+    terminalHarness.writes = []
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: false, cols: 80, rows: 24, ansi: encode('pending') }))
+    width = 337
+    rerender(<TerminalPane {...props} layoutVersion={1}/>)
+    expect(terminalHarness.last!.cols).toBe(80)
+    width = 673
+    rerender(<TerminalPane {...props} layoutVersion={2}/>)
+    act(() => { while (terminalHarness.writeCallbacks.length) terminalHarness.writeCallbacks.shift()!() })
+    expect(terminalHarness.last!.cols).toBe(80)
+    expect(terminalHarness.last!.rows).toBe(24)
   })
   it('routes fullscreen application wheel through Herdr without freezing a snapshot or guessing input bytes', async () => {
     const client = new WorkbenchClient('hst_test')

@@ -94,6 +94,40 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
   const imageQueueRef = useRef<Promise<void>>(Promise.resolve())
   const uploadImagesRef = useRef<(files: File[]) => void>(() => {})
   const mountedRef = useRef(false)
+  const writeSessionRef = useRef({ pending: 0, waiters: [] as Array<{ kind: 'frame' | 'fit' | 'history' | 'dispose', run: () => void, drop?: () => void }>, pumping: false, closed: false })
+  const pumpTerminalIdle = () => {
+    const session = writeSessionRef.current
+    if (session.pumping) return
+    session.pumping = true
+    try {
+      while (session.pending === 0 && session.waiters.length) session.waiters.shift()!.run()
+    } finally {
+      session.pumping = false
+    }
+  }
+  const whenTerminalIdle = (run: () => void, options?: { kind?: 'frame' | 'fit' | 'history' | 'dispose', drop?: () => void }) => {
+    const session = writeSessionRef.current
+    const kind = options?.kind ?? 'frame'
+    if (kind === 'fit' || kind === 'history') {
+      // Local resizes and history jobs coalesce; terminal frames are never discarded.
+      session.waiters = session.waiters.filter((waiter) => waiter.kind !== kind)
+    }
+    session.waiters.push({ kind, run, drop: options?.drop })
+    pumpTerminalIdle()
+  }
+  const writeTerminal = (terminal: Terminal, data: string | Uint8Array, done?: () => void) => {
+    const session = writeSessionRef.current
+    if (session.closed || termRef.current !== terminal) {
+      done?.()
+      return
+    }
+    session.pending++
+    terminal.write(data, () => {
+      session.pending = Math.max(0, session.pending - 1)
+      done?.()
+      pumpTerminalIdle()
+    })
+  }
   const searchRef = useRef<SearchAddon | null>(null)
   const pendingInputRef = useRef<string[]>([])
   const pendingInputSizeRef = useRef(0)
@@ -162,16 +196,19 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     setHistoryError('')
     void client.call<{ read: { text: string; truncated?: boolean } }>('pane.read', { pane_id: pane.pane_id, source: 'recent', format: 'ansi', lines: 10000 }).then(({ read }) => {
       if (!mountedRef.current || history.generation !== generation || termRef.current !== terminal) return
-      terminal.options.scrollback = 10000
-      // Herdr's formatted snapshots use LF, while live PTY frames use explicit
-      // cursor positioning. Restore CR only for snapshot line separators.
-      terminal.write(`\x1bc\x1b[?25l${read.text.replace(/\r?\n/g, '\r\n')}`, () => {
-        if (history.generation !== generation) return
-        terminal.scrollToBottom()
-        terminal.scrollLines(history.delta)
-        history.loading = false
-        history.delta = 0
-      })
+      whenTerminalIdle(() => {
+        if (!mountedRef.current || history.generation !== generation || termRef.current !== terminal) return
+        terminal.options.scrollback = 10000
+        // Herdr's formatted snapshots use LF, while live PTY frames use explicit
+        // cursor positioning. Restore CR only for snapshot line separators.
+        writeTerminal(terminal, `\x1bc\x1b[?25l${read.text.replace(/\r?\n/g, '\r\n')}`, () => {
+          if (history.generation !== generation || termRef.current !== terminal) return
+          terminal.scrollToBottom()
+          terminal.scrollLines(history.delta)
+          history.loading = false
+          history.delta = 0
+        })
+      }, { kind: 'history' })
     }).catch((error) => {
       if (!mountedRef.current || history.generation !== generation) return
       setHistoryError(error instanceof Error ? error.message : '无法读取历史记录，请重试')
@@ -217,7 +254,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     const terminal = termRef.current
     const host = hostRef.current
     const viewport = viewportRef.current
-    if (!terminal || !host || !viewport || !fontMeasureRef.current) return
+    if (!mountedRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
     const style = getComputedStyle(host)
     const bounds = {
       width: viewport.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'),
@@ -231,7 +268,14 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     const baseSize = display.mode !== 'fit' ? display.fontSize : fittedTerminalFont({ ...bounds, cols, rows }, fontMeasureRef.current.measure, display.fontSize)
     const fontSize = baseSize === null ? null : Math.round(baseSize * display.zoom) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
-    if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows)
+    const applyResize = () => {
+      if (termRef.current !== terminal || writeSessionRef.current.closed) return
+      if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows)
+    }
+    const sizeChanged = terminal.cols !== cols || terminal.rows !== rows
+    const hasQueuedFit = writeSessionRef.current.waiters.some((waiter) => waiter.kind === 'fit')
+    if (writeSessionRef.current.pending === 0) applyResize()
+    else if (sizeChanged || hasQueuedFit) whenTerminalIdle(applyResize, { kind: 'fit' })
     if (size) {
       desiredSizeRef.current = size
       if (streamRef.current !== null && (sentSizeRef.current.cols !== cols || sentSizeRef.current.rows !== rows)) {
@@ -289,6 +333,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       return true
     })
     termRef.current = terminal
+    writeSessionRef.current = { pending: 0, waiters: [], pumping: false, closed: false }
     fontMeasureRef.current = createFontMeasure(hostRef.current, terminal.options.fontFamily!)
     searchRef.current = search
     const inputDisposable = terminal.onData((data) => requestInputRef.current(data))
@@ -303,14 +348,21 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     host.addEventListener('focusin', revealCursor)
     host.addEventListener('scroll', ignoreInnerScroll, true)
     return () => {
-      inputDisposable.dispose()
-      host.removeEventListener('focusin', revealCursor)
-      host.removeEventListener('scroll', ignoreInnerScroll, true)
-      fontMeasureRef.current?.dispose()
-      fontMeasureRef.current = null
-      if (streamRef.current != null) client.closeTerminal(streamRef.current)
-      terminal.dispose()
-      termRef.current = null
+      const session = writeSessionRef.current
+      for (const waiter of session.waiters) waiter.drop?.()
+      session.waiters = [{ kind: 'dispose', run: () => {
+        session.closed = true
+        session.waiters.length = 0
+        inputDisposable.dispose()
+        host.removeEventListener('focusin', revealCursor)
+        host.removeEventListener('scroll', ignoreInnerScroll, true)
+        fontMeasureRef.current?.dispose()
+        fontMeasureRef.current = null
+        if (streamRef.current != null) client.closeTerminal(streamRef.current)
+        terminal.dispose()
+        if (termRef.current === terminal) termRef.current = null
+      } }]
+      pumpTerminalIdle()
     }
   }, [])
 
@@ -362,22 +414,34 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         setStatus('可输入')
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
-          if (responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) terminal.resize(frame.cols, frame.rows)
-          let bytes = frame.ansi
-          if (resetStream) {
-            // Reset once, in the same parser write as the new stream's first
-            // image. Synchronous reset() can paint a blank frame before write().
-            // Later full frames are repaints and preserve terminal cursor modes.
-            resetStream = false
-            terminal.options.scrollback = 0
-            bytes = new Uint8Array(frame.ansi.length + 2)
-            bytes.set([0x1b, 0x63])
-            bytes.set(frame.ansi, 2)
+          const ack = () => client.acknowledge(streamID, frame.seq)
+          const needsResize = responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)
+          const deliver = () => {
+            if (cancelled || writeSessionRef.current.closed || termRef.current !== terminal) return
+            if (historyRef.current.active) { ack(); return }
+            if (responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) terminal.resize(frame.cols, frame.rows)
+            let bytes: string | Uint8Array = frame.ansi
+            if (resetStream) {
+              // Reset once, in the same parser write as the new stream's first
+              // image. Synchronous reset() can paint a blank frame before write().
+              // Later full frames are repaints and preserve terminal cursor modes.
+              resetStream = false
+              terminal.options.scrollback = 0
+              bytes = new Uint8Array(frame.ansi.length + 2)
+              bytes.set([0x1b, 0x63])
+              bytes.set(frame.ansi, 2)
+            }
+            writeTerminal(terminal, bytes, () => {
+              ack()
+              if (firstFrame) { firstFrame = false; revealCursorRef.current() }
+            })
           }
-          terminal.write(bytes, () => {
-            client.acknowledge(streamID, frame.seq)
-            if (firstFrame) { firstFrame = false; revealCursorRef.current() }
-          })
+          const session = writeSessionRef.current
+          if (session.pending !== 0 && (needsResize || resetStream || session.waiters.length > 0)) {
+            whenTerminalIdle(deliver, { kind: 'frame', drop: ack })
+            return
+          }
+          deliver()
         }, failed)
         fitRef.current() // The viewport may have changed while opening the stream.
         if (!inputBlockedRef.current && pendingInputRef.current.length > 0) {

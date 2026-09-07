@@ -432,6 +432,9 @@ try {
         await expect.poll(async () => (await metrics(f.page)).font).toBe(18)
         await f.page.reload()
         await expect.poll(async () => (await metrics(f.page)).font).toBe(18)
+        const assertNoPageError = (step) => {
+          assert.deepEqual(f.errors, [], `${name} ${width}x${height} ${step}: ${f.errors.join(' | ')}`)
+        }
         if (compact) {
           await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
           await f.page.locator('.switcher button[aria-pressed]').filter({ hasText: '终端 2' }).click()
@@ -442,19 +445,23 @@ try {
           await f.page.getByRole('button', { name: '查看终端历史' }).click()
           await expect(f.page.getByRole('toolbar', { name: '终端历史导航' })).toBeVisible()
           await expect(f.page.locator('.xterm-rows')).toContainText('history line')
+          assertNoPageError('after history snapshot')
           await f.page.getByRole('button', { name: '上一屏', exact: true }).click()
           await f.page.getByRole('button', { name: '返回实时', exact: true }).click()
           await expect(f.page.locator('.xterm-rows')).toContainText('Terminal')
+          assertNoPageError('after return to live')
         }
         await assertTerminalRecovery(f, compact ? 'p2' : 'p1')
+        assertNoPageError('after terminal recovery')
         if (compact) {
           // The switcher remains available in landscape and with the keyboard.
           await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
           await f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true }).click()
           await expect.poll(() => f.messages.filter(m => m.t === 'terminal.open').at(-1)?.pane_id).toBe('created-pane')
           await expect(f.page.locator('.mobile-tabs .mobile-tab-active')).toContainText('新标签页')
+          assertNoPageError('after create workspace')
         }
-        assert.deepEqual(f.errors, [])
+        assert.deepEqual(f.errors, [], `${name} ${width}x${height} compact loop: ${f.errors.join(' | ')}`)
         await f.context.close()
       }
       console.log(`${name}: merged header, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
