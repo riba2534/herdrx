@@ -2,17 +2,18 @@
 
 ## 网站 Docker 更新
 
-GitHub main 推送后自动验证并发布 ZOT 镜像，目标机决定何时部署。先按 [运维文档](operations.md#数据与备份) 备份，在部署目录执行：
+网站镜像发布在 [Docker Hub](https://hub.docker.com/r/riba2534/herdrx)，`latest` 随通过验证的主分支构建更新；已运行的容器由你决定何时升级。
 
-```bash
-docker compose pull
-docker compose up -d --wait
-docker compose exec herdrx /app/herdrx-server healthcheck
-```
+1. 按 [运维文档](operations.md#数据与备份) 备份完整数据和容器配置。
+2. 保存升级前的镜像引用：`docker inspect herdrx --format '{{.Image}}'` 得到本地镜像 ID；使用 `docker image inspect <镜像ID> --format '{{json .RepoDigests}}'` 记录可再次拉取的 digest。
+3. 在原部署目录执行 [README 更新命令](../README.md#更新与数据)：先 pull 成功，再停止、删除旧容器并使用相同端口、环境变量及 `./data` 挂载重新 `docker run`。
+4. 执行 `docker exec herdrx /app/herdrx-server healthcheck`，登录确认主机与密钥保留。
 
-`restart` 不会换镜像。更新复用本地 `./data` bind 目录，不需要创建、迁移或删除 Docker 卷。不能同时启动两个网站实例挂同一目录。
+`docker restart` 不会换镜像。更新不需要创建、迁移或删除 Docker 卷，不能同时启动两个网站实例挂同一目录。
 
-每次 Actions 发布附件包含带域名占位符的 `release.env` 和验证记录。使用时将 `registry.example.com` 替换为自己的镜像源，保留升级前的 digest；回退时将 `.env` 的 `HERDRX_IMAGE` 改为旧的 `registry.example.com/herdrx/server@sha256:...`，再 pull/up。
+可通过 `riba2534/herdrx:sha-<完整提交 SHA>` 选择特定提交；需要固定同一份产物时使用 `riba2534/herdrx@sha256:<digest>`。Actions 的 `herdrx-deploy-*` 附件包含可直接使用的完整 digest 引用和验证记录。回退时把 `docker run` 最后一行的镜像改为已保存的旧 digest，先拉取再重建容器，并保留原配置和数据路径。
+
+已有 Compose 部署可继续使用 `docker compose pull && docker compose up -d --wait`；固定或回退镜像时修改 `.env` 中的 `HERDRX_IMAGE`。
 
 镜像回退不等于数据回退。如果新版本修改了数据库且旧版本不能兼容，应停止网站并从升级前一致性备份恢复完整数据，不要只替换数据库或主密钥中的一项。先在隔离副本验收恢复；当前尚未完成正式候选的异机恢复测试。
 

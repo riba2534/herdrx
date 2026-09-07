@@ -1,0 +1,11 @@
+# Docker Hub 公开镜像与部署指南更新
+
+本次调整网站镜像分发方式，远程 CLI 的 v0.1.0-rc.1 Release 保持独立。
+
+- README 仅保留面向使用者的部署、主机接入、日常使用、更新与排障说明。
+- 推荐使用公开的 `riba2534/herdrx:latest` 镜像一键 `docker run`，支持 Linux amd64 / arm64，无需下载源码或登录镜像仓库。
+- GitHub main 推送通过全部验证后自动发布 Docker Hub 镜像，保留提交标签与 digest；旧提交重跑不倒退 latest。
+- 数据继续使用可见的 `./data` bind mount，镜像仍以 `65532:65532` 运行。初始化目录权限后才启动网站，更新复用原数据目录。
+- 已有 Compose 用户可继续使用原方式，将镜像引用改为 `riba2534/herdrx:latest` 或已验证 digest。更换镜像来源时保留原数据路径、访问地址、端口与其他配置。
+
+网站更新不会重启或升级远程 Herdr 与任务。部署步骤见 [快速开始](../../README.md#快速开始)，备份与回退见 [更新与恢复](../update-and-recovery.md)。

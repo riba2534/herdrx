@@ -4,13 +4,12 @@
 
 ## 启动与检查
 
-部署文件、目录权限与 ZOT 登录见 [快速开始](../README.md#快速开始)，镜像构建见 [发布流程](deployment.md)。在部署目录执行：
+首次部署按 [快速开始](../README.md#快速开始) 从 Docker Hub 拉取公开镜像并执行 `docker run`。日常检查：
 
 ```bash
-docker compose pull
-docker compose up -d --wait
-docker compose ps
-docker compose exec herdrx /app/herdrx-server healthcheck
+docker ps --filter name=herdrx
+docker logs --tail 100 herdrx
+docker exec herdrx /app/herdrx-server healthcheck
 ```
 
 首次初始化 token 位于本地 `./data/bootstrap-token`，日志仅提示文件位置。管理员创建成功后文件删除，令牌原文不写入日志。
@@ -24,11 +23,9 @@ herdrx 默认只监听 HTTP，使用 IP 地址即可部署和测试，不附带 
 ```dotenv
 HERDRX_PUBLIC_URL=https://herdrx.example.com
 HERDRX_COOKIE_SECURE=true
-# 仅适用于反向代理在同一宿主机运行、通过本机端口访问的情况。
-HERDRX_BIND_ADDR=127.0.0.1
 ```
 
-若代理运行在其他机器或容器中，按实际网络拓扑设置监听地址和后端访问规则。`HERDRX_TRUSTED_PROXIES` 仅填写该代理的实际出口 IP/CIDR；直连模式保持为空。反向代理的安装、证书和数据由部署者自行管理。
+以上变量通过 `docker run -e` 传入。反向代理在同一宿主机运行时，将端口映射改为 `-p 127.0.0.1:8080:8080`。若代理运行在其他机器或容器中，按实际网络拓扑设置监听地址和后端访问规则。`HERDRX_TRUSTED_PROXIES` 仅填写该代理的实际出口 IP/CIDR；直连模式保持为空。反向代理的安装、证书和数据由部署者自行管理。
 
 PWA 安装、Service Worker 和 Web Push 受浏览器安全上下文限制：本机 localhost 可用于相应回归，普通 HTTP/IP 下保留网站和终端访问，并按可用能力显示安装或通知入口。真实设备安装属于部署环境的单独验证记录，不要求本机 HTTP 测试先准备域名。
 
@@ -41,24 +38,29 @@ PWA 安装、Service Worker 和 Web Push 受浏览器安全上下文限制：本
 - `vapid.json`：Web Push 身份；
 - 首次初始化前的 `bootstrap-token`。
 
-数据库和密钥必须一起备份。缺少 `master.key` 无法恢复加密凭据。停机备份示例：
+数据库和密钥必须一起备份。缺少 `master.key` 无法恢复加密凭据。在原部署目录做停机备份；容器检查记录用于保留镜像、环境变量、端口和挂载配置：
 
 ```bash
-install -d -m 700 backups
-backup_file="backups/herdrx-$(date +%Y%m%d-%H%M%S).tar.gz"
-docker compose stop herdrx
-sudo tar -czf "$backup_file" data .env
-sudo chmod 600 "$backup_file"
-docker compose up -d --wait
+(
+  set -eu
+  umask 077
+  install -d -m 700 backups
+  backup_file="backups/herdrx-$(date +%Y%m%d-%H%M%S).tar.gz"
+  docker inspect herdrx > backups/container.json
+  docker stop herdrx
+  trap 'docker start herdrx >/dev/null' EXIT
+  sudo tar -czf "$backup_file" data backups/container.json
+  sudo chmod 600 "$backup_file"
+)
 ```
 
-先确认归档成功，再将备份保存在另一处受限存储；归档失败时修正备份问题并重新启动服务。备份会包含配置和密钥，不要提交 Git。在线备份需使用 SQLite backup/VACUUM INTO，不能只复制正在变化的主 DB 文件。
+命令退出时会重新启动网站；先确认归档成功，再将备份保存在另一处受限存储。若使用额外的 `.env` 或反向代理配置，也应单独备份。备份会包含配置和密钥，不要提交 Git。在线备份需使用 SQLite backup/VACUUM INTO，不能只复制正在变化的主 DB 文件。
 
-恢复时停止网站，在干净部署目录解压备份，保留文件属主，核对 `.env` 与镜像兼容性后启动。不要把网站身份与受控端身份混为一份备份：受控端的配置、PSK、binding 和 epoch 需单独保存，恢复旧身份不能复活已撤销的访问授权。
+恢复时停止网站，在干净部署目录解压备份，保留文件属主，对照备份的 `backups/container.json` 恢复原端口、环境变量和挂载，核对镜像兼容性后使用原 `docker run` 命令启动。不要把网站身份与受控端身份混为一份备份：受控端的配置、PSK、binding 和 epoch 需单独保存，恢复旧身份不能复活已撤销的访问授权。
 
 ## 目录权限与原生实例迁移
 
-镜像使用 `65532:65532`。首次 `sudo bash prepare-data.sh` 初始化 `./data`，不会递归修改已有非空目录；这类目录属主不同会直接报错。
+镜像使用 `65532:65532`。首次 Docker 部署使用 `sudo install -d -m 700 -o 65532 -g 65532 ./data` 初始化空目录。可选 Compose 使用 `prepare-data.sh`，该脚本不递归修改已有非空目录。
 
 从原生网站迁移时，先停止旧实例并做一致性备份，再将完整数据复制到新部署目录。只对已确认的目标副本执行：
 
@@ -111,7 +113,7 @@ sudo chmod 700 ./data
 
 ## 多主机连接与故障恢复
 
-同一远程主机的网页、终端和通知共用访问连接，同时进入多个页面只触发一次拨号。默认全实例最多 20 台已连接或待连接主机、4 个并发拨号；该值是保护上限，配置主机数量可以更多，实际承载能力需按工作负载测量。调整 `.env` 的 `HERDRX_MAX_HOST_CONNECTIONS` 和 `HERDRX_HOST_DIAL_CONCURRENCY` 后重建网站即可生效。
+同一远程主机的网页、终端和通知共用访问连接，同时进入多个页面只触发一次拨号。默认全实例最多 20 台已连接或待连接主机、4 个并发拨号；该值是保护上限，配置主机数量可以更多，实际承载能力需按工作负载测量。调整 `docker run -e` 传入的 `HERDRX_MAX_HOST_CONNECTIONS` 和 `HERDRX_HOST_DIAL_CONCURRENCY` 后重建网站即可生效。
 
 最后一个使用者离开后保留连接 2 分钟供重连复用；达到上限时优先回收最久未使用的连接。全部连接正在使用时，界面提示关闭暂不用的工作台或联系管理员调整上限。拨号默认 30 秒超时，网络故障按 2–30 秒退避；SSH 密钥未信任、身份变化或认证失败会停止自动拨号，核对并更新主机配置后重新连接。
 

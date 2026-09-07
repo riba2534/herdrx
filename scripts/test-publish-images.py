@@ -44,7 +44,7 @@ elif a[0] == 'push' and mode == 'push-failure' and a[-1].endswith('arm64'):
 
 
 class PublishTests(unittest.TestCase):
-    def exercise(self, case):
+    def exercise(self, case, repository="example/herdrx"):
         with tempfile.TemporaryDirectory(prefix="herdrx-publish-test-") as directory:
             temp = Path(directory)
             for tool in ("docker", "gh"):
@@ -56,8 +56,7 @@ class PublishTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "PATH": str(temp) + os.pathsep + os.environ["PATH"],
-                "ZOT_REGISTRY": "registry.example.test",
-                "ZOT_REPOSITORY": "herdrx/server",
+                "DOCKERHUB_REPOSITORY": repository,
                 "IMAGE_REVISION": REVISION,
                 "GITHUB_REPOSITORY": "example/herdrx",
                 "PUBLISH_OUTPUT": str(output),
@@ -65,14 +64,13 @@ class PublishTests(unittest.TestCase):
                 "TEST_PUBLISH_CALLS": str(calls_file),
             }
             result = subprocess.run(["bash", "scripts/publish-images.sh"], cwd=ROOT, env=env, capture_output=True, text=True)
-            calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+            calls = [json.loads(line) for line in (calls_file.read_text().splitlines() if calls_file.exists() else [])]
             promotions = [call for call in calls if call[:4] == ["docker", "buildx", "imagetools", "create"] and any(arg.endswith(":latest") for arg in call)]
             if case in ("success", "stale"):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(len(promotions), 1 if case == "success" else 0)
-                self.assertIn(f"HERDRX_IMAGE=registry.example.com/herdrx/server@{DIGEST}\n", (output / "release.env").read_text())
-                for artifact in ("release.env", "verification.txt"):
-                    self.assertNotIn(env["ZOT_REGISTRY"], (output / artifact).read_text())
+                self.assertIn(f"HERDRX_IMAGE=docker.io/example/herdrx@{DIGEST}\n", (output / "release.env").read_text())
+                self.assertIn("Repository: docker.io/example/herdrx\n", (output / "verification.txt").read_text())
                 with tarfile.open(output / "herdrx-deploy.tar.gz") as archive:
                     alias = archive.getmember("compose.prod.yml")
                     self.assertTrue(alias.issym())
@@ -81,8 +79,15 @@ class PublishTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(promotions)
                 self.assertFalse(output.exists())
+                if case == "invalid-repository":
+                    self.assertFalse(calls)
                 if case == "wrong-revision":
                     self.assertFalse(any(call[1] in ("push", "tag") for call in calls))
+
+    def test_invalid_repository_never_calls_external_tools(self):
+        for repository in ("", "registry.example.com/team/herdrx", "example/herdrx:latest", "example/herdrx@sha256:123", "https://docker.io/example/herdrx", "example/../herdrx"):
+            with self.subTest(repository=repository):
+                self.exercise("invalid-repository", repository)
 
     def test_verified_main_is_promoted(self):
         self.exercise("success")

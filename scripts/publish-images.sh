@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
 # 只发布当前流水线已测试的两种架构镜像；认证由 GitHub Environment 提供。
 set -euo pipefail
-: "${ZOT_REGISTRY:?missing ZOT_REGISTRY}"
+: "${DOCKERHUB_REPOSITORY:?missing DOCKERHUB_REPOSITORY}"
 : "${IMAGE_REVISION:?missing IMAGE_REVISION}"
 : "${PUBLISH_OUTPUT:?missing PUBLISH_OUTPUT}"
 : "${GITHUB_REPOSITORY:?missing GITHUB_REPOSITORY}"
-ZOT_REPOSITORY=${ZOT_REPOSITORY:-herdrx/server}
-[[ "$ZOT_REGISTRY" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*(:[0-9]+)?$ ]] || exit 1
-[[ "$ZOT_REPOSITORY" =~ ^[a-z0-9]+([._/-][a-z0-9]+)*$ ]] || exit 1
+# Docker Hub 引用限定为 namespace/repository，不接受其他 registry、标签或 digest。
+[[ "$DOCKERHUB_REPOSITORY" =~ ^[a-z0-9]+([_-][a-z0-9]+)*/[a-z0-9]+([._-][a-z0-9]+)*$ ]] || exit 1
 [[ "$IMAGE_REVISION" =~ ^[0-9a-f]{40}$ ]] || exit 1
-image="${ZOT_REGISTRY}/${ZOT_REPOSITORY}"
+image="docker.io/${DOCKERHUB_REPOSITORY}"
 tag="sha-${IMAGE_REVISION}"
 declare -a sources=()
 
@@ -53,10 +52,9 @@ if [[ "$head_revision" == "$IMAGE_REVISION" ]]; then
 fi
 
 mkdir -p "$PUBLISH_OUTPUT"
-# 公开 Actions 附件不会经过日志的 secret masking，不能写入私有仓库地址。
-printf '# Replace registry.example.com with your privately configured registry.\nHERDRX_IMAGE=registry.example.com/%s@%s\n' \
-  "$ZOT_REPOSITORY" "$digest" > "$PUBLISH_OUTPUT/release.env"
+# Docker Hub 镜像公开可拉取，附件直接提供可用的固定 digest。
+printf 'HERDRX_IMAGE=%s@%s\n' "$image" "$digest" > "$PUBLISH_OUTPUT/release.env"
 printf 'Source: %s\nRepository: %s\nCommit tag: %s\nDigest: %s\nPlatforms: linux/amd64, linux/arm64\nUpdated latest: %s\n' \
-  "$IMAGE_REVISION" "$ZOT_REPOSITORY" "$tag" "$digest" "$promoted" > "$PUBLISH_OUTPUT/verification.txt"
+  "$IMAGE_REVISION" "$image" "$tag" "$digest" "$promoted" > "$PUBLISH_OUTPUT/verification.txt"
 tar -C deploy -czf "$PUBLISH_OUTPUT/herdrx-deploy.tar.gz" compose.yml compose.prod.yml .env.example prepare-data.sh
 cat "$PUBLISH_OUTPUT/verification.txt"

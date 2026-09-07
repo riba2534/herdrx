@@ -1,4 +1,4 @@
-name: CI 与 ZOT 镜像发布
+name: CI 与 Docker Hub 镜像发布
 
 on:
   push:
@@ -130,15 +130,14 @@ jobs:
           compression-level: 0
 
   publish:
-    name: 发布到 ZOT
+    name: 发布到 Docker Hub
     needs: images
     if: github.repository == 'riba2534/herdrx' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: zot
+    environment: dockerhub
     env:
-      ZOT_REGISTRY: ${{ secrets.ZOT_REGISTRY }}
-      ZOT_REPOSITORY: ${{ vars.ZOT_REPOSITORY }}
+      DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
       IMAGE_REVISION: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -158,15 +157,15 @@ jobs:
           done
       - name: 隔离发布凭据和输出
         run: |
-          printf 'DOCKER_CONFIG=%s/zot-auth\nPUBLISH_OUTPUT=%s/release\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
-          install -d -m 700 "$RUNNER_TEMP/zot-auth"
+          printf 'DOCKER_CONFIG=%s/dockerhub-auth\nPUBLISH_OUTPUT=%s/release\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          install -d -m 700 "$RUNNER_TEMP/dockerhub-auth"
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
-      - name: 使用 herdrx 专用账号登录
+      - name: 登录 Docker Hub
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
-          registry: ${{ secrets.ZOT_REGISTRY }}
-          username: ${{ secrets.ZOT_USERNAME }}
-          password: ${{ secrets.ZOT_PASSWORD }}
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: 推送、核对 digest 并更新 latest
         run: |
           bash scripts/publish-images.sh

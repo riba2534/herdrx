@@ -34,14 +34,14 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 ## 已确认的部署架构
 
 1. 源码推送到 GitHub `main` 后，由 GitHub Actions 自动执行验证和 Docker 构建。
-2. 验证通过的 Linux amd64/arm64 网站镜像上传维护者配置的 ZOT；真实地址只通过 GitHub Environment Secret `ZOT_REGISTRY` 提供。
+2. 验证通过的 Linux amd64/arm64 网站镜像发布到公开 Docker Hub `riba2534/herdrx`；发布凭据仅通过 GitHub `dockerhub` Environment Secret `DOCKERHUB_TOKEN` 提供。
 3. `latest` 指向成功发布的当前主分支构建；同时保留提交标签和 digest。旧提交手动重跑不能将 latest 倒退。
-4. 工作台主机只执行 `docker compose pull` 和 `docker compose up -d --wait`。CI 不自动登录工作台主机部署；这条网站发布链路不部署或重启远程主机上的 Herdr。
+4. README 推荐工作台主机使用公开镜像一键 `docker run` 部署，更新时 pull 后重建同名容器并保留原数据目录。CI 不自动登录工作台主机部署；这条网站发布链路不部署或重启远程主机上的 Herdr。
 5. **持久化一律使用可见的本地目录 bind mount。禁止命名卷、匿名卷和 Dockerfile 的 `VOLUME` 指令。** 应用数据为部署目录 `./data`，可选 DERP 证书为 `./derp/certs`。
-6. `deploy/compose.yml` 是唯一生产定义，不包含 `build:`；`compose.prod.yml` 是它的相对符号链接。源码构建叠加 `compose.dev.yml`。
-7. 镜像默认以 `65532:65532` 的 nonroot 用户运行。首次部署使用 `deploy/prepare-data.sh` 初始化目录，不能靠 `chmod 777` 解决权限。
-8. ZOT 地址和凭据只进入 GitHub `zot` Environment Secrets 或本机受限配置文件。公开源码、README、日志和附件不得包含私人域名、内网地址、个人邮箱、绝对用户目录或真实凭据；示例使用 example.com/test，发布附件使用仓库地址占位符。
-9. 私人交接与运行记录放在已忽略的 `.local-notes/`，不纳入公开设计文档；公开 GitHub 仓库标识、Go module 和兼容服务标识可以保留。提交前检查 Git 候选文件及 staged 内容。
+6. `deploy/compose.yml` 保留为可选 Compose 部署定义，不包含 `build:`；`compose.prod.yml` 是它的相对符号链接。`compose.dev.yml` 仅供开发验证，不在 README 推荐源码部署。
+7. 镜像默认以 `65532:65532` 的 nonroot 用户运行。首次 Docker 部署使用 `sudo install -d -m 700 -o 65532 -g 65532 ./data` 初始化目录；可选 Compose 使用 `deploy/prepare-data.sh`，不能靠 `chmod 777` 解决权限。
+8. Docker Hub Token 等凭据只进入 GitHub Environment Secrets 或本机受限配置文件。公开源码、README、日志和附件不得包含私人域名、内网地址、个人邮箱、绝对用户目录或真实凭据；私人地址示例使用 example.com/test；公开 Docker Hub 引用可直接写入发布附件。
+9. 私人交接与运行记录放在已忽略的 `.local-notes/`，不纳入公开设计文档；公开 GitHub / Docker Hub 仓库标识、Go module 和兼容服务标识可以保留。提交前检查 Git 候选文件及 staged 内容。
 
 ## 代码布局
 
@@ -111,6 +111,6 @@ Docker 变更需构建候选镜像并运行 `python3 scripts/smoke-image.py <镜
 - 先查看工作区状态，保留已有未提交改动；不擅自清理文件、重置分支或改动其他项目。
 - 普通开发与验证可自主完成。提交/推送、切换用户正在体验的实例、真实服务器故障注入按用户授权范围执行。
 - 使用隔离测试目录、端口和 Herdr session；不要用用户已有 pane 测试断网、撤销、崩溃或升级。
-- README 面向使用者：居中标题/徽章、中文介绍、功能表、Docker 快速开始、架构、配置、开发和 FAQ。操作细节放入对应文档，不把历史交接和未完成设计写成已交付能力。
+- README 只面向使用者：中文介绍、功能、一键 `docker run`、主机接入、日常使用、配置、更新与 FAQ；不写架构、开发、测试或维护者发布流程，不推荐源码部署。操作细节放入对应文档，不把历史交接和未完成设计写成已交付能力。
 - 部署行为变更同步 `README.md`、`docs/install.md`、`docs/operations.md`、`docs/update-and-recovery.md` 和发布说明。
 - 发版差距见 `docs/release-readiness-2026-09-06.md`。分别标注已复现问题、静态发现与未执行验收；不能把短时冒烟等同于真实跨网或 72 小时测试。

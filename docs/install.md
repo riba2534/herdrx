@@ -1,19 +1,22 @@
 # 安装 herdrx
 
-网站入口是 `herdrx-server`，受控端 CLI 是 `herdrx`。网站 Docker 镜像由 GitHub Actions 发布到 ZOT。
+网站镜像位于公开的 [Docker Hub：riba2534/herdrx](https://hub.docker.com/r/riba2534/herdrx)，支持 Linux amd64 / arm64；远程接入 CLI 名称为 `herdrx`。
 
 ## 网站
 
-按 [README 快速开始](../README.md#快速开始) 准备部署文件、初始化本地目录、登录自己的镜像源后，在源码根目录执行：
+推荐按 [README 快速开始](../README.md#快速开始) 使用一条 `docker run` 命令部署，无需下载源码或登录镜像仓库。首次启动前为部署目录下的 `./data` 设置 `65532:65532` 属主和 `700` 权限，再通过 bind mount 挂载到容器的 `/data`。
+
+`HERDRX_PUBLIC_URL` 填浏览器实际访问的地址：本机可用 `http://localhost:8080`，其他设备访问时改成工作台主机的 IP 和端口。默认提供 HTTP，无需域名；HTTPS 由自己的反向代理提供，详见 [运维](operations.md#https)。
+
+需要沿用 Compose 时，可使用 [deploy/compose.yml](../deploy/compose.yml)、[配置示例](../deploy/.env.example) 和 [目录初始化脚本](../deploy/prepare-data.sh)，保存到同一部署目录，将 `.env.example` 复制为 `.env` 并设置访问地址后执行：
 
 ```bash
-docker compose --env-file deploy/.env -f deploy/compose.yml pull
-docker compose --env-file deploy/.env -f deploy/compose.yml up -d --wait
+sudo bash prepare-data.sh &&
+docker compose pull &&
+docker compose up -d --wait
 ```
 
-`deploy/compose.yml` 是唯一生产定义，`compose.prod.yml` 是兼容符号链接。生产目标机不用源码构建，开发才叠加 `compose.dev.yml`。
-
-数据位于部署目录 `./data`，以 bind mount 挂到 `/data`；没有 Docker 命名卷。默认提供 HTTP，无需域名；如需 HTTPS，由部署者自配反向代理，详见 [运维](operations.md)。镜像必须先完成 Actions 发布，不能将尚未存在的标签当成已上线产物。
+两种部署方式都使用该部署目录下的 `./data`，不能同时启动并共享数据。已有部署切换方式时先停止原网站，保留完整数据、访问地址和其他配置。
 
 ## 受控主机
 
@@ -23,7 +26,7 @@ docker compose --env-file deploy/.env -f deploy/compose.yml up -d --wait
 2. 执行 `herdrx setup && herdrx status`，确认用户后台服务就绪，再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`。未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。
 3. 执行 `herdrx connect --plain`，在页面最后一步填写一次性绑定凭据并打开主机。
 
-所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页根据实际 Release 生成固定版本命令；预发布需要明确选择 RC 标签。开发者可通过 `make build` 获取本机架构的 `bin/herdrx`。
+所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页根据实际 Release 生成固定版本命令；预发布需要明确选择 RC 标签。
 
 已有自定义 unit 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收；macOS 受控端完整服务支持不在首发范围。详见 [当前验收](release-validation-2026-09-07.md)。
 
