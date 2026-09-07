@@ -457,7 +457,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         <div className="mobile-header">
           <button className="mobile-location" aria-label="选择工作区和分屏" onClick={() => setSwitcherOpen(true)}><Menu size={16}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{workspaces.length} 个工作区 · {panes?.length || 0} 个分屏</small></span></button>
           <button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span>新建</span></button>
-          <button className="mobile-fit" aria-pressed={display.mode === 'responsive'} title="自适应会让当前远端终端按手机宽度换行" onClick={() => updateDisplay({ mode: display.mode === 'responsive' ? 'fixed' : 'responsive', zoom: 100 })}>{display.mode === 'responsive' ? '自适应' : '原始画面'}</button>
+          <button className="mobile-fit" aria-pressed={display.mode === 'responsive'} data-tooltip="自适应会让当前远端终端按手机宽度换行" onClick={() => updateDisplay({ mode: display.mode === 'responsive' ? 'fixed' : 'responsive', zoom: 100 })}>{display.mode === 'responsive' ? '自适应' : '原始画面'}</button>
         </div>
         <nav className="mobile-tabs" aria-label="标签页">
           <div>{tabs.map((tab) => <button key={tab.tab_id} className={tab.tab_id === tabID ? 'mobile-tab-active' : ''} aria-pressed={tab.tab_id === tabID} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span>{tab.label}</span></button>)}</div>
