@@ -60,7 +60,7 @@ PWA 安装、Service Worker 和 Web Push 受浏览器安全上下文限制：本
 
 ## 目录权限与原生实例迁移
 
-镜像使用 `65532:65532`。首次 Docker 部署使用 `sudo install -d -m 700 -o 65532 -g 65532 ./data` 初始化空目录。可选 Compose 使用 `prepare-data.sh`，该脚本不递归修改已有非空目录。
+镜像使用 `65532:65532`。首次 Docker 部署使用 `sudo install -d -m 700 ./data && sudo chown 65532:65532 ./data` 初始化空目录。可选 Compose 使用 `prepare-data.sh`，该脚本不递归修改已有非空目录。
 
 `65532:65532` 是默认值，不是应用限制。使用宿主机现有的**非 root 普通用户**时，可将首次部署中的 sudo 目录初始化替换为：
 

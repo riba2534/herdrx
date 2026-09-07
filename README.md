@@ -57,7 +57,8 @@ herdrx 是 [Herdr](https://herdr.dev/) 的 Web 客户端，适合个人和可信
 
 ```bash
 mkdir -p herdrx && cd herdrx &&
-sudo install -d -m 700 -o 65532 -g 65532 ./data &&
+sudo install -d -m 700 ./data &&
+sudo chown 65532:65532 ./data &&
 docker run -d \
   --name herdrx \
   --restart unless-stopped \

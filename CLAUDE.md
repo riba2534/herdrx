@@ -39,7 +39,7 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 4. README 推荐工作台主机使用公开镜像一键 `docker run` 部署，更新时 pull 后重建同名容器并保留原数据目录。CI 不自动登录工作台主机部署；这条网站发布链路不部署或重启远程主机上的 Herdr。
 5. **持久化一律使用可见的本地目录 bind mount。禁止命名卷、匿名卷和 Dockerfile 的 `VOLUME` 指令。** 应用数据为部署目录 `./data`，可选 DERP 证书为 `./derp/certs`。
 6. `deploy/compose.yml` 保留为可选 Compose 部署定义，不包含 `build:`；`compose.prod.yml` 是它的相对符号链接。`compose.dev.yml` 仅供开发验证，不在 README 推荐源码部署。
-7. 镜像默认以 `65532:65532` 的 nonroot 用户运行。首次 Docker 部署使用 `sudo install -d -m 700 -o 65532 -g 65532 ./data` 初始化目录；可选 Compose 使用 `deploy/prepare-data.sh`，不能靠 `chmod 777` 解决权限。
+7. 镜像默认以 `65532:65532` 的 nonroot 用户运行。首次 Docker 部署使用 `sudo install -d -m 700 ./data && sudo chown 65532:65532 ./data` 初始化目录；可选 Compose 使用 `deploy/prepare-data.sh`，不能靠 `chmod 777` 解决权限。
 8. Docker Hub Token 等凭据只进入 GitHub Environment Secrets 或本机受限配置文件。公开源码、README、日志和附件不得包含私人域名、内网地址、个人邮箱、绝对用户目录或真实凭据；私人地址示例使用 example.com/test；公开 Docker Hub 引用可直接写入发布附件。
 9. 私人交接与运行记录放在已忽略的 `.local-notes/`，不纳入公开设计文档；公开 GitHub / Docker Hub 仓库标识、Go module 和兼容服务标识可以保留。提交前检查 Git 候选文件及 staged 内容。
 
