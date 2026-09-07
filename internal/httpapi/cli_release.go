@@ -120,7 +120,14 @@ func (c *cliReleaseCache) fetch() cliReleaseInfo {
 		for _, asset := range release.Assets {
 			assets[asset.Name] = asset.State == "uploaded" && asset.Size > 0
 		}
-		if !assets["herdrx-linux-amd64.tar.gz"] || !assets["herdrx-linux-arm64.tar.gz"] || !assets["SHA256SUMS"] || !assets["install-herdrx.sh"] {
+		complete := true
+		for _, name := range []string{"herdrx-linux-amd64.tar.gz", "herdrx-linux-arm64.tar.gz", "herdrx-linux-amd64.manifest.json", "herdrx-linux-arm64.manifest.json", "SHA256SUMS", "install-herdrx.sh", "README-CLI.md", "RELEASE-PUBLIC-KEY"} {
+			if !assets[name] {
+				complete = false
+				break
+			}
+		}
+		if !complete {
 			continue
 		}
 		if info.Status == "available" && release.Prerelease {

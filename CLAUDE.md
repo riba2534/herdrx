@@ -54,7 +54,7 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 | `internal/agent`、`internal/agentcli`、`internal/tunnel` | 受控端、IPC、服务管理、Tailcat 与绑定状态机 |
 | `internal/updater` | CLI 签名更新及回滚 |
 | `web/src` | React/TypeScript/xterm 前端 |
-| `internal/webassets/dist` | Go embed 前端资源，由 `make web-build` 更新 |
+| `internal/webassets/dist` | Go embed 前端资源，由 `make web-build` 更新；仅 `.gitkeep` 进入 Git |
 | `deploy/`、`.github/workflows/`、`scripts/` | Docker、发布及部署验收 |
 | `docs/` | 安装、运维、设计决策与发版验收 |
 

@@ -60,7 +60,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
     <h3 ref={heading} tabIndex={-1}>{steps[step]}</h3>
     {step === 0 && <div className="form-stack">
       <p className="field-hint">支持 Linux x86_64 / ARM64。请先通过 SSH 登录远程主机，使用运行 Herdr 的同一用户。需要 curl、tar 和 SHA-256 校验工具。</p>
-      <div className="setup-download"><a className="button button-secondary" href={`${repository}/releases`} target="_blank" rel="noopener noreferrer"><Download size={16}/>GitHub Releases<ExternalLink size={13}/></a>{version && <span className="setup-version">{version}{release?.prerelease ? ' · 预发布' : ''}</span>}</div>
+      <div className="setup-download"><a className="button button-secondary" href={version ? `${repository}/releases/tag/${version}` : `${repository}/releases`} target="_blank" rel="noopener noreferrer"><Download size={16}/>GitHub Releases<ExternalLink size={13}/></a>{version && <span className="setup-version">{version}{release?.prerelease ? ' · 预发布' : ''}</span>}</div>
       {checking ? <p className="field-hint" role="status">正在检查可下载的 CLI 版本…</p> : version ? <>
         <Command title="下载安装命令" value={`(\n  set -eu\n  installer=$(mktemp)\n  trap 'rm -f "$installer"' EXIT\n  curl -fL --proto '=https' --proto-redir '=https' '${download}/install-herdrx.sh' -o "$installer"\n  sh "$installer" --version '${version}'\n) &&\nexport PATH="$HOME/.local/bin:$PATH" &&\nherdrx version`}/>
         <p className="field-hint">自动选择 CPU 架构并校验安装包，安装到 <code>~/.local/bin/herdrx</code>。当前终端用上面的 PATH 命令；新终端可将它加入 shell 配置。</p>

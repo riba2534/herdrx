@@ -55,6 +55,10 @@ elif a[0] == 'api':
     if '/git/ref/' in a[1]: print(json.dumps({{'object': {{'type': 'commit', 'sha': ('b' if os.environ.get('FIXTURE_MOVED') == '1' else 'a') * 40}}}}))
     elif '/releases?' in a[1]: print('[[]]')
     else: sys.exit(99)
+elif a[:2] == ['run', 'list']:
+    state = os.environ.get('FIXTURE_MAIN_CI', 'success')
+    if state == 'missing': print('[]')
+    else: print(json.dumps([{{'headSha': 'a' * 40, 'status': 'in_progress' if state == 'pending' else 'completed', 'conclusion': state}}]))
 elif a[:2] == ['release', 'create']: pass
 elif a[:2] == ['release', 'upload']:
     for asset in a[a.index('--clobber') + 1:]: shutil.copyfile(asset, remote / pathlib.Path(asset).name)
@@ -98,6 +102,14 @@ else: sys.exit(99)
         self.env["FIXTURE_MOVED"] = "1"
         calls = self.publish(False)
         self.assertFalse(any(call[:2] == ["release", "upload"] for call in calls))
+
+    def test_incomplete_or_failed_main_ci_cannot_publish(self):
+        for state in ("missing", "pending", "failure", "cancelled"):
+            with self.subTest(state=state):
+                self.env["FIXTURE_MAIN_CI"] = state
+                self.calls.unlink(missing_ok=True)
+                calls = self.publish(False)
+                self.assertFalse(any(call[0] == "release" for call in calls))
 
     def test_rehashed_tampered_signature_rejected_before_network(self):
         path = self.assets / "herdrx-linux-amd64.manifest.json"

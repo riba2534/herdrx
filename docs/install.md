@@ -4,11 +4,11 @@
 
 ## 网站
 
-按 [README 快速开始](../README.md#快速开始) 准备部署文件、初始化本地目录、登录 ZOT 后执行：
+按 [README 快速开始](../README.md#快速开始) 准备部署文件、初始化本地目录、登录自己的镜像源后，在源码根目录执行：
 
 ```bash
-docker compose pull
-docker compose up -d --wait
+docker compose --env-file deploy/.env -f deploy/compose.yml pull
+docker compose --env-file deploy/.env -f deploy/compose.yml up -d --wait
 ```
 
 `deploy/compose.yml` 是唯一生产定义，`compose.prod.yml` 是兼容符号链接。生产目标机不用源码构建，开发才叠加 `compose.dev.yml`。
@@ -23,7 +23,7 @@ docker compose up -d --wait
 2. 执行 `herdrx setup && herdrx status`，确认用户后台服务就绪，再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`。未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。
 3. 执行 `herdrx connect --plain`，在页面最后一步填写一次性绑定凭据并打开主机。
 
-所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。尚未发布首个 Release 时，页面明确提示等待；开发者仍可通过 `make build` 获取本机架构的 `bin/herdrx`。
+所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页根据实际 Release 生成固定版本命令；预发布需要明确选择 RC 标签。开发者可通过 `make build` 获取本机架构的 `bin/herdrx`。
 
 已有自定义 unit 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收；macOS 受控端完整服务支持不在首发范围。详见 [当前验收](release-validation-2026-09-07.md)。
 

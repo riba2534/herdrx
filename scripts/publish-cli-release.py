@@ -33,6 +33,9 @@ def main():
     assert metadata["source_dirty"] is False, "refuse to publish uncommitted source"
     revision = subprocess.check_output(["git", "rev-parse", f"{args.version}^{{commit}}"], cwd=ROOT, text=True).strip()
     assert revision == args.revision, "tag does not identify the packaged source"
+    subprocess.run(["git", "merge-base", "--is-ancestor", args.revision, "origin/main"], cwd=ROOT, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    runs = json.loads(gh("run", "list", "--repo", REPOSITORY, "--workflow", "ci.yml", "--event", "push", "--commit", args.revision, "--limit", "1", "--json", "headSha,status,conclusion").stdout)
+    assert len(runs) == 1 and runs[0] == {"headSha": args.revision, "status": "completed", "conclusion": "success"}, "the same main commit must pass the complete CI before release"
     remote_tag = json.loads(gh("api", f"repos/{REPOSITORY}/git/ref/tags/{args.version}").stdout)["object"]
     for _ in range(4):
         if remote_tag["type"] == "commit":
@@ -46,7 +49,9 @@ def main():
     else:
         with tempfile.TemporaryDirectory(prefix="herdrx-release-notes-") as temporary:
             notes = Path(temporary) / "notes.md"
-            notes.write_text(f"herdrx {args.version} 提供远程主机 CLI：下载安装、配置后台服务，再通过网站三步引导绑定主机。\n\n支持 Linux x86_64 / ARM64。下载对应安装包，或使用附件 install-herdrx.sh；完整命令见 README-CLI.md，SHA256SUMS 提供校验值。Herdr 需要提前独立安装和运行。\n\n源码提交：{args.revision}\n")
+            release_notes = ROOT / "docs/releases" / f"{args.version}.md"
+            body = release_notes.read_text() if release_notes.is_file() else f"herdrx {args.version} 提供远程主机 CLI：下载安装、配置后台服务，再通过网站三步引导绑定主机。\n\n支持 Linux x86_64 / ARM64。下载对应安装包，或使用附件 install-herdrx.sh；完整命令见 README-CLI.md，SHA256SUMS 提供校验值。Herdr 需要提前独立安装和运行。\n"
+            notes.write_text(body + f"\n源码提交：[{args.revision}](https://github.com/{REPOSITORY}/commit/{args.revision})\n")
             gh("release", "create", args.version, "--repo", REPOSITORY, "--verify-tag", "--draft", "--title", f"herdrx {args.version}", "--notes-file", str(notes))
     assets = sorted(args.directory.resolve().iterdir())
     gh("release", "upload", args.version, "--repo", REPOSITORY, "--clobber", *(str(p) for p in assets))

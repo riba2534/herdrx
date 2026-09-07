@@ -2,7 +2,7 @@
 
 VERSION ?= v0.1.0
 
-dev:
+dev: web-build
 	go run ./cmd/herdrx-server
 
 web-install:
@@ -12,6 +12,7 @@ web-build:
 	pnpm --dir web build
 	rm -rf internal/webassets/dist
 	cp -R web/dist internal/webassets/dist
+	touch internal/webassets/dist/.gitkeep
 
 build: web-build
 	mkdir -p bin
@@ -19,10 +20,11 @@ build: web-build
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/herdrx-server ./cmd/herdrx-server
 	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/herdrx-agent ./cmd/herdrx-agent
 
-test:
+test: web-build
 	go test ./...
 	pnpm --dir web test -- --run
-	pnpm --dir web build
 
 clean:
 	rm -rf bin web/dist internal/webassets/dist
+	mkdir -p internal/webassets/dist
+	touch internal/webassets/dist/.gitkeep

@@ -18,7 +18,7 @@ func (f releaseTransport) RoundTrip(r *http.Request) (*http.Response, error) { r
 
 func releaseFixture(tag string, prerelease bool) map[string]any {
 	assets := []map[string]any{}
-	for _, name := range []string{"herdrx-linux-amd64.tar.gz", "herdrx-linux-arm64.tar.gz", "install-herdrx.sh", "SHA256SUMS"} {
+	for _, name := range []string{"herdrx-linux-amd64.tar.gz", "herdrx-linux-arm64.tar.gz", "herdrx-linux-amd64.manifest.json", "herdrx-linux-arm64.manifest.json", "install-herdrx.sh", "SHA256SUMS", "README-CLI.md", "RELEASE-PUBLIC-KEY"} {
 		assets = append(assets, map[string]any{"name": name, "state": "uploaded", "size": 100, "browser_download_url": "https://untrusted.example.test/ignored"})
 	}
 	return map[string]any{"tag_name": tag, "draft": false, "prerelease": prerelease, "assets": assets}
@@ -30,12 +30,18 @@ func TestCLIReleaseAvailability(t *testing.T) {
 	incomplete["assets"] = []map[string]any{}
 	draft := releaseFixture("v0.4.0", false)
 	draft["draft"] = true
+	missingManifest := releaseFixture("v0.5.0", false)
+	missingManifest["assets"].([]map[string]any)[2]["state"] = "new"
+	emptyGuide := releaseFixture("v0.5.0", false)
+	emptyGuide["assets"].([]map[string]any)[6]["size"] = 0
 	for _, tc := range []struct {
 		name, status, version string
 		releases              []map[string]any
 	}{
 		{"empty", "unpublished", "", []map[string]any{}},
 		{"incomplete", "unpublished", "", []map[string]any{incomplete, draft}},
+		{"manifest not uploaded", "unpublished", "", []map[string]any{missingManifest}},
+		{"empty guide", "unpublished", "", []map[string]any{emptyGuide}},
 		{"stable preferred", "available", "v0.1.0", []map[string]any{draft, incomplete, preview, stable}},
 		{"preview fallback", "available", "v0.2.0-rc.1", []map[string]any{preview}},
 		{"unsafe tag", "unpublished", "", []map[string]any{releaseFixture("v0.1.0; echo x", false)}},

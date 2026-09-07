@@ -60,10 +60,9 @@ try {
       await page.goto(base)
       await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
       await controllerReady(page)
-      await page.getByRole('button', { name: '安装应用', exact: true }).click()
-      await expect(page.getByRole('dialog')).toContainText('添加到程序坞')
+      // Installation belongs to the browser; do not suppress its native prompt.
+      assert.equal(await page.evaluate(() => window.dispatchEvent(new Event('beforeinstallprompt', { cancelable: true }))), true)
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
-      await page.keyboard.press('Escape')
       // API results are never available through CacheStorage, even after login.
       const cachedPaths = await page.evaluate(async () => {
         const paths = []

@@ -62,7 +62,7 @@ try {
         await expect(page.getByRole('heading', { name: '安装 CLI', exact: true })).toBeVisible()
         await expect(page.getByRole('textbox', { name: /绑定凭据/ })).toHaveCount(0)
         await expect(page.getByRole('button', { name: '保存主机' })).toHaveCount(0)
-        await expect(page.getByRole('link', { name: 'GitHub Releases' })).toHaveAttribute('href', releaseURL)
+        await expect(page.getByRole('link', { name: 'GitHub Releases' })).toHaveAttribute('href', releaseURL + '/tag/v0.1.0-rc.1')
         await expect(page.getByLabel('下载安装命令', { exact: true })).toContainText('/releases/download/v0.1.0-rc.1/install-herdrx.sh')
         await fit(page)
         if (engine === 'chromium' && [1440, 390].includes(width)) await capture(page, `install-${width}-light`)

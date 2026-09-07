@@ -20,6 +20,13 @@ web/dist
 coverage
 playwright-report
 test-results
+.idea
+.vscode
+**/*.tsbuildinfo
+**/*.test
+**/*.prof
+**/*.swp
+**/*.swo
 *.db
 *.db-shm
 *.db-wal

@@ -12,7 +12,7 @@ import tempfile
 
 import release_signing
 
-ASSETS = {"herdrx-linux-amd64.tar.gz", "herdrx-linux-arm64.tar.gz", "herdrx-linux-amd64.manifest.json", "herdrx-linux-arm64.manifest.json", "RELEASE-PUBLIC-KEY", "THIRD_PARTY_NOTICES.md", "sbom.cdx.json", "install-herdrx.sh", "README-CLI.md", "release.json", "SHA256SUMS"}
+ASSETS = {"herdrx-linux-amd64.tar.gz", "herdrx-linux-arm64.tar.gz", "herdrx-linux-amd64.manifest.json", "herdrx-linux-arm64.manifest.json", "RELEASE-PUBLIC-KEY", "LICENSE", "THIRD_PARTY_NOTICES.md", "sbom.cdx.json", "install-herdrx.sh", "README-CLI.md", "release.json", "SHA256SUMS"}
 
 
 def verify(directory):
@@ -36,7 +36,8 @@ def verify(directory):
         assert entry["manifest"] == f"herdrx-linux-{entry['arch']}.manifest.json"
         with tarfile.open(directory / entry["asset"], "r:gz") as archive:
             members = archive.getmembers()
-            assert [m.name for m in members] == ["herdrx", "VERSION", "README.md", "THIRD_PARTY_NOTICES.md"]
+            assert [m.name for m in members] == ["herdrx", "VERSION", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]
+            assert archive.extractfile("LICENSE").read() == (directory / "LICENSE").read_bytes()
             assert archive.extractfile("THIRD_PARTY_NOTICES.md").read() == (directory / "THIRD_PARTY_NOTICES.md").read_bytes()
             assert all(m.isfile() for m in members), "archives must contain regular files only"
             version = archive.extractfile("VERSION").read().decode().strip()

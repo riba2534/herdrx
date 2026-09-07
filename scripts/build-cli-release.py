@@ -55,7 +55,7 @@ def main():
             with (output / archive_name).open("wb") as stream:
                 with gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:
                     with tarfile.open(fileobj=compressed, mode="w") as archive:
-                        for name, content, mode in (("herdrx", data, 0o755), ("VERSION", (args.version + "\n").encode(), 0o644), ("README.md", guide, 0o644), ("THIRD_PARTY_NOTICES.md", (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes(), 0o644)):
+                        for name, content, mode in (("herdrx", data, 0o755), ("VERSION", (args.version + "\n").encode(), 0o644), ("README.md", guide, 0o644), ("LICENSE", (ROOT / "LICENSE").read_bytes(), 0o644), ("THIRD_PARTY_NOTICES.md", (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes(), 0o644)):
                             member = tarfile.TarInfo(name)
                             member.size, member.mode, member.mtime = len(content), mode, 0
                             archive.addfile(member, io.BytesIO(content))
@@ -63,7 +63,7 @@ def main():
     shutil.copyfile(ROOT / "install-herdrx.sh", output / "install-herdrx.sh")
     (output / "README-CLI.md").write_bytes(guide)
     shutil.copyfile(release_signing.PUBLIC_KEY_FILE, output / "RELEASE-PUBLIC-KEY")
-    for name in ("THIRD_PARTY_NOTICES.md", "sbom.cdx.json"):
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md", "sbom.cdx.json"):
         shutil.copyfile(ROOT / name, output / name)
     (output / "release.json").write_text(json.dumps(metadata, indent=2) + "\n")
     checksums = [f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in sorted(output.iterdir()) if path.is_file()]

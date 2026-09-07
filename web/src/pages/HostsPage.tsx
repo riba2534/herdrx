@@ -2,7 +2,6 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form, Textarea } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
-import { InstallAppButton } from '../components/PWA'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LogOut, Pencil, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../auth'
@@ -334,7 +333,6 @@ export function HostsPage() {
           </div>
         </article>)}</div>}
       </div></div>
-      <div className="pwa-entry"><InstallAppButton/></div>
     </main>
 
     {showAdd && <Modal title={editingHost ? 'SSH 连接设置' : '添加主机'} busy={pending} onClose={closeAdd} className={draft.transport === 'tailcat' ? 'tailcat-modal' : ''}>

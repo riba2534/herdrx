@@ -1,9 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
-type InstallPrompt = Event & { prompt: () => Promise<{ outcome: 'accepted' | 'dismissed' }> }
-type PWAState = { online: boolean; standalone: boolean; canInstall: boolean; updateReady: boolean; error: string }
-let state: PWAState = { online: navigator.onLine, standalone: false, canInstall: false, updateReady: false, error: '' }
-let installPrompt: InstallPrompt | null = null
+type PWAState = { online: boolean; updateReady: boolean; error: string }
+let state: PWAState = { online: navigator.onLine, updateReady: false, error: '' }
 let registration: ServiceWorkerRegistration | undefined
 let reloadRequested = false
 let started = false
@@ -16,12 +14,6 @@ export function usePWA() { return useSyncExternalStore(subscribe, snapshot) }
 export function startPWA() {
   if (started) return
   started = true
-  const display = window.matchMedia('(display-mode: standalone)')
-  const checkDisplay = () => update({ standalone: display.matches || Boolean((navigator as Navigator & { standalone?: boolean }).standalone) })
-  checkDisplay()
-  display.addEventListener('change', checkDisplay)
-  window.addEventListener('beforeinstallprompt', (event) => { event.preventDefault(); installPrompt = event as InstallPrompt; update({ canInstall: true }) })
-  window.addEventListener('appinstalled', () => { installPrompt = null; update({ canInstall: false }); checkDisplay() })
   window.addEventListener('offline', () => update({ online: false }))
   window.addEventListener('online', () => { update({ online: true }); void checkForUpdate() })
   const syncOnline = () => { if (state.online !== navigator.onLine) update({ online: navigator.onLine }) }
@@ -55,15 +47,6 @@ export async function checkForUpdate() {
   if (!registration || !navigator.onLine) return
   try { await registration.update(); update({ error: '' }) }
   catch { update({ error: '暂时无法检查更新，请恢复网络后重试。' }) }
-}
-
-export async function installApp() {
-  const prompt = installPrompt
-  if (!prompt) return
-  installPrompt = null
-  update({ canInstall: false })
-  try { await prompt.prompt() }
-  catch { update({ error: '安装未完成，请使用浏览器菜单安装。' }) }
 }
 
 export function applyUpdate() {

@@ -1,6 +1,14 @@
+# Build output and local dependencies.
 /bin/
 /web/dist/
 /web/node_modules/
+/internal/webassets/dist/*
+!/internal/webassets/dist/.gitkeep
+*.tsbuildinfo
+*.test
+*.prof
+
+# Runtime data, deployment state and private working records.
 /data/
 .env
 .env.*
@@ -12,6 +20,8 @@
 /deploy/backups/
 /artifacts/
 /.local-notes/
+
+# Credentials and machine-specific configuration.
 .envrc
 .npmrc
 .netrc
@@ -27,7 +37,13 @@ vapid.json
 bootstrap-token
 *.sqlite
 *.sqlite3
+
+# Editor, Python and test caches.
 .DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
 __pycache__/
 *.pyc
 *.db

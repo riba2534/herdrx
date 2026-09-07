@@ -18,8 +18,10 @@
 | `SHA256SUMS` | 附件 SHA-256 校验值 |
 | `README-CLI.md` | 本教程的离线副本 |
 | `release.json` | 版本、源码提交及构建信息 |
+| `herdrx-linux-*.manifest.json` / `RELEASE-PUBLIC-KEY` | 签名更新清单与供核对的发行公钥 |
+| `LICENSE` / `THIRD_PARTY_NOTICES.md` / `sbom.cdx.json` | 项目许可、依赖声明与依赖清单 |
 
-推荐复制网站第一步提供的**固定版本**安装命令。也可以安装最新正式版：
+推荐复制网站第一步提供的**固定版本**安装命令。首次预发布使用 `v0.1.0-rc.1`：
 
 ```sh
 (
@@ -27,15 +29,15 @@
   installer=$(mktemp)
   trap 'rm -f "$installer"' EXIT
   curl -fL --proto '=https' --proto-redir '=https' \
-    https://github.com/riba2534/herdrx/releases/latest/download/install-herdrx.sh \
+    https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.1/install-herdrx.sh \
     -o "$installer"
-  sh "$installer"
+  sh "$installer" --version v0.1.0-rc.1
 ) &&
 export PATH="$HOME/.local/bin:$PATH" &&
 herdrx version
 ```
 
-如果只有预发布版本，请从对应 Release 下载安装脚本并执行 `sh install-herdrx.sh --version vX.Y.Z-rc.1`，用实际标签替换版本；`latest` 只指向正式版。安装脚本需要 curl、tar、coreutils（或 shasum）。程序安装在 `~/.local/bin/herdrx`，也可通过 `--install-dir DIR` 指定目录。新终端若找不到命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
+选择其他版本时，同时替换下载地址和 `--version` 的标签；`latest` 只指向正式版，不包括 RC。安装脚本需要 curl、tar、coreutils（或 shasum）。程序安装在 `~/.local/bin/herdrx`，也可通过 `--install-dir DIR` 指定目录。新终端若找不到命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
 
 手动安装：从同一个 Release 下载适合 CPU 的包和 `SHA256SUMS`，在下载目录执行以下命令。ARM64 将示例中的 `amd64` 改成 `arm64`。
 
@@ -53,7 +55,7 @@ herdrx version
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致；这套附件不等于 CLI `update` 子命令所需的签名更新清单。
+`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致。Release 另附每种架构的 `.manifest.json` 签名清单，供内置 Ed25519 公钥的 CLI 校验更新；首次安装通过 GitHub HTTPS 引导信任。
 
 ## 2. 配置后台运行
 
@@ -109,9 +111,17 @@ herdrx connect --renew --plain
 
 ## 更新与移除
 
-从目标 Release 再次执行固定版本安装命令，然后运行 `herdrx service restart` 和 `herdrx status`。安装器会先校验包、版本和可执行性，再原子替换二进制，保留不同的旧文件为同目录的 `herdrx.previous`。它不会自动重启服务，配置目录 `~/.config/herdrx` 和绑定不会被替换。不要在安装临时目录中运行 setup。
+已安装的 CLI 可以直接从 GitHub 检查和安装签名版本：
 
-`herdrx update` 供配置了签名清单与信任根的部署使用，不会自动查找 GitHub Release；参见 [更新与恢复](update-and-recovery.md)。
+```sh
+herdrx update --version v0.1.0-rc.1 --check
+herdrx update --version v0.1.0-rc.1
+herdrx status
+```
+
+正式版发布后，省略 `--version` 会选择最新正式版。更新会校验签名、兼容性和当前身份，重启访问服务并检查就绪；失败时恢复旧程序，已有身份、绑定与远程任务保留。`herdrx rollback` 切回最后一个兼容程序，详见 [更新与恢复](update-and-recovery.md)。
+
+重新运行安装器也可替换 CLI：校验后原子安装，旧文件保存为同目录的 `herdrx.previous`，随后需手动执行 `herdrx service restart`。此文件备份与签名更新的回退点不同。配置目录 `~/.config/herdrx` 不会被替换；不要在下载临时目录中运行 setup。
 
 `herdrx service stop` 暂停访问服务；`herdrx service uninstall` 移除该用户服务。二者不停止 Herdr 或结束 pane 内任务，也不删除身份配置。解除已绑定的访问授权使用 `herdrx unpair`，会让当前 Tailcat 访问失效，下一次接入需要重新绑定。
 
@@ -119,7 +129,7 @@ herdrx connect --renew --plain
 
 | 现象 | 处理 |
 |---|---|
-| 下载 404 / 尚无 Release | 等待维护者发布完整附件，或选择已发布的固定版本；不要编造 latest 下载成功 |
+| 下载 404 / latest 不可用 | 到 Releases 选择已发布的固定标签；只有 RC 时需要同时指定下载地址和 `--version` |
 | `herdrx: command not found` | 设置 PATH，或用 `~/.local/bin/herdrx version` 确认安装位置 |
 | `setup` 提示缺少或未运行 Herdr | 按 Herdr 官方说明安装并启动；使用相同用户运行 setup |
 | `systemctl --user` 无法连接总线 | 用正常 SSH 用户登录会话，检查 systemd 与用户环境；必要时使用自己的进程管理器 |

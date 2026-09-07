@@ -1,6 +1,5 @@
 import { Form } from '../components/Form'
 import { BrandLogo } from '../components/Brand'
-import { InstallAppButton } from '../components/PWA'
 import { useState, type FormEvent } from 'react'
 import { KeyRound, ShieldCheck } from 'lucide-react'
 import { useAuth } from '../auth'
@@ -58,7 +57,6 @@ export function AuthPage({ bootstrap }: { bootstrap: boolean }) {
       {!bootstrap && auth.registration !== 'closed' && <button className="auth-switch" disabled={pending} onClick={() => { setRegistering((value) => !value); setError('') }}>{registering ? '已经有账号？返回登录' : '有邀请码？创建账号'}</button>}
       {!bootstrap && auth.registration === 'closed' && <p className="trust-note">当前注册已关闭，如需账号请联系管理员。</p>}
       <p className="trust-note">终端和 SSH 凭据由你的 herdrx 实例处理。请只使用你信任的部署。</p>
-      <div className="pwa-entry"><InstallAppButton/></div>
     </section>
   </main>
 }

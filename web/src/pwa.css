@@ -1,7 +1,4 @@
 .pwa-update { position: fixed; z-index: 85; right: max(16px, env(safe-area-inset-right)); bottom: max(16px, env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 32px)); padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--surface); color: var(--text); box-shadow: 0 8px 32px #0003; }
 .pwa-update p { margin: 8px 0 14px; font-size: 13px; line-height: 1.6; }
 .pwa-update-actions { display: flex; gap: 8px; justify-content: flex-end; }
-.pwa-install-steps { margin: 0; padding-left: 22px; line-height: 1.7; }
-.pwa-install-steps li + li { margin-top: 10px; }
-.pwa-entry { display: flex; justify-content: center; margin: 24px 0 8px; }
 @media (max-width: 600px) { [data-appearance-scope="workbench"] .pwa-update { bottom: auto; top: max(124px, calc(env(safe-area-inset-top) + 112px)); } }

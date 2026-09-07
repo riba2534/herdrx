@@ -4,7 +4,7 @@
 
 `sbom.cdx.json` 使用 CycloneDX 1.6，列出两个 Linux 架构中 CLI/网站实际导入的 Go 模块，以及本次 Linux amd64 前端安装依赖（含构建和测试工具）。它是源码依赖清单，不是精确到符号的二进制组成证明，也不覆盖运行环境的操作系统包。发行附件的版本、提交和摘要由 release.json 与 SHA256SUMS 记录。
 
-许可与署名见根目录 `THIRD_PARTY_NOTICES.md`，保留包内许可及各目录的 NOTICE/COPYRIGHT 等声明；重复文本按内容归并。Go runtime 的许可单独纳入。`caniuse-lite` 的浏览器兼容性数据采用 CC-BY-4.0，用于前端构建，原始署名和完整许可已保留。Go 和其余前端包的清点包含 MIT、ISC、BSD、Apache 等声明；主项目的许可由维护者单独确定，不从依赖的许可反推。
+许可与署名见根目录 `THIRD_PARTY_NOTICES.md`，保留包内许可及各目录的 NOTICE/COPYRIGHT 等声明；重复文本按内容归并。Go runtime 的许可单独纳入。`caniuse-lite` 的浏览器兼容性数据采用 CC-BY-4.0，用于前端构建，原始署名和完整许可已保留。Go 和其余前端包的清点包含 MIT、ISC、BSD、Apache 等声明；主项目采用 [MIT](../LICENSE)；第三方依赖保留各自许可，不被主项目许可替代。
 
 清点中的人工复核边界：
 

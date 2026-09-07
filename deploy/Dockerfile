@@ -28,10 +28,11 @@ ARG REVISION=local
 LABEL org.opencontainers.image.title="herdrx" \
       org.opencontainers.image.description="Herdr 多主机 Web 终端工作台" \
       org.opencontainers.image.source="https://github.com/riba2534/herdrx" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
 COPY --from=build /out/herdrx-server /app/herdrx-server
-COPY THIRD_PARTY_NOTICES.md sbom.cdx.json /usr/share/doc/herdrx/
+COPY LICENSE THIRD_PARTY_NOTICES.md sbom.cdx.json /usr/share/doc/herdrx/
 COPY --from=build --chown=nonroot:nonroot /out/data/ /data/
 USER nonroot:nonroot
 EXPOSE 8080

@@ -137,7 +137,7 @@ def main():
     add_notice(go_root / "LICENSE", "Go runtime / LICENSE")
     components.sort(key=lambda component: component["bom-ref"])
     bom = {"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
-           "metadata": {"component": {"type": "application", "name": "herdrx", "version": "source"},
+           "metadata": {"component": {"type": "application", "name": "herdrx", "version": "source", "licenses": [{"license": {"id": "MIT"}}]},
                         "properties": [{"name": "herdrx:" + str(path) + ":sha256", "value": hashlib.sha256((ROOT / path).read_bytes()).hexdigest()} for path in (Path("go.mod"), Path("go.sum"), Path("web/pnpm-lock.yaml"))]},
            "components": components}
     text = "# 第三方依赖声明\n\n本文件由 `scripts/build-dependency-notices.py` 从固定依赖版本生成，保留上游随包附带的许可与声明原文。包含 Linux amd64/arm64 网站与 CLI 的 Go 导入模块，以及前端安装依赖（含构建和测试工具），不表示所有列出的代码都会进入最终二进制。主项目许可单独见 LICENSE。\n\n机器可读清单见 `sbom.cdx.json`。caniuse-lite 的兼容性数据采用 CC-BY-4.0，仅用于前端构建，署名及完整许可保留于下列原文。三个未附独立许可文件的 npm 包保留其真实 package.json 许可声明，具体边界见 `docs/dependency-review-2026-09-07.md`，未生成或冒充上游版权原文。\n"
