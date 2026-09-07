@@ -60,6 +60,10 @@ try {
       await page.goto(base)
       await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
       await controllerReady(page)
+      // A repeated controller notification for the same worker is not an update.
+      await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')))
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+      await expect(page.getByRole('complementary', { name: '应用更新' })).toHaveCount(0)
       // Installation belongs to the browser; do not suppress its native prompt.
       assert.equal(await page.evaluate(() => window.dispatchEvent(new Event('beforeinstallprompt', { cancelable: true }))), true)
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))

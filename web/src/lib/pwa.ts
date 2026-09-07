@@ -20,16 +20,21 @@ export function startPWA() {
   window.addEventListener('focus', syncOnline)
   document.addEventListener('visibilitychange', syncOnline)
   if (!import.meta.env.PROD || !window.isSecureContext || !('serviceWorker' in navigator)) return
-  let controlled = Boolean(navigator.serviceWorker.controller)
+  let controller = navigator.serviceWorker.controller
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloadRequested) { window.location.reload(); return }
-    if (controlled) update({ updateReady: true })
-    controlled = true
+    const next = navigator.serviceWorker.controller
+    if (reloadRequested && next) { window.location.reload(); return }
+    if (controller && next && next !== controller) update({ updateReady: true })
+    controller = next
   })
   const register = async () => {
     try {
       registration = await navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
-      const waiting = () => { if (registration?.waiting && navigator.serviceWorker.controller) update({ updateReady: true }) }
+      const waiting = () => {
+        const candidate = registration?.waiting
+        const current = navigator.serviceWorker.controller
+        if (candidate?.state === 'installed' && current && candidate !== current) update({ updateReady: true })
+      }
       waiting()
       registration.addEventListener('updatefound', () => registration?.installing?.addEventListener('statechange', waiting))
       await checkForUpdate()
