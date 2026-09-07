@@ -1,6 +1,6 @@
 # CLI GitHub Release
 
-网站镜像通过现有 ZOT 流水线交付；远程主机 `herdrx` CLI 通过 GitHub Releases 交付。面向用户的安装说明见 [Tailcat 接入教程](tailcat-quickstart.md)。
+网站镜像通过 Docker Hub 流水线交付；远程主机 `herdrx` CLI 通过 GitHub Releases 交付。面向用户的安装说明见 [Tailcat 接入教程](tailcat-quickstart.md)。
 
 ## 构建本地候选包
 
@@ -28,7 +28,7 @@ python3 scripts/verify-cli-release.py artifacts/cli-v0.1.0-rc.1
 4. 检查版本标签与候选包记录的提交一致、源码干净、提交已进入 `main`，且同一提交的完整主分支 CI 已成功，再上传 GitHub Release 草稿。
 5. 下载全部草稿附件，与本次构建逐字节摘要核对，通过后才公开 Release。失败会保留草稿，用户安装页不会把草稿视为可用版本。
 
-流程使用 GitHub 内置令牌，只有发布 job 获得 `contents: write` 与查询 CI 所需的 `actions: read`，不依赖 ZOT 凭据。手动 `workflow_dispatch` 仅生成和验证候选包，不创建标签或公开 Release。
+流程使用 GitHub 内置令牌，只有发布 job 获得 `contents: write` 与查询 CI 所需的 `actions: read`，不依赖 Docker Hub 凭据。手动 `workflow_dispatch` 仅生成和验证候选包，不创建标签或公开 Release。
 
 首次安装器发布需要真实源码标签；不能把未提交工作区编译出的二进制挂到仅有 README 的初始提交上。发布脚本会拒绝 `source_dirty: true` 的候选包。需要在干净检出中重建后发布，不能手改元数据绕过检查。
 

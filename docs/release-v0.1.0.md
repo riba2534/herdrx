@@ -13,6 +13,6 @@
 
 ## 维护与验证
 
-[本地验收记录](release-validation-2026-09-07.md) 区分实际协议、原生架构、浏览器模拟与实体设备。主分支验证和 ZOT 分发由 [CI](https://github.com/riba2534/herdrx/actions/workflows/ci.yml) 执行；版本标签触发 [CLI 发布](https://github.com/riba2534/herdrx/actions/workflows/cli-release.yml)，同一主分支提交的完整 CI 未通过时拒绝公开附件。
+[本地验收记录](release-validation-2026-09-07.md) 区分实际协议、原生架构、浏览器模拟与实体设备。主分支验证和 Docker Hub 分发由 [CI](https://github.com/riba2534/herdrx/actions/workflows/ci.yml) 执行；版本标签触发 [CLI 发布](https://github.com/riba2534/herdrx/actions/workflows/cli-release.yml)，同一主分支提交的完整 CI 未通过时拒绝公开附件。
 
 安装与运维见 [安装说明](install.md)、[Tailcat 教程](tailcat-quickstart.md)、[部署](deployment.md)、[运维](operations.md) 和[更新与恢复](update-and-recovery.md)。
