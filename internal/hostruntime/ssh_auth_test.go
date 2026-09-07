@@ -25,8 +25,14 @@ import (
 // Exercise the actual vault -> shared credential -> SSH handshake, including
 // encrypted imports and certificates, against a disposable local SSH server.
 func TestSSHManagedKeyAndPasswordHandshake(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	ctx := t.Context()
+	// Encrypted key imports and repeated handshakes must not consume a shared
+	// deadline. Bound each connection separately, including uncached failures.
+	open := func(dial func(context.Context, store.Host) (herdr.Endpoint, error), host store.Host) (herdr.Endpoint, error) {
+		dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		return dial(dialCtx, host)
+	}
 	dir := t.TempDir()
 	db, err := store.Open(dir)
 	if err != nil {
@@ -171,12 +177,12 @@ func TestSSHManagedKeyAndPasswordHandshake(t *testing.T) {
 			if i == 0 {
 				untrusted := host
 				untrusted.HostKey = ""
-				handle, err := factory.openUncached(ctx, untrusted)
+				handle, err := open(factory.openUncached, untrusted)
 				var unknown *herdr.UnknownHostKeyError
 				if handle != nil || !errors.As(err, &unknown) {
 					t.Fatalf("first SSH contact must return a nil interface and fingerprint: %T %v", handle, err)
 				}
-				if _, err = factory.Open(ctx, untrusted); !errors.As(err, &unknown) {
+				if _, err = open(factory.Open, untrusted); !errors.As(err, &unknown) {
 					t.Fatalf("pooled first SSH contact: %v", err)
 				}
 				pending, err := db.HostByID(ctx, "owner", host.ID)
@@ -192,7 +198,7 @@ func TestSSHManagedKeyAndPasswordHandshake(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			handle, err := factory.Open(ctx, host)
+			handle, err := open(factory.Open, host)
 			if err != nil {
 				t.Fatalf("%s handshake: %v", mode, err)
 			}
@@ -211,10 +217,10 @@ func TestSSHManagedKeyAndPasswordHandshake(t *testing.T) {
 		t.Fatal(err)
 	}
 	badHost := store.Host{ID: badID, OwnerID: "owner", Name: "Bad password", Transport: "ssh", Hostname: "127.0.0.1", Port: port, Username: "custom-user", AuthMethod: "password", CredentialID: badID, HostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(serverKey.PublicKey())))}
-	if endpoint, err := factory.openUncached(ctx, badHost); err == nil || endpoint != nil {
+	if endpoint, err := open(factory.openUncached, badHost); err == nil || endpoint != nil {
 		t.Fatalf("authentication failure returned endpoint %T: %v", endpoint, err)
 	}
-	if endpoint, err := factory.Open(ctx, badHost); err == nil || endpoint != nil {
+	if endpoint, err := open(factory.Open, badHost); err == nil || endpoint != nil {
 		t.Fatalf("pooled authentication failure returned endpoint %T: %v", endpoint, err)
 	}
 	if stats := factory.Stats(); stats.Connections != 0 || stats.Pending != 0 {
