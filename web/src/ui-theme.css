@@ -347,7 +347,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .setup-command { border: 1px solid var(--ui-border); border-radius: 8px; overflow: hidden; min-width: 0; background: var(--ui-input); }
 .setup-command-heading { display: flex; justify-content: space-between; align-items: center; padding: 3px 8px 3px 12px; border-bottom: 1px solid var(--ui-border); font-size: 12px; color: var(--ui-muted); }
 .setup-command-heading .button { min-height: 36px; padding: 5px 8px; }
-.setup-command pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; padding: 12px; font-size: 12px; line-height: 1.7; tab-size: 2; color: var(--ui-text); user-select: text; }
+.setup-command pre { white-space: pre; overflow-x: auto; margin: 0; padding: 12px; font-size: 12px; line-height: 1.7; tab-size: 2; color: var(--ui-text); user-select: text; }
 .setup-command small { display: block; padding: 0 12px 10px; color: var(--ui-muted); }
 .setup-details { border-top: 1px solid var(--ui-border); padding-top: 10px; }
 .setup-details summary { cursor: pointer; font-size: 13px; padding: 5px 0; }

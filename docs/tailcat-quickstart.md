@@ -21,23 +21,17 @@
 | `herdrx-linux-*.manifest.json` / `RELEASE-PUBLIC-KEY` | 签名更新清单与供核对的发行公钥 |
 | `LICENSE` / `THIRD_PARTY_NOTICES.md` / `sbom.cdx.json` | 项目许可、依赖声明与依赖清单 |
 
-推荐复制网站第一步提供的**固定版本**安装命令。首次预发布使用 `v0.1.0-rc.1`：
+推荐直接复制网站第一步提供的**一行安装命令**，地址自动使用当前工作台。下面的 `https://example.com` 需替换为你的工作台地址；HTTP/IP 部署同样可用：
 
 ```sh
-(
-  set -eu
-  installer=$(mktemp)
-  trap 'rm -f "$installer"' EXIT
-  curl -fL --proto '=https' --proto-redir '=https' \
-    https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.1/install-herdrx.sh \
-    -o "$installer"
-  sh "$installer" --version v0.1.0-rc.1
-) &&
-export PATH="$HOME/.local/bin:$PATH" &&
-herdrx version
+curl -fsSL https://example.com/install.sh | sh
 ```
 
-选择其他版本时，同时替换下载地址和 `--version` 的标签；`latest` 只指向正式版，不包括 RC。安装脚本需要 curl、tar、coreutils（或 shasum）。程序安装在 `~/.local/bin/herdrx`，也可通过 `--install-dir DIR` 指定目录。新终端若找不到命令，将 `export PATH="$HOME/.local/bin:$PATH"` 加入所用 shell 的配置文件，如 Bash 的 `~/.bashrc` 或 Zsh 的 `~/.zshrc`。
+工作台选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将下载和安装固定到同一标签。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。远程主机需要能访问工作台及 GitHub。
+
+安装脚本需要 curl、tar、coreutils（或 shasum），默认安装到 `~/.local/bin/herdrx`。后续教程直接使用这个路径；若想直接输入 `herdrx`，可自行将 `export PATH="$HOME/.local/bin:$PATH"` 加入 shell 配置。
+
+无法从远程主机访问工作台或需要固定其他版本时，从对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 下载 `install-herdrx.sh`，然后运行 `sh install-herdrx.sh --version v0.1.0-rc.1`，将标签换成该 Release 的版本。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
 
 手动安装：从同一个 Release 下载适合 CPU 的包和 `SHA256SUMS`，在下载目录执行以下命令。ARM64 将示例中的 `amd64` 改成 `arm64`。
 
@@ -55,17 +49,17 @@ herdrx version
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致。Release 另附每种架构的 `.manifest.json` 签名清单，供内置 Ed25519 公钥的 CLI 校验更新；首次安装通过 GitHub HTTPS 引导信任。
+`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致。Release 另附每种架构的 `.manifest.json` 签名清单，供内置 Ed25519 公钥的 CLI 校验更新。一行命令信任当前工作台提供的引导脚本；引导脚本通过 GitHub HTTPS 下载对应版本的安装器。
 
 ## 2. 配置后台运行
 
 确认当前用户可以正常使用 Herdr，再运行：
 
 ```sh
-herdrx setup && herdrx status
+~/.local/bin/herdrx setup && ~/.local/bin/herdrx status
 ```
 
-`setup` 检查 Herdr 路径、API 能力和已有守护进程，保存受控端身份，安装 `herdrx.service` 用户服务并等待它就绪。重复执行会保留已有身份与绑定。`status` 应显示 herdrx daemon「运行中」、Herdr 状态「ok」。Herdr 不在 PATH 中时用 `herdrx setup --herdr-bin /path/to/herdr` 指定实际路径。
+`setup` 检查 Herdr 路径、API 能力和已有守护进程，保存受控端身份，安装 `herdrx.service` 用户服务并等待它就绪。重复执行会保留已有身份与绑定。`status` 应显示 herdrx daemon「运行中」、Herdr 状态「ok」。Herdr 不在 PATH 中时用 `~/.local/bin/herdrx setup --herdr-bin /path/to/herdr` 指定实际路径。
 
 检查关闭 SSH 及开机后的保活设置：
 
@@ -82,21 +76,21 @@ loginctl enable-linger "$(id -un)"
 服务管理与排查：
 
 ```sh
-herdrx status
-herdrx doctor
-herdrx logs -n 100
-herdrx logs -f
-herdrx service restart
+~/.local/bin/herdrx status
+~/.local/bin/herdrx doctor
+~/.local/bin/herdrx logs -n 100
+~/.local/bin/herdrx logs -f
+~/.local/bin/herdrx service restart
 ```
 
-没有 systemd 用户会话时，执行 `herdrx setup --skip-service`，再用你自己的进程管理器运行 `herdrx serve`。直接在前台执行 serve 后关闭终端，会中断 Tailcat 访问。无法配置保活时也可以使用网站的 SSH 接入。
+没有 systemd 用户会话时，执行 `~/.local/bin/herdrx setup --skip-service`，再用你自己的进程管理器运行 `~/.local/bin/herdrx serve`。直接在前台执行 serve 后关闭终端，会中断 Tailcat 访问。无法配置保活时也可以使用网站的 SSH 接入。
 
 ## 3. 绑定主机
 
 在远程主机上执行：
 
 ```sh
-herdrx connect --plain
+~/.local/bin/herdrx connect --plain
 ```
 
 将完整的 `herdrx://v1/...` 内容粘贴到网站第三步「绑定凭据」，可选填写主机显示名称和 Herdr 命名会话，点击「绑定并打开主机」。这是首次授权使用的一次性凭据：10 分钟内有效，只能绑定一次，不要分享或粘贴进公开日志。页面受理后会清除凭据，只保留配对任务标识以便刷新续接。
@@ -104,7 +98,7 @@ herdrx connect --plain
 凭据过期时重新运行 connect。主动撤销尚未使用的旧凭据并生成新凭据：
 
 ```sh
-herdrx connect --renew --plain
+~/.local/bin/herdrx connect --renew --plain
 ```
 
 绑定成功后，正常重启或更新 herdrx 无需重新绑定。远程 Herdr 与任务独立运行；关闭浏览器、退出网站或工作台主机离线，只影响访问连接。远程主机自身重启后的任务恢复能力由 Herdr 和任务本身决定，启用 linger 不代表 Shell 进程能跨主机重启存活。
@@ -114,27 +108,27 @@ herdrx connect --renew --plain
 已安装的 CLI 可以直接从 GitHub 检查和安装签名版本：
 
 ```sh
-herdrx update --version v0.1.0-rc.1 --check
-herdrx update --version v0.1.0-rc.1
-herdrx status
+~/.local/bin/herdrx update --version v0.1.0-rc.1 --check
+~/.local/bin/herdrx update --version v0.1.0-rc.1
+~/.local/bin/herdrx status
 ```
 
-正式版发布后，省略 `--version` 会选择最新正式版。更新会校验签名、兼容性和当前身份，重启访问服务并检查就绪；失败时恢复旧程序，已有身份、绑定与远程任务保留。`herdrx rollback` 切回最后一个兼容程序，详见 [更新与恢复](update-and-recovery.md)。
+正式版发布后，省略 `--version` 会选择最新正式版。更新会校验签名、兼容性和当前身份，重启访问服务并检查就绪；失败时恢复旧程序，已有身份、绑定与远程任务保留。`~/.local/bin/herdrx rollback` 切回最后一个兼容程序，详见 [更新与恢复](update-and-recovery.md)。
 
-重新运行安装器也可替换 CLI：校验后原子安装，旧文件保存为同目录的 `herdrx.previous`，随后需手动执行 `herdrx service restart`。此文件备份与签名更新的回退点不同。配置目录 `~/.config/herdrx` 不会被替换；不要在下载临时目录中运行 setup。
+重新运行安装器也可替换 CLI：校验后原子安装，旧文件保存为同目录的 `herdrx.previous`，随后需手动执行 `~/.local/bin/herdrx service restart`。此文件备份与签名更新的回退点不同。配置目录 `~/.config/herdrx` 不会被替换；不要在下载临时目录中运行 setup。
 
-`herdrx service stop` 暂停访问服务；`herdrx service uninstall` 移除该用户服务。二者不停止 Herdr 或结束 pane 内任务，也不删除身份配置。解除已绑定的访问授权使用 `herdrx unpair`，会让当前 Tailcat 访问失效，下一次接入需要重新绑定。
+`~/.local/bin/herdrx service stop` 暂停访问服务；`~/.local/bin/herdrx service uninstall` 移除该用户服务。二者不停止 Herdr 或结束 pane 内任务，也不删除身份配置。解除已绑定的访问授权使用 `~/.local/bin/herdrx unpair`，会让当前 Tailcat 访问失效，下一次接入需要重新绑定。
 
 ## 常见问题
 
 | 现象 | 处理 |
 |---|---|
-| 下载 404 / latest 不可用 | 到 Releases 选择已发布的固定标签；只有 RC 时需要同时指定下载地址和 `--version` |
+| 安装入口暂不可用 | 检查远程主机能否访问工作台，稍后重试；也可从 Releases 下载安装器并指定对应版本 |
 | `herdrx: command not found` | 设置 PATH，或用 `~/.local/bin/herdrx version` 确认安装位置 |
 | `setup` 提示缺少或未运行 Herdr | 按 Herdr 官方说明安装并启动；使用相同用户运行 setup |
 | `systemctl --user` 无法连接总线 | 用正常 SSH 用户登录会话，检查 systemd 与用户环境；必要时使用自己的进程管理器 |
 | 退出 SSH 后无法连接 | 检查 linger，确认后台服务运行；重新登录后查看日志 |
-| `connect` 提示 daemon 未运行 | 运行 setup 或 `herdrx service start`，通过 status 确认就绪 |
+| `connect` 提示 daemon 未运行 | 运行 setup 或 `~/.local/bin/herdrx service start`，通过 status 确认就绪 |
 | 已有旧版配置迁移失败 | 按错误修复旧配置或停止旧版 herdrx-agent 服务后重试；不会静默生成新身份 |
 | 绑定超时 | 检查远程主机和工作台主机的网络，运行 doctor / logs；刷新网页续接已有任务 |
 
@@ -158,17 +152,17 @@ herdrx status
 首次安装：
 
 ```bash
-herdrx setup --derp-config ./derp.json
-herdrx connect --plain
-herdrx doctor --network
+~/.local/bin/herdrx setup --derp-config ./derp.json
+~/.local/bin/herdrx connect --plain
+~/.local/bin/herdrx doctor --network
 ```
 
 已有绑定需要更换中继时，准备新配置后执行：
 
 ```bash
-herdrx connect --refresh-endpoint --derp-config ./derp-new.json --plain
+~/.local/bin/herdrx connect --refresh-endpoint --derp-config ./derp-new.json --plain
 ```
 
-在原网站的该主机卡片选择「更新连接端点」，导入输出的更新包。它使用已有 SSH 主机身份签名，绑定原 agent、controller 和授权，10 分钟内有效。网站只允许主机所有者导入，并校验身份、PSK、递增版本和中继地址；输入包不会新增主机或授权新网站。丢失网页响应时可重新导入同一包，过期后重新执行 `herdrx connect --refresh-endpoint --plain`。
+在原网站的该主机卡片选择「更新连接端点」，导入输出的更新包。它使用已有 SSH 主机身份签名，绑定原 agent、controller 和授权，10 分钟内有效。网站只允许主机所有者导入，并校验身份、PSK、递增版本和中继地址；输入包不会新增主机或授权新网站。丢失网页响应时可重新导入同一包，过期后重新执行 `~/.local/bin/herdrx connect --refresh-endpoint --plain`。
 
 迁移会重建 herdrx 的访问端点，远程 Herdr 和任务继续运行。新区域先持久化，再启动监听，进程重启继续使用新配置；若命令提示监听启动失败，可检查配置并重新执行，或者明确指定原配置恢复端点，再向网站导入相应的新版本更新包。不要通过恢复旧身份备份来撤销迁移。主机身份丢失时仍需重新配对；跨区域自动发现不属于本功能。

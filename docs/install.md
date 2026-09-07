@@ -22,11 +22,11 @@ docker compose up -d --wait
 
 先安装并独立运行 Herdr，以运行 Herdr 的同一用户操作。网站「添加主机 → Tailcat 内网穿透」提供完整的三步引导：
 
-1. 从 [GitHub Releases](https://github.com/riba2534/herdrx/releases) 安装 `herdrx`；Linux x86_64 / ARM64 附件带 SHA-256 校验和离线教程。页面只为已检测到的完整版本生成安装命令。
-2. 执行 `herdrx setup && herdrx status`，确认用户后台服务就绪，再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`。未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。
-3. 执行 `herdrx connect --plain`，在页面最后一步填写一次性绑定凭据并打开主机。
+1. 复制页面的一行安装命令，从 [GitHub Releases](https://github.com/riba2534/herdrx/releases) 安装 `herdrx`；自动识别 Linux x86_64 / ARM64 并做 SHA-256 校验。
+2. 执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，确认用户后台服务就绪，再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`。未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。
+3. 执行 `~/.local/bin/herdrx connect --plain`，在页面最后一步填写一次性绑定凭据并打开主机。
 
-所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页根据实际 Release 生成固定版本命令；预发布需要明确选择 RC 标签。
+所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页命令使用当前工作台的 `/install.sh`；入口选择完整 Release 并固定安装版本，只有预发布时也可直接安装。后续命令直接使用安装路径，无需设置 PATH。
 
 已有自定义 unit 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收；macOS 受控端完整服务支持不在首发范围。详见 [当前验收](release-validation-2026-09-07.md)。
 
