@@ -62,6 +62,14 @@ PWA 安装、Service Worker 和 Web Push 受浏览器安全上下文限制：本
 
 镜像使用 `65532:65532`。首次 Docker 部署使用 `sudo install -d -m 700 -o 65532 -g 65532 ./data` 初始化空目录。可选 Compose 使用 `prepare-data.sh`，该脚本不递归修改已有非空目录。
 
+`65532:65532` 是默认值，不是应用限制。使用宿主机现有的**非 root 普通用户**时，可将首次部署中的 sudo 目录初始化替换为：
+
+```bash
+mkdir -p ./data && chmod 700 ./data
+```
+
+在首次部署和更新的 `docker run` 中都加上 `--user "$(id -u):$(id -g)"`，容器会使用当前用户的 UID/GID 读写数据；初始化令牌直接用 `cat ./data/bootstrap-token` 读取即可。此方式无需 sudo 修改属主。已有数据若归属其他 UID/GID，需先停止网站并调整该数据目录的属主；更新时保持相同的运行用户。
+
 从原生网站迁移时，先停止旧实例并做一致性备份，再将完整数据复制到新部署目录。只对已确认的目标副本执行：
 
 ```bash
