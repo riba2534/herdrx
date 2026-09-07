@@ -19,7 +19,7 @@
 
 ## CLI 更新
 
-网页的一行安装命令通过工作台 `/install.sh` 选择完整 Release 并固定下载和安装版本，只有 RC 时也可使用。它复用 GitHub Release 安装器，采用普通文件的原子替换：先下载并校验对应架构压缩包、包内版本和 CLI 版本，再安装到 `~/.local/bin/herdrx`；不同的旧文件保留为 `herdrx.previous`。重复安装相同内容不替换文件。安装器不自动重启后台服务；确认后执行 `herdrx service restart` 和 `herdrx status`，远程身份和绑定配置保留。完整命令见 [Tailcat 接入教程](tailcat-quickstart.md)。
+网页的一行安装命令直接从 GitHub Release 下载安装器，并将脚本下载与安装固定到同一版本，只有 RC 时也可使用。安装不依赖工作台或个人域名，采用普通文件的原子替换：先下载并校验对应架构压缩包、包内版本和 CLI 版本，再安装到 `~/.local/bin/herdrx`；不同的旧文件保留为 `herdrx.previous`。重复安装相同内容不替换文件。安装器不自动重启后台服务；确认后执行 `herdrx service restart` 和 `herdrx status`，远程身份和绑定配置保留。完整命令见 [Tailcat 接入教程](tailcat-quickstart.md)。
 
 首次安装通过 GitHub HTTPS 和 SHA-256 校验取得程序；后续更新使用程序内置的 Ed25519 发行公钥验证清单。可信公钥来自源码中的 [`internal/updater/release.pub`](../internal/updater/release.pub)，不能用同一次下载返回的新公钥替换它。安装器的 `herdrx.previous` 是普通文件备份；第一次签名更新会把当前程序纳入版本目录，之后由 `herdrx rollback` 管理回退点。
 

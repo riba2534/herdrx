@@ -129,7 +129,6 @@ func (a *API) Handler() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(a.securityHeaders)
 	router.Get("/healthz", a.health)
-	router.Get("/install.sh", a.cliInstall)
 	router.Route("/api", func(router chi.Router) {
 		router.Use(a.guardWrites)
 		router.Get("/bootstrap/status", a.bootstrapStatus)

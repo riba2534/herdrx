@@ -21,17 +21,17 @@
 | `herdrx-linux-*.manifest.json` / `RELEASE-PUBLIC-KEY` | 签名更新清单与供核对的发行公钥 |
 | `LICENSE` / `THIRD_PARTY_NOTICES.md` / `sbom.cdx.json` | 项目许可、依赖声明与依赖清单 |
 
-推荐直接复制网站第一步提供的**一行安装命令**，地址自动使用当前工作台。下面的 `https://example.com` 需替换为你的工作台地址；HTTP/IP 部署同样可用：
+推荐直接复制网站第一步提供的 **GitHub 一行安装命令**。页面自动填写可用版本，无需替换工作台地址；当前预发布版示例：
 
 ```sh
-curl -fsSL https://example.com/install.sh | sh
+curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.1/install-herdrx.sh | sh -s -- --version v0.1.0-rc.1
 ```
 
-工作台选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将下载和安装固定到同一标签。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。远程主机需要能访问工作台及 GitHub。
+页面选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将脚本下载地址与安装版本固定到同一标签。脚本和安装包均直接从 GitHub 获取，安装过程不依赖任何工作台或个人域名。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。
 
 安装脚本需要 curl、tar、coreutils（或 shasum），默认安装到 `~/.local/bin/herdrx`。后续教程直接使用这个路径；若想直接输入 `herdrx`，可自行将 `export PATH="$HOME/.local/bin:$PATH"` 加入 shell 配置。
 
-无法从远程主机访问工作台或需要固定其他版本时，从对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 下载 `install-herdrx.sh`，然后运行 `sh install-herdrx.sh --version v0.1.0-rc.1`，将标签换成该 Release 的版本。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
+需要安装其他版本时，将下载地址和 `--version` 的标签同时换成对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 的版本。也可以先下载 `install-herdrx.sh` 再运行 `sh install-herdrx.sh --version v0.1.0-rc.1`。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
 
 手动安装：从同一个 Release 下载适合 CPU 的包和 `SHA256SUMS`，在下载目录执行以下命令。ARM64 将示例中的 `amd64` 改成 `arm64`。
 
@@ -49,7 +49,7 @@ curl -fsSL https://example.com/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致。Release 另附每种架构的 `.manifest.json` 签名清单，供内置 Ed25519 公钥的 CLI 校验更新。一行命令信任当前工作台提供的引导脚本；引导脚本通过 GitHub HTTPS 下载对应版本的安装器。
+`SHA256SUMS` 用于检查下载内容是否与同一 Release 一致。Release 另附每种架构的 `.manifest.json` 签名清单，供内置 Ed25519 公钥的 CLI 校验更新。首次安装通过 GitHub HTTPS 获取对应版本的安装器和安装包。
 
 ## 2. 配置后台运行
 
@@ -123,7 +123,7 @@ loginctl enable-linger "$(id -un)"
 
 | 现象 | 处理 |
 |---|---|
-| 安装入口暂不可用 | 检查远程主机能否访问工作台，稍后重试；也可从 Releases 下载安装器并指定对应版本 |
+| 安装下载失败 | 检查远程主机能否访问 GitHub，以及下载地址和 `--version` 是否指向同一个已发布版本 |
 | `herdrx: command not found` | 设置 PATH，或用 `~/.local/bin/herdrx version` 确认安装位置 |
 | `setup` 提示缺少或未运行 Herdr | 按 Herdr 官方说明安装并启动；使用相同用户运行 setup |
 | `systemctl --user` 无法连接总线 | 用正常 SSH 用户登录会话，检查 systemd 与用户环境；必要时使用自己的进程管理器 |

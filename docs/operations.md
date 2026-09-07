@@ -91,7 +91,7 @@ sudo chmod 700 ./data
 
 按网站三步引导完成 CLI 安装、用户服务保活和最后绑定，完整命令见 [Tailcat 接入教程](tailcat-quickstart.md)。以 Herdr 用户执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，确认 linger 后用 `~/.local/bin/herdrx connect --plain` 生成一次性绑定凭据。诊断用 status/doctor/logs，撤销用 `herdrx unpair`。删除网页主机记录不等于撤销远端绑定。
 
-网站公开提供 `/install.sh`，使远程终端无需浏览器登录即可运行一行安装命令。入口仅包含公开发行信息，无用户凭据；远程主机需能访问工作台和 GitHub，反向代理应允许此路径。
+接入页的一行安装命令直接从 GitHub Release 下载脚本和安装包，无用户凭据，也不经过工作台。安装时远程主机只需能访问 GitHub，无需为工作台配置安装入口或代理路径。
 
 下载信息由网站后端查询固定 GitHub 仓库的公开 Release 元数据，无用户凭据外传；可用结果缓存 5 分钟，失败或尚未发布缓存 1 分钟。网站到 GitHub 不通时，接入页提供 Releases 链接和重试，已有 CLI 仍可继续绑定；主机列表与已有连接不依赖这次查询。CLI 发布流程见 [维护者说明](cli-release.md)。
 

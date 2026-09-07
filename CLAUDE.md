@@ -42,6 +42,7 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 7. 镜像默认以 `65532:65532` 的 nonroot 用户运行。首次 Docker 部署使用 `sudo install -d -m 700 ./data && sudo chown 65532:65532 ./data` 初始化目录；可选 Compose 使用 `deploy/prepare-data.sh`，不能靠 `chmod 777` 解决权限。
 8. Docker Hub Token 等凭据只进入 GitHub Environment Secrets 或本机受限配置文件。公开源码、README、日志和附件不得包含私人域名、内网地址、个人邮箱、绝对用户目录或真实凭据；私人地址示例使用 example.com/test；公开 Docker Hub 引用可直接写入发布附件。
 9. 私人交接与运行记录放在已忽略的 `.local-notes/`，不纳入公开设计文档；公开 GitHub / Docker Hub 仓库标识、Go module 和兼容服务标识可以保留。提交前检查 Git 候选文件及 staged 内容。
+10. **远程 CLI 的一行安装命令必须直接使用 GitHub 链接，不依赖工作台地址或任何个人域名。** 下载脚本与安装包固定到同一已发布版本，页面保持单行命令与一键复制。
 
 ## 代码布局
 

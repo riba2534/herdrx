@@ -63,7 +63,7 @@ try {
         await expect(page.getByRole('textbox', { name: /绑定凭据/ })).toHaveCount(0)
         await expect(page.getByRole('button', { name: '保存主机' })).toHaveCount(0)
         await expect(page.getByRole('link', { name: '版本说明' })).toHaveAttribute('href', releaseURL + '/tag/v0.1.0-rc.1')
-        const installCommand = `curl -fsSL ${base}/install.sh | sh`
+        const installCommand = `curl -fsSL ${releaseURL}/download/v0.1.0-rc.1/install-herdrx.sh | sh -s -- --version v0.1.0-rc.1`
         const command = page.getByLabel('下载安装命令', { exact: true })
         await expect(command).toHaveText(installCommand)
         assert.equal(await command.textContent(), installCommand, 'copyable command must be one line')
@@ -135,7 +135,7 @@ try {
         if (engine === 'chromium' && [1440, 390].includes(width)) await capture(page, `unpublished-${width}-dark`)
         fixture.release = { status: 'available', version: 'v0.1.0' }
         await page.getByRole('button', { name: '重新检查', exact: true }).click()
-        await expect(page.getByLabel('下载安装命令', { exact: true })).toHaveText(installCommand)
+        await expect(page.getByLabel('下载安装命令', { exact: true })).toHaveText(`curl -fsSL ${releaseURL}/download/v0.1.0/install-herdrx.sh | sh -s -- --version v0.1.0`)
         await expect(page.getByRole('link', { name: '版本说明' })).toHaveAttribute('href', releaseURL + '/tag/v0.1.0')
         if (engine === 'chromium' && [1440, 390].includes(width)) await capture(page, `install-${width}-dark`)
         await page.keyboard.press('Escape')

@@ -108,7 +108,7 @@ sudo cat ./data/bootstrap-token
 
 在「添加主机 → Tailcat 内网穿透」中，按页面提供的三步引导操作：
 
-1. 以运行 Herdr 的同一用户，在远程主机复制并执行页面中的一行 CLI 安装命令，自动识别架构和校验。
+1. 以运行 Herdr 的同一用户，在远程主机复制并执行页面中的 GitHub 一行 CLI 安装命令，自动识别架构和校验。
 2. 执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，按提示启用后台保活。
 3. 执行 `~/.local/bin/herdrx connect --plain`，将一次性绑定凭据粘贴到页面并连接。
 

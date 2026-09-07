@@ -60,7 +60,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
     <h3 ref={heading} tabIndex={-1}>{steps[step]}</h3>
     {step === 0 && <div className="form-stack">
       {checking ? <p className="field-hint" role="status">正在检查可下载的 CLI 版本…</p> : version ? <>
-        <Command title="下载安装命令" value={`curl -fsSL ${window.location.origin}/install.sh | sh`}/>
+        <Command title="下载安装命令" value={`curl -fsSL ${download}/install-herdrx.sh | sh -s -- --version ${version}`}/>
         <p className="field-hint">复制到远程终端运行，自动识别架构并校验安装包。支持 Linux x86_64 / ARM64。</p>
         <div className="setup-download"><span className="setup-version">{version}{release?.prerelease ? ' · 预发布' : ''}</span><a href={`${repository}/releases/tag/${version}`} target="_blank" rel="noopener noreferrer">版本说明<ExternalLink size={13}/></a></div>
         <details className="setup-details"><summary>安装说明与手动下载</summary><p className="field-hint">需要 curl、tar 和 SHA-256 校验工具。默认安装到 <code>~/.local/bin/herdrx</code>，后续命令无需配置 PATH。</p><p className="field-hint">手动安装时，按 CPU 选择压缩包，并下载 SHA256SUMS。</p><div className="setup-download"><a href={`${download}/herdrx-linux-amd64.tar.gz`}>Linux x86_64</a><a href={`${download}/herdrx-linux-arm64.tar.gz`}>Linux ARM64</a><a href={`${download}/SHA256SUMS`}>SHA256SUMS</a></div><p className="field-hint">Release 附带 README-CLI.md，包含手动校验及安装的完整命令。</p></details>

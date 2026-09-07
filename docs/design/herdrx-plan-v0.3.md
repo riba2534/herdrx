@@ -169,7 +169,7 @@ herdr 在同一台机上暴露两个 socket：`herdr.sock`（NDJSON API，91 个
 
 ### 3.8 herdrx-agent（被控端）
 - 单静态二进制（Linux / macOS，amd64 / arm64），`herdrx-agent install` 生成 systemd / launchd 服务。
-- **安装即白名单**：webapp 为每个用户生成一条安装命令，内含该用户的 tailcat 公钥与 SSH 公钥（`curl -fsSL https://<herdrx>/install.sh | sh -s -- --allow nodekey:… --ssh-key 'ssh-ed25519 …'`），agent 首次启动就处于白名单模式，**不存在 allow-all 窗口**。
+- **历史安装设想（已弃用）**：原计划由工作台下发含用户公钥的安装脚本。现行实现直接从 GitHub Release 安装通用 CLI，再通过一次性凭据绑定，不依赖工作台或个人域名提供安装入口，见 [Tailcat 接入教程](../tailcat-quickstart.md)。
 - `pair`：读取或生成固定 tailcat key（固定 DERP region，沿用 tailcat 的 `PrivateKey` JSON 格式落盘 0600，便于用 tailcat CLI 排障），打印二维码 + 链接 `https://<herdrx>/#pair=base64url({v, tc, host, os, arch, agent_ver, tok, exp})`。二维码只负责把长地址与一次性 token 交给服务端；链接 fragment 不进服务器日志；同一内容可扫可粘。
 - 配对：服务端用该用户 tailcat 身份拨 `tc`，通过内嵌 SSH 认证后执行 `herdrx-agent confirm-pair <tok>`（HMAC 挑战响应）→ agent 标记已配对、关闭配对窗口 → 服务端写入 `host_tailcat`。撤销 = 服务端删记录 + 在线时通过 SSH 吊销该用户公钥（立即生效）。
 - `run`：`tailcat.Server{Key, AllowedClients, OnTCP}`；`OnTCP(22)` → 内嵌 SSH server（x/crypto/ssh 服务端）：公钥认证；`session` 只允许 exec 白名单（`herdr …`、`uname -sm`、`test -S …`）；`direct-streamlocal` 只允许 herdr 配置目录下的 socket；`OnTCP(2222)` 可选转发系统 sshd 作为兜底。
