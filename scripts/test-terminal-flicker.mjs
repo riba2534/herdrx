@@ -57,6 +57,8 @@ try {
         const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1500, height: 950 }, deviceScaleFactor: mobile ? 3 : 1, hasTouch: mobile, ...(name !== 'firefox' ? { isMobile: mobile } : {}) })
         const page = await context.newPage()
         await page.addInitScript(() => {
+          // This suite exercises fixed source frames; reflow has its own geometry tests.
+          localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ mobile: { mode: 'fixed', fontSize: 14, zoom: 100 } }))
           const nativeRAF = window.requestAnimationFrame.bind(window)
           window.requestAnimationFrame = (callback) => nativeRAF((time) => {
             callback(time)

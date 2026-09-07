@@ -348,6 +348,31 @@ describe('TerminalPane paste interception', () => {
     expect(open).toHaveBeenCalledTimes(1)
     expect(terminalHarness.instances).toBe(1)
   })
+  it('reflows a 295-column pane at readable font size and resizes without reopening on rotation or font changes', async () => {
+    let width = 479, height = 600
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const font = vi.fn()
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, sourceCols: 295, sourceRows: 40, onFocus: () => {}, onFontSizeChange: font, theme: {}, enhancedContrast: false }
+    const { rerender, unmount } = render(<TerminalPane {...props} display={{ mode: 'responsive', fontSize: 14, zoom: 100 }}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    expect(open).toHaveBeenCalledExactlyOnceWith('p1', 56, 42, true)
+    expect(font).toHaveBeenLastCalledWith(14)
+    width = 320; height = 300
+    rerender(<TerminalPane {...props} layoutVersion={1} display={{ mode: 'responsive', fontSize: 14, zoom: 100 }}/>)
+    await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 37, 21))
+    expect(font).toHaveBeenLastCalledWith(14)
+    rerender(<TerminalPane {...props} sourceCols={37} sourceRows={21} display={{ mode: 'responsive', fontSize: 18, zoom: 100 }}/>)
+    await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 29, 16))
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(font).toHaveBeenLastCalledWith(18)
+    unmount()
+  })
+
   it('sends one newline for Shift+Enter without submitting or duplicating keyup', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)

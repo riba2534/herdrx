@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 
-export type TerminalDisplay = { fontSize: number; zoom: number; mode: 'fit' | 'fixed' }
+export type TerminalDisplay = { fontSize: number; zoom: number; mode: 'fit' | 'fixed' | 'responsive' }
 type DisplayProfiles = { desktop: TerminalDisplay; mobile: TerminalDisplay }
-export const DISPLAY_STORAGE_KEY = 'herdrx.terminal-display.v1'
+export const DISPLAY_STORAGE_KEY = 'herdrx.terminal-display.v2'
 export const DEFAULT_DISPLAY: DisplayProfiles = {
   desktop: { fontSize: 14, zoom: 100, mode: 'fit' },
-  mobile: { fontSize: 14, zoom: 100, mode: 'fixed' },
+  mobile: { fontSize: 14, zoom: 100, mode: 'responsive' },
 }
 
 function bounded(value: unknown, fallback: number, min: number, max: number) {
@@ -14,14 +14,18 @@ function bounded(value: unknown, fallback: number, min: number, max: number) {
 
 export function readDisplayProfiles(): DisplayProfiles {
   try {
-    const stored = JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY) || '{}')
+    const current = localStorage.getItem(DISPLAY_STORAGE_KEY)
+    const stored = JSON.parse(current || localStorage.getItem('herdrx.terminal-display.v1') || '{}')
+    // v1 persisted the old mobile default even when it was never selected.
+    // Migrate existing visitors to reflow while retaining their chosen font.
+    if (!current && stored?.mobile) stored.mobile = { ...stored.mobile, mode: 'responsive', zoom: 100 }
     const profile = (key: keyof DisplayProfiles): TerminalDisplay => {
       const value = stored?.[key]
       const fallback = DEFAULT_DISPLAY[key]
       return {
         fontSize: bounded(value?.fontSize, fallback.fontSize, 10, 28),
         zoom: bounded(value?.zoom, fallback.zoom, 50, 200),
-        mode: value?.mode === 'fit' || value?.mode === 'fixed' ? value.mode : fallback.mode,
+        mode: ['fit', 'fixed', 'responsive'].includes(value?.mode) ? value.mode : fallback.mode,
       }
     }
     return { desktop: profile('desktop'), mobile: profile('mobile') }

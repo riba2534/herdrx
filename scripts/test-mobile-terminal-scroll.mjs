@@ -123,6 +123,8 @@ async function controllerChecks(browser, engine) {
 async function workbenchChecks(browser, engine, history) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
   const page = await context.newPage()
+  // Fixed source geometry is intentional here: this suite tests viewport-edge handoff.
+  await page.addInitScript(() => localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ mobile: { mode: 'fixed', fontSize: 14, zoom: 100 } })))
   const messages = [], errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.routeWebSocket('**/api/hosts/*/ws', (ws) => {

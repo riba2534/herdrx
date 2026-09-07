@@ -24,10 +24,10 @@ export function DisplaySettings({ display, mobile, onChange, onReset }: {
   return <fieldset className="display-settings">
     <legend>字号与缩放</legend>
     <p className="field-hint">自动保存在此浏览器，电脑和手机布局分别记忆。</p>
-    <label className="field"><span className="field-label">显示方式</span><Select aria-label="显示方式" className="input" value={display.mode} onChange={(event) => onChange({ mode: event.target.value as TerminalDisplay['mode'], zoom: 100 })}><SelectOption value="fit">适应窗口 · 查看完整终端</SelectOption><SelectOption value="fixed">固定字号 · 滑动查看内容</SelectOption></Select></label>
-    <label className="field"><span className="range-label"><span className="field-label">终端字号</span><output>{display.fontSize} px</output></span><Input type="range" min={10} max={28} step={1} value={display.fontSize} aria-label="终端字号" onChange={(event) => onChange({ fontSize: Number(event.target.value), mode: 'fixed' })}/></label>
+    <label className="field"><span className="field-label">显示方式</span><Select aria-label="显示方式" className="input" value={display.mode} onChange={(event) => onChange({ mode: event.target.value as TerminalDisplay['mode'], zoom: 100 })}><SelectOption value="responsive">自适应 · 内容随窗口换行</SelectOption><SelectOption value="fit">适应窗口 · 查看完整终端</SelectOption><SelectOption value="fixed">固定字号 · 滑动查看内容</SelectOption></Select></label>
+    <label className="field"><span className="range-label"><span className="field-label">终端字号</span><output>{display.fontSize} px</output></span><Input type="range" min={10} max={28} step={1} value={display.fontSize} aria-label="终端字号" onChange={(event) => onChange({ fontSize: Number(event.target.value), mode: display.mode === 'responsive' ? 'responsive' : 'fixed' })}/></label>
     <label className="field"><span className="range-label"><span className="field-label">终端缩放</span><output>{display.zoom}%</output></span><Input type="range" min={50} max={200} step={10} value={display.zoom} aria-label="终端缩放" onChange={(event) => onChange({ zoom: Number(event.target.value) })}/></label>
-    <p className="field-hint">放大后可{mobile ? '单指滑动' : '使用滚动条或触控板'}查看完整画面。浏览器的页面缩放和双指缩放仍可使用。</p>
+    <p className="field-hint">{display.mode === 'responsive' ? '自适应会调整当前远端终端的行列数，同一终端的其他窗口也会随之换行。' : <>放大后可{mobile ? '单指滑动' : '使用滚动条或触控板'}查看完整画面。浏览器的页面缩放和双指缩放仍可使用。</>}</p>
     <Button className="button-secondary" onClick={onReset}><RotateCcw size={14}/>恢复显示默认值</Button>
   </fieldset>
 }

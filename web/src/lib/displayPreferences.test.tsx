@@ -16,10 +16,19 @@ describe('display preferences', () => {
     expect(result.current.display).toEqual({ fontSize: 20, zoom: 150, mode: 'fixed' })
     unmount()
     const reloaded = renderHook(() => useTerminalDisplay(true))
-    expect(reloaded.result.current.display).toEqual({ fontSize: 16, zoom: 120, mode: 'fixed' })
+    expect(reloaded.result.current.display).toEqual({ fontSize: 16, zoom: 120, mode: 'responsive' })
     act(() => reloaded.result.current.reset())
     expect(readDisplayProfiles().mobile).toEqual(DEFAULT_DISPLAY.mobile)
     expect(readDisplayProfiles().desktop.fontSize).toBe(20)
+  })
+
+  it('migrates existing mobile visitors to reflow and remembers a later opt-out', () => {
+    localStorage.setItem('herdrx.terminal-display.v1', JSON.stringify({ desktop: { fontSize: 20, zoom: 140, mode: 'fixed' }, mobile: { fontSize: 16, zoom: 170, mode: 'fixed' } }))
+    expect(readDisplayProfiles()).toEqual({ desktop: { fontSize: 20, zoom: 140, mode: 'fixed' }, mobile: { fontSize: 16, zoom: 100, mode: 'responsive' } })
+    const { result, unmount } = renderHook(() => useTerminalDisplay(true))
+    act(() => result.current.update({ mode: 'fixed' }))
+    unmount()
+    expect(readDisplayProfiles().mobile.mode).toBe('fixed')
   })
 
   it('recovers corrupt settings and clamps invalid persisted dimensions', () => {

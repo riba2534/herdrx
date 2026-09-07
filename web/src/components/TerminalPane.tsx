@@ -8,7 +8,7 @@ import { Terminal, type ITheme } from '@xterm/xterm'
 import { History, ImagePlus, Keyboard, MoreHorizontal, Search, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
-import { createFontMeasure, fittedTerminalFont } from '../lib/terminalFit'
+import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize } from '../lib/terminalFit'
 import { attachTerminalTouch } from '../lib/terminalTouch'
 import type { TerminalDisplay } from '../lib/displayPreferences'
 import type { WorkbenchClient } from '../lib/workbench'
@@ -24,6 +24,13 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
   const termRef = useRef<Terminal | null>(null)
   const fontMeasureRef = useRef<ReturnType<typeof createFontMeasure> | null>(null)
   const streamRef = useRef<number | null>(null)
+  const responsive = display.mode === 'responsive'
+  const observedCols = responsive ? undefined : sourceCols
+  const observedRows = responsive ? undefined : sourceRows
+  const desiredSizeRef = useRef({ cols: 80, rows: 24 })
+  const sentSizeRef = useRef({ cols: 0, rows: 0 })
+  const resizeTimerRef = useRef(0)
+  const fitRef = useRef<() => void>(() => {})
   const connectionEpochRef = useRef(connectionEpoch)
   connectionEpochRef.current = connectionEpoch
   const [status, setStatus] = useState('正在连接终端…')
@@ -204,19 +211,34 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     const viewport = viewportRef.current
     if (!terminal || !host || !viewport || !fontMeasureRef.current) return
     const style = getComputedStyle(host)
-    const cols = Math.max(10, sourceCols || terminal.cols)
-    const rows = Math.max(3, sourceRows || terminal.rows)
-    const baseSize = display.mode === 'fixed' ? display.fontSize : fittedTerminalFont({
+    const bounds = {
       width: viewport.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'),
       height: viewport.clientHeight - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0'),
-      cols, rows, dpr: window.devicePixelRatio || 1,
+      dpr: window.devicePixelRatio || 1,
       lineHeight: terminal.options.lineHeight || 1, letterSpacing: terminal.options.letterSpacing || 0,
-    }, fontMeasureRef.current.measure, display.fontSize)
+    }
+    const size = responsive ? responsiveTerminalSize(bounds, fontMeasureRef.current.measure, display.fontSize * display.zoom / 100) : null
+    const cols = size?.cols ?? Math.max(10, sourceCols || terminal.cols)
+    const rows = size?.rows ?? Math.max(3, sourceRows || terminal.rows)
+    const baseSize = display.mode !== 'fit' ? display.fontSize : fittedTerminalFont({ ...bounds, cols, rows }, fontMeasureRef.current.measure, display.fontSize)
     const fontSize = baseSize === null ? null : Math.round(baseSize * display.zoom) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
     if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows)
+    if (size) {
+      desiredSizeRef.current = size
+      if (streamRef.current !== null && (sentSizeRef.current.cols !== cols || sentSizeRef.current.rows !== rows)) {
+        window.clearTimeout(resizeTimerRef.current)
+        resizeTimerRef.current = window.setTimeout(() => {
+          if (streamRef.current === null) return
+          const next = desiredSizeRef.current
+          client.resize(streamRef.current, next.cols, next.rows)
+          sentSizeRef.current = next
+        }, 80)
+      }
+    }
     if (fontSize !== null) onFontSizeChange?.(fontSize)
   }
+  fitRef.current = fitTerminal
 
   // Fit the final sidebar layout before the next paint, so xterm's scheduled
   // render sees only the final font instead of several visible trial sizes.
@@ -309,7 +331,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
       inputBlockedRef.current = false
       setStreamFailed(false)
       setStatus('正在连接终端…')
-      fitTerminal()
+      fitRef.current()
       const terminal = termRef.current!
       terminal.options.disableStdin = false
       const failed = (reason: string) => {
@@ -319,18 +341,20 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         terminal.options.disableStdin = true
         pendingInputRef.current = []
         pendingInputSizeRef.current = 0
-        setStatus('终端连接已关闭：' + reason)
+        setStatus('终端连接已关闭：' + (responsive && reason.includes('already has an attached client') ? '此终端正在其他窗口自适应显示，请关闭那个窗口后重连，或切换为“原始画面”。' : reason))
         setStreamFailed(true)
       }
       try {
-        const cols = Math.max(10, sourceCols || terminal.cols)
-        const rows = Math.max(3, sourceRows || terminal.rows)
-        const streamID = await client.openTerminal(pane.pane_id, cols, rows)
+        const cols = responsive ? desiredSizeRef.current.cols : Math.max(10, observedCols || terminal.cols)
+        const rows = responsive ? desiredSizeRef.current.rows : Math.max(3, observedRows || terminal.rows)
+        sentSizeRef.current = { cols, rows }
+        const streamID = await (responsive ? client.openTerminal(pane.pane_id, cols, rows, true) : client.openTerminal(pane.pane_id, cols, rows))
         if (cancelled) { client.closeTerminal(streamID); return }
         streamRef.current = streamID
         setStatus('可输入')
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
+          if (responsive && frame.cols >= 10 && frame.rows >= 3 && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) terminal.resize(frame.cols, frame.rows)
           let bytes = frame.ansi
           if (resetStream) {
             // Reset once, in the same parser write as the new stream's first
@@ -347,6 +371,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
             if (firstFrame) { firstFrame = false; revealCursorRef.current() }
           })
         }, failed)
+        fitRef.current() // The viewport may have changed while opening the stream.
         if (!inputBlockedRef.current && pendingInputRef.current.length > 0) {
           for (const data of pendingInputRef.current) client.sendInput(streamID, data)
           pendingInputRef.current = []
@@ -359,6 +384,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
     void open()
     return () => {
       cancelled = true
+      window.clearTimeout(resizeTimerRef.current)
       inputBlockedRef.current = true
       unsubscribe()
       if (streamRef.current != null) {
@@ -366,7 +392,7 @@ export function TerminalPane({ client, pane, connectionEpoch, active, sourceCols
         streamRef.current = null
       }
     }
-  }, [client, pane.pane_id, connectionEpoch, sourceCols, sourceRows, streamGeneration])
+  }, [client, pane.pane_id, connectionEpoch, observedCols, observedRows, responsive, streamGeneration])
 
   useEffect(() => {
     const viewport = viewportRef.current

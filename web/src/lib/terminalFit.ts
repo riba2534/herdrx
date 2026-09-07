@@ -11,6 +11,19 @@ type FitBounds = {
   letterSpacing: number
 }
 
+export function responsiveTerminalSize(bounds: Omit<FitBounds, 'cols' | 'rows'>, measure: FontMeasure, fontSize: number): { cols: number; rows: number } | null {
+  if (bounds.width <= 0 || bounds.height <= 0) return null
+  const metrics = measure(fontSize)
+  if (!metrics || metrics.width <= 0 || metrics.height <= 0) return null
+  const cellWidth = metrics.width + Math.round(bounds.letterSpacing) / bounds.dpr
+  const cellHeight = Math.floor(Math.ceil(metrics.height * bounds.dpr) * bounds.lineHeight) / bounds.dpr
+  if (cellWidth <= 0 || cellHeight <= 0) return null
+  return {
+    cols: Math.max(10, Math.min(1000, Math.floor((bounds.width - 1) / cellWidth))),
+    rows: Math.max(3, Math.min(500, Math.floor((bounds.height - 1) / cellHeight))),
+  }
+}
+
 // Match the pinned xterm 5.5 DOM renderer's device-pixel cell rounding. Search
 // against offscreen measurements, never by changing the visible terminal.
 export function fittedTerminalFont(bounds: FitBounds, measure: FontMeasure, maxFontSize = 14): number | null {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -61,6 +62,7 @@ type workbenchMessage struct {
 	PaneID            string          `json:"pane_id,omitempty"`
 	Mode              string          `json:"mode,omitempty"`
 	Takeover          bool            `json:"takeover,omitempty"`
+	Responsive        bool            `json:"responsive,omitempty"`
 	Cols              uint16          `json:"cols,omitempty"`
 	Rows              uint16          `json:"rows,omitempty"`
 	StreamID          uint32          `json:"stream_id,omitempty"`
@@ -83,20 +85,21 @@ type workbenchSession struct {
 }
 
 type terminalStream struct {
-	id       uint32
-	paneID   string
-	mode     string
-	process  herdr.TerminalProcess
-	scroll   *herdr.ScrollController
-	input    *herdr.InputQueue
-	stdin    io.WriteCloser
-	lastAck  atomic.Uint64
-	closed   atomic.Bool
-	closing  atomic.Bool
-	creditMu sync.Mutex
-	inFlight int
-	pending  []pendingCredit
-	creditCh chan struct{}
+	id         uint32
+	paneID     string
+	mode       string
+	responsive bool
+	process    herdr.TerminalProcess
+	scroll     *herdr.ScrollController
+	input      *herdr.InputQueue
+	stdin      io.WriteCloser
+	lastAck    atomic.Uint64
+	closed     atomic.Bool
+	closing    atomic.Bool
+	creditMu   sync.Mutex
+	inFlight   int
+	pending    []pendingCredit
+	creditCh   chan struct{}
 }
 
 type pendingCredit struct {
@@ -317,11 +320,18 @@ func (s *workbenchSession) handleBinary(encoded []byte) {
 			}
 		}
 	case terminalwire.OpcodeResize:
+		if !stream.responsive || stream.closing.Load() {
+			return
+		}
 		cols, rows, err := terminalwire.Dimensions(frame.Payload)
 		if err != nil || cols < 10 || cols > 1000 || rows < 3 || rows > 500 {
 			return
 		}
-		s.writeTerminalCommand(stream, map[string]any{"type": "terminal.resize", "cols": cols, "rows": rows})
+		if err := s.writeTerminalCommand(stream, map[string]any{"type": "terminal.resize", "cols": cols, "rows": rows}); err != nil {
+			if s.closeStream(stream.id) {
+				_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.closed", "stream_id": stream.id, "reason": "终端尺寸调整失败，请重连终端：" + err.Error()})
+			}
+		}
 	case terminalwire.OpcodeRelease:
 		s.finishStream(stream.id)
 	}
@@ -332,13 +342,18 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 		s.writeRequestError(message.RequestID, "invalid_terminal_mode", "only Web pane terminals are supported")
 		return
 	}
-	if message.Cols < 10 || message.Rows < 3 {
-		s.writeRequestError(message.RequestID, "invalid_terminal_size", "terminal is too small")
+	if message.Cols < 10 || message.Cols > 1000 || message.Rows < 3 || message.Rows > 500 {
+		s.writeRequestError(message.RequestID, "invalid_terminal_size", "terminal dimensions are out of range")
 		return
 	}
 	streamID := s.nextID.Add(1)
-	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: message.Mode, creditCh: make(chan struct{}, 1)}
-	process, err := s.endpoint.OpenTerminal(s.ctx, herdr.TerminalOpen{PaneID: message.PaneID, Mode: "observe", Takeover: false, Cols: message.Cols, Rows: message.Rows})
+	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: message.Mode, responsive: message.Responsive, creditCh: make(chan struct{}, 1)}
+	mode := "observe"
+	if message.Responsive {
+		mode = "control"
+	}
+	// A responsive view owns the PTY geometry. Never take over another client.
+	process, err := s.endpoint.OpenTerminal(s.ctx, herdr.TerminalOpen{PaneID: message.PaneID, Mode: mode, Takeover: false, Cols: message.Cols, Rows: message.Rows})
 	if err != nil {
 		s.writeRequestError(message.RequestID, "terminal_open_failed", err.Error())
 		return
@@ -454,13 +469,22 @@ func (stream *terminalStream) acknowledge(seq uint64) {
 	}
 }
 
-func (s *workbenchSession) writeTerminalCommand(stream *terminalStream, command any) {
-	encoded, err := json.Marshal(command)
-	if err != nil {
-		return
+func (s *workbenchSession) writeTerminalCommand(stream *terminalStream, commands ...any) error {
+	var batch bytes.Buffer
+	encoder := json.NewEncoder(&batch)
+	for _, command := range commands {
+		if err := encoder.Encode(command); err != nil {
+			return err
+		}
 	}
-	encoded = append(encoded, '\n')
-	_, _ = stream.stdin.Write(encoded)
+	// A dead controller must not block the workbench WebSocket indefinitely.
+	timer := time.AfterFunc(5*time.Second, func() { _ = stream.process.Close() })
+	defer timer.Stop()
+	n, err := stream.stdin.Write(batch.Bytes())
+	if err == nil && n != batch.Len() {
+		err = io.ErrShortWrite
+	}
+	return err
 }
 
 func (s *workbenchSession) call(message workbenchMessage) {
@@ -471,20 +495,38 @@ func (s *workbenchSession) call(message workbenchMessage) {
 			Column   int    `json:"column"`
 			Row      int    `json:"row"`
 		}
-		if json.Unmarshal(message.Params, &params) != nil {
+		if json.Unmarshal(message.Params, &params) != nil || params.Lines == 0 || params.Lines < -100 || params.Lines > 100 || params.Column < 0 || params.Row < 0 {
 			s.writeRequestError(message.RequestID, "invalid_scroll", "invalid terminal scroll")
 			return
 		}
 		s.streamsMu.Lock()
 		stream := s.streams[params.StreamID]
 		s.streamsMu.Unlock()
-		if stream == nil || stream.closed.Load() {
+		if stream == nil || stream.closed.Load() || stream.closing.Load() {
 			s.writeRequestError(message.RequestID, "terminal_unavailable", "终端已断开，请重新连接")
 			return
 		}
 		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 		defer cancel()
-		if err := stream.scroll.Send(ctx, params.Lines, params.Column, params.Row); err != nil {
+		var err error
+		if stream.responsive {
+			// Reuse the attached controller: a second attachment cannot acquire
+			// the same pane, and must not resize it back to the desktop layout.
+			direction, lines := "down", params.Lines
+			if lines < 0 {
+				direction, lines = "up", -lines
+			}
+			var commands []any
+			for lines > 0 {
+				step := min(lines, 3)
+				commands = append(commands, map[string]any{"type": "terminal.scroll", "direction": direction, "lines": step, "source": "wheel", "column": params.Column, "row": params.Row})
+				lines -= step
+			}
+			err = s.writeTerminalCommand(stream, commands...)
+		} else {
+			err = stream.scroll.Send(ctx, params.Lines, params.Column, params.Row)
+		}
+		if err != nil {
 			s.writeRequestError(message.RequestID, "scroll_failed", "终端滚动失败，请稍后重试："+err.Error())
 			return
 		}

@@ -43,19 +43,28 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
   await page.routeWebSocket('**/api/hosts/*/ws', (ws) => {
     let streamID = 0
     const paneStreams = new Map()
+    const sizes = new Map()
     closePane = (paneID, reason) => {
       assert.ok(paneStreams.has(paneID), 'fixture pane has no terminal stream')
       ws.send(JSON.stringify({ t: 'terminal.closed', stream_id: paneStreams.get(paneID), reason }))
     }
+    const responsiveANSI = (cols, rows) => '\x1b[2J' + Array.from({ length: rows }, (_, i) => `\x1b[${i + 1};1H${i === 0 ? 'Terminal 自适应' : '中文内容'.repeat(Math.max(1, Math.floor((cols - 6) / 8)))}\x1b[${i + 1};${cols - 2}HEND`).join('') + '\x1b[H'
     const emitFrame = (id, text) => {
+      const size = sizes.get(id) || { cols: 80, rows: 40 }
       const bytes = Buffer.from(text)
       const frame = Buffer.alloc(20 + bytes.length)
       frame.set([0x74, 1, 1, 1]); frame.writeUInt32LE(id, 4); frame.writeBigUInt64LE(1n, 8)
-      frame.writeUInt16LE(80, 16); frame.writeUInt16LE(40, 18); bytes.copy(frame, 20)
+      frame.writeUInt16LE(size.cols, 16); frame.writeUInt16LE(size.rows, 18); bytes.copy(frame, 20)
       ws.send(frame)
     }
     ws.onMessage((raw) => {
-      if (typeof raw !== 'string') { messages.push({ op: raw[2] }); return }
+      if (typeof raw !== 'string') {
+        const data = Buffer.from(raw), id = data.readUInt32LE(4)
+        const size = data[2] === 4 ? { cols: data.readUInt16LE(16), rows: data.readUInt16LE(18) } : null
+        messages.push({ op: data[2], stream_id: id, ...size })
+        if (size && sizes.get(id)?.responsive) { sizes.set(id, { ...size, responsive: true }); emitFrame(id, responsiveANSI(size.cols, size.rows)) }
+        return
+      }
       const message = JSON.parse(raw)
       messages.push(message)
       if (message.t === 'hello') {
@@ -65,8 +74,9 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
       } else if (message.t === 'terminal.open') {
         const id = ++streamID
         paneStreams.set(message.pane_id, id)
+        sizes.set(id, { cols: message.cols, rows: message.rows, responsive: message.responsive })
         ws.send(JSON.stringify({ t: 'terminal.opened', id: message.id, stream_id: id }))
-        emitFrame(id, ansi)
+        emitFrame(id, message.responsive ? responsiveANSI(message.cols, message.rows) : ansi)
       } else if (message.t === 'call') {
         if (message.method === 'workspace.create') {
           const workspace = { ...fixtureSnapshot.workspaces[0], workspace_id: 'created-workspace', active_tab_id: 'created-tab', number: 2, label: '新建工作区', pane_count: 1, tab_count: 1 }
@@ -330,7 +340,42 @@ try {
       assert.deepEqual(native.errors, [])
       await native.context.close()
 
-      for (const [width, height, touch] of [[320, 720, true], [390, 844, true], [844, 390, true], [768, 1024, true], [1024, 768, true], [720, 450, false]]) {
+      // Reproduce the reported 295-column desktop pane at 479px. The mock
+      // responds to resize exactly as the real PTY integration fixture does.
+      const wide = structuredClone(snapshot)
+      wide.panes = wide.panes.slice(0, 1)
+      wide.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 295, height: 40 } }]
+      const reflow = await fixture(browser, { viewport: { width: 479, height: 847 }, hasTouch: true }, wide)
+      const assertReflow = async () => {
+        await expect.poll(async () => { const m = await metrics(reflow.page); return m.font === 14 && m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
+        const lastRow = reflow.page.locator('.xterm-rows > div').last()
+        await expect(lastRow).toContainText('END')
+        await expect.poll(() => lastRow.evaluate(row => {
+          const edge = row.lastElementChild?.getBoundingClientRect(), viewport = row.closest('.terminal-viewport').getBoundingClientRect()
+          return Boolean(row.textContent.includes('END') && edge && edge.width > 0 && edge.right <= viewport.right + 1)
+        })).toBe(true)
+      }
+      await assertReflow()
+      assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).responsive, true)
+      assert.ok(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).cols < 70)
+      await screenshot(reflow.page, `${name}-295cols-responsive-479x847`)
+      const openCount = reflow.messages.filter(m => m.t === 'terminal.open').length
+      for (const [width, height] of [[390, 844], [320, 720], [700, 390], [479, 847]]) {
+        await reflow.page.setViewportSize({ width, height })
+        await assertReflow()
+      }
+      await reflow.page.evaluate(() => {
+        Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 360 })
+        window.visualViewport.dispatchEvent(new Event('resize'))
+      })
+      await expect.poll(() => reflow.page.locator('.keybar').evaluate(el => el.getBoundingClientRect().bottom)).toBe(360)
+      await assertReflow()
+      await expect.poll(() => reflow.messages.filter(m => m.op === 4).length).toBeGreaterThan(0)
+      assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').length, openCount, 'rotation or keyboard reopened the responsive terminal')
+      assert.deepEqual(reflow.errors, [])
+      await reflow.context.close()
+
+      for (const [width, height, touch] of [[320, 720, true], [390, 844, true], [479, 847, true], [844, 390, true], [768, 1024, true], [1024, 768, true], [720, 450, false]]) {
         const fixtureOptions = { viewport: { width, height }, deviceScaleFactor: touch ? 2 : 1, hasTouch: touch, ...(name !== 'firefox' ? { isMobile: touch } : {}) }
         const f = await fixture(browser, fixtureOptions)
         const compact = width < 768 || (touch && width < 1024 && height <= 600)
@@ -352,9 +397,10 @@ try {
           assert.ok(Math.abs((await f.page.locator('.keybar').boundingBox()).y + (await f.page.locator('.keybar').boundingBox()).height - height) <= 1, 'keyboard toolbar must stay at the viewport bottom')
           if (height >= 430) {
             await expect(f.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
-            await f.page.getByRole('button', { name: '全屏内容', exact: true }).click()
+            await expect(f.page.getByRole('button', { name: '自适应', exact: true })).toHaveAttribute('aria-pressed', 'true')
             await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
-            await f.page.getByRole('button', { name: '可读字号', exact: true }).click()
+            await f.page.getByRole('button', { name: '自适应', exact: true }).click()
+            await f.page.getByRole('button', { name: '原始画面', exact: true }).click()
             await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
           }
         }
@@ -364,7 +410,11 @@ try {
           assert.ok(sizes.every((s) => s.height >= 44 && s.width >= 44), `touch target smaller than 44px: ${JSON.stringify(sizes)}`)
         }
         await screenshot(f.page, `${name}-${width}x${height}`)
-        if (name === 'chromium' && width === 390) await touchAndKeyboardChecks(f.context, f.page)
+        if (name === 'chromium' && width === 390) {
+          await f.page.getByRole('button', { name: '自适应', exact: true }).click()
+          await touchAndKeyboardChecks(f.context, f.page)
+          await f.page.getByRole('button', { name: '原始画面', exact: true }).click()
+        }
         await f.page.getByRole('button', { name: '工作台设置', exact: true }).click()
         await expect(f.page.getByRole('slider', { name: '终端字号', exact: true })).toBeVisible()
         await setSlider(f.page, '终端字号', 18)
