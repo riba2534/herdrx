@@ -30,23 +30,26 @@ func (w *socketWriter) JSON(ctx context.Context, value any) error {
 	if err != nil {
 		return err
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	// A write with an already-canceled access context can abort the socket
-	// before its dedicated closer delivers the login-expired close frame.
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return w.conn.Write(ctx, websocket.MessageText, encoded)
+	return w.write(ctx, websocket.MessageText, encoded)
 }
 
 func (w *socketWriter) Binary(ctx context.Context, encoded []byte) error {
+	return w.write(ctx, websocket.MessageBinary, encoded)
+}
+
+func (w *socketWriter) write(ctx context.Context, typ websocket.MessageType, encoded []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return w.conn.Write(ctx, websocket.MessageBinary, encoded)
+	// Revocation must reject new output without canceling an admitted frame:
+	// the WebSocket library closes the transport when a write context ends.
+	// The dedicated closer owns access shutdown; this separate timeout also
+	// bounds a stalled write while access remains valid.
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	return w.conn.Write(writeCtx, typ, encoded)
 }
 
 type workbenchMessage struct {
