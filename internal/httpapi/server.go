@@ -55,6 +55,7 @@ type API struct {
 	enrollmentMu       sync.Mutex
 	enrollmentRunning  map[string]bool
 	cliReleases        *cliReleaseCache
+	relay              *workbenchRelay
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {
@@ -106,6 +107,10 @@ func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets 
 		return nil, fmt.Errorf("open Web Push service: %w", err)
 	}
 	api.push = pushService
+	if err := api.initRelay(); err != nil {
+		api.push.Close()
+		return nil, err
+	}
 	background, cancel := context.WithCancel(context.Background())
 	api.stopBackground = cancel
 	go api.monitorPush(background)
@@ -113,6 +118,9 @@ func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets 
 }
 
 func (a *API) Close() {
+	if a.relay != nil && a.relay.server != nil {
+		a.relay.server.Close()
+	}
 	a.access.close()
 	if a.stopBackground != nil {
 		a.stopBackground()
@@ -129,8 +137,13 @@ func (a *API) Handler() http.Handler {
 	router.Use(middleware.Recoverer)
 	router.Use(a.securityHeaders)
 	router.Get("/healthz", a.health)
+	if a.relay != nil && a.relay.server != nil {
+		router.Handle("/derp", a.relay.server)
+		router.Handle("/derp/*", a.relay.server)
+	}
 	router.Route("/api", func(router chi.Router) {
 		router.Use(a.guardWrites)
+		router.With(requireJSON).Post("/relay/register", a.registerRelayNodes)
 		router.Get("/bootstrap/status", a.bootstrapStatus)
 		router.With(requireJSON).Post("/bootstrap", a.bootstrap)
 		router.With(requireJSON).Post("/login", a.login)

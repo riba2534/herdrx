@@ -24,14 +24,14 @@
 推荐直接复制网站第一步提供的 **GitHub 一行安装命令**。页面自动填写可用版本，无需替换工作台地址；当前预发布版示例：
 
 ```sh
-curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.1/install-herdrx.sh | sh -s -- --version v0.1.0-rc.1
+curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.2/install-herdrx.sh | sh -s -- --version v0.1.0-rc.2
 ```
 
 页面选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将脚本下载地址与安装版本固定到同一标签。脚本和安装包均直接从 GitHub 获取，安装过程不依赖任何工作台或个人域名。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。
 
 安装脚本需要 curl、tar、coreutils（或 shasum），默认安装到 `~/.local/bin/herdrx`。后续教程直接使用这个路径；若想直接输入 `herdrx`，可自行将 `export PATH="$HOME/.local/bin:$PATH"` 加入 shell 配置。
 
-需要安装其他版本时，将下载地址和 `--version` 的标签同时换成对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 的版本。也可以先下载 `install-herdrx.sh` 再运行 `sh install-herdrx.sh --version v0.1.0-rc.1`。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
+需要安装其他版本时，将下载地址和 `--version` 的标签同时换成对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 的版本。也可以先下载 `install-herdrx.sh` 再运行 `sh install-herdrx.sh --version v0.1.0-rc.2`。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
 
 手动安装：从同一个 Release 下载适合 CPU 的包和 `SHA256SUMS`，在下载目录执行以下命令。ARM64 将示例中的 `amd64` 改成 `arm64`。
 
@@ -87,7 +87,9 @@ loginctl enable-linger "$(id -un)"
 
 ## 3. 绑定主机
 
-在远程主机上执行：
+优先复制网页第三步生成的命令。CLI v0.1.0-rc.2 起，公网 HTTPS 工作台可提供自带中继，命令会附带 `--workbench` 与 `--relay-token`。远程主机探测失败时会在生成绑定凭据前回退公共中继。临时中继授权 20 分钟有效，请勿分享；命令过期后从网页重新复制。已有未过期的绑定凭据会复用原区域，需要重新选择时给新命令追加 `--renew`。
+
+直接使用公共中继或已有自定义配置时，在远程主机上执行：
 
 ```sh
 ~/.local/bin/herdrx connect --plain
@@ -108,8 +110,8 @@ loginctl enable-linger "$(id -un)"
 已安装的 CLI 可以直接从 GitHub 检查和安装签名版本：
 
 ```sh
-~/.local/bin/herdrx update --version v0.1.0-rc.1 --check
-~/.local/bin/herdrx update --version v0.1.0-rc.1
+~/.local/bin/herdrx update --version v0.1.0-rc.2 --check
+~/.local/bin/herdrx update --version v0.1.0-rc.2
 ~/.local/bin/herdrx status
 ```
 
@@ -134,7 +136,7 @@ loginctl enable-linger "$(id -un)"
 
 ## 自建中继与端点迁移
 
-网站默认 HTTP，中继配置与浏览器访问网站的地址无关。选择自建 DERP 时，在远程主机准备 `derp.json`，使用实际中继主机替换示例地址：
+网站默认 HTTP，直接使用公共或手动配置的中继。部署者另行配置了公网 HTTPS 时，可使用[工作台自带中继](operations.md#工作台自带中继)，从原主机卡片「更新连接端点」复制命令并导入输出包。选择自建 DERP 时，在远程主机准备 `derp.json`，使用实际中继主机替换示例地址：
 
 ```json
 {

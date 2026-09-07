@@ -515,7 +515,7 @@ func (s *IPCServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 		OverallReady:  preflight.Status == PreflightOK && cfgValid,
 	}
 	if r.URL.Query().Get("network") == "true" {
-		doc.DERP = tunnel.ProbeDERPRegion(r.Context(), regionFromConfig(cfg))
+		doc.DERP = probeConfiguredRelay(r.Context(), cfg)
 		reachable := false
 		for _, probe := range doc.DERP {
 			reachable = reachable || probe.Reachable
@@ -528,6 +528,7 @@ func (s *IPCServer) handleDoctor(w http.ResponseWriter, r *http.Request) {
 }
 
 type ConnectResult struct {
+	Relay            string    `json:"relay,omitempty"`
 	ConnectionString string    `json:"connection_string"`
 	EnrollmentID     string    `json:"enrollment_id"`
 	ExpiresAt        time.Time `json:"expires_at"`
@@ -541,6 +542,13 @@ func (s *IPCServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var input connectRequest
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil && err != io.EOF {
+		http.Error(w, "invalid connect request", 400)
 		return
 	}
 
@@ -570,7 +578,7 @@ func (s *IPCServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := s.issueEnrollment(cfg, renew)
+	res, err := s.issueEnrollment(cfg, renew, input.Relay)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -629,18 +637,19 @@ func (s *IPCServer) rebuildPersistedConnectionString(cfg Config) (string, error)
 		return "", err
 	}
 	payload := tunnel.ConnectionPayload{
-		V:            1,
-		AgentID:      cfg.SetupID,
-		TailcatAddr:  addr,
-		ClientPriv:   string(privTxt),
-		SSHHostKey:   strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))),
-		EnrollmentID: cfg.Enrollment.EnrollmentID,
-		PairSecret:   cfg.Enrollment.PairSecret,
-		Host:         hostname(),
-		OS:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		AgentVer:     Version,
-		Exp:          cfg.Enrollment.ExpiresAt.Unix(),
+		RelayProbeNode: relayProbePublic(cfg),
+		V:              1,
+		AgentID:        cfg.SetupID,
+		TailcatAddr:    addr,
+		ClientPriv:     string(privTxt),
+		SSHHostKey:     strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))),
+		EnrollmentID:   cfg.Enrollment.EnrollmentID,
+		PairSecret:     cfg.Enrollment.PairSecret,
+		Host:           hostname(),
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		AgentVer:       Version,
+		Exp:            cfg.Enrollment.ExpiresAt.Unix(),
 	}
 	connStr, err := tunnel.BuildConnectionString(payload)
 	if err != nil {
@@ -691,7 +700,7 @@ func (s *IPCServer) startEphemeralFromConfig(cfg Config) error {
 	return nil
 }
 
-func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, error) {
+func (s *IPCServer) issueEnrollment(cfg Config, renew bool, relays ...*tunnel.RelayBootstrap) (ConnectResult, error) {
 	s.mu.Lock()
 	if s.ephemServer != nil {
 		_ = s.ephemServer.Close()
@@ -716,6 +725,18 @@ func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, erro
 	ephemPSK := tailcat.NewPresharedKey()
 	tempClientKey := key.NewNode()
 	expiresAt := time.Now().Add(10 * time.Minute)
+	var selected *tunnel.RelayBootstrap
+	if len(relays) > 0 {
+		selected = relays[0]
+	}
+	nodes := []key.NodePublic{cfg.Node.Private.Public(), ephemNodeKey.Public(), tempClientKey.Public()}
+	if selected != nil {
+		if cfg.RelayProbePrivate.IsZero() {
+			cfg.RelayProbePrivate = key.NewNode()
+		}
+		nodes = append(nodes, cfg.RelayProbePrivate.Public())
+	}
+	region, relayStatus := selectWorkbenchRelay(context.Background(), cfg, selected, nodes)
 
 	hostSigner, err := ssh.ParsePrivateKey([]byte(cfg.SSHHostPrivate))
 	if err != nil {
@@ -733,7 +754,7 @@ func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, erro
 	}
 
 	ephemSrv, err := tunnel.StartEphemeralPairingServer(
-		enrollCtx, s.twoPhaseState, cfg.SetupID, hostSigner, regionFromConfig(cfg), s.formalStarter(hostSigner),
+		enrollCtx, s.twoPhaseState, cfg.SetupID, hostSigner, region, s.formalStarter(hostSigner),
 	)
 	if err != nil {
 		return ConnectResult{}, fmt.Errorf("start ephemeral pairing server: %v", err)
@@ -745,18 +766,19 @@ func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, erro
 		return ConnectResult{}, fmt.Errorf("marshal client private key: %w", err)
 	}
 	payload := tunnel.ConnectionPayload{
-		V:            1,
-		AgentID:      cfg.SetupID,
-		TailcatAddr:  enrollCtx.TailcatAddr,
-		ClientPriv:   string(tempClientPrivTxt),
-		SSHHostKey:   strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))),
-		EnrollmentID: enrollmentID,
-		PairSecret:   pairSecret,
-		Host:         hostname(),
-		OS:           runtime.GOOS,
-		Arch:         runtime.GOARCH,
-		AgentVer:     Version,
-		Exp:          expiresAt.Unix(),
+		RelayProbeNode: relayProbePublic(cfg),
+		V:              1,
+		AgentID:        cfg.SetupID,
+		TailcatAddr:    enrollCtx.TailcatAddr,
+		ClientPriv:     string(tempClientPrivTxt),
+		SSHHostKey:     strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))),
+		EnrollmentID:   enrollmentID,
+		PairSecret:     pairSecret,
+		Host:           hostname(),
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		AgentVer:       Version,
+		Exp:            expiresAt.Unix(),
 	}
 	connStr, err := tunnel.BuildConnectionString(payload)
 	if err != nil {
@@ -769,6 +791,7 @@ func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, erro
 			return errors.New("agent binding changed during connect")
 		}
 		c.Revoked = false
+		c.RelayProbePrivate = cfg.RelayProbePrivate
 		c.Enrollment = agent.EnrollmentConfig{
 			EnrollmentID:      enrollmentID,
 			EphemeralNodeKey:  ephemNodeKey,
@@ -802,6 +825,7 @@ func (s *IPCServer) issueEnrollment(cfg Config, renew bool) (ConnectResult, erro
 	s.mu.Unlock()
 
 	return ConnectResult{
+		Relay:            relayStatus,
 		ConnectionString: connStr,
 		EnrollmentID:     enrollmentID,
 		ExpiresAt:        expiresAt,

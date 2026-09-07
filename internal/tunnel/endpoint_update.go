@@ -13,21 +13,23 @@ import (
 
 	"github.com/tailscale/tailcat"
 	"golang.org/x/crypto/ssh"
+	"tailscale.com/types/key"
 )
 
 const EndpointUpdatePrefix = "herdrx://endpoint-v1/"
 const endpointSignatureDomain = "herdrx endpoint update v1\x00"
 
 type EndpointUpdate struct {
-	Version      int    `json:"v"`
-	AgentID      string `json:"agent_id"`
-	ControllerID string `json:"controller_id"`
-	BindingID    string `json:"binding_id"`
-	ClientNode   string `json:"client_node"`
-	Address      string `json:"tc"`
-	Revision     int64  `json:"revision"`
-	CreatedAt    int64  `json:"created_at"`
-	ExpiresAt    int64  `json:"expires_at"`
+	RelayProbeNode string `json:"relay_probe_node,omitempty"`
+	Version        int    `json:"v"`
+	AgentID        string `json:"agent_id"`
+	ControllerID   string `json:"controller_id"`
+	BindingID      string `json:"binding_id"`
+	ClientNode     string `json:"client_node"`
+	Address        string `json:"tc"`
+	Revision       int64  `json:"revision"`
+	CreatedAt      int64  `json:"created_at"`
+	ExpiresAt      int64  `json:"expires_at"`
 }
 type endpointEnvelope struct {
 	Payload   EndpointUpdate `json:"payload"`
@@ -122,6 +124,12 @@ func VerifyEndpointUpdate(raw string, expected EndpointIdentity) (EndpointUpdate
 	return payload, nil
 }
 func validateEndpointPayload(p EndpointUpdate, now time.Time) error {
+	if p.RelayProbeNode != "" {
+		var probe key.NodePublic
+		if probe.UnmarshalText([]byte(p.RelayProbeNode)) != nil || probe.IsZero() {
+			return errors.New("invalid relay probe identity")
+		}
+	}
 	if p.Version != 1 || p.Revision <= 0 {
 		return errors.New("invalid endpoint update version")
 	}

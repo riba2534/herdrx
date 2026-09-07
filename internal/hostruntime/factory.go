@@ -163,6 +163,7 @@ func dialTailcatSSH(ctx context.Context, address string, nodePrivate key.NodePri
 }
 
 type TailcatCredential struct {
+	RelayProbeNode    string          `json:"relay_probe_node,omitempty"`
 	BindingID         string          `json:"binding_id,omitempty"`
 	EndpointVersion   int64           `json:"endpoint_version,omitempty"`
 	NodePrivate       key.NodePrivate `json:"node_private"`

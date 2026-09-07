@@ -1,38 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ExternalLink } from 'lucide-react'
 import { api, type CLIRelease } from '../lib/api'
 import { Button } from './ui'
+import { RelayConnectCommand } from './RelayConnectCommand'
+import { Command } from './SetupCommand'
 
 const repository = 'https://github.com/riba2534/herdrx'
 const steps = ['安装 CLI', '后台运行', '绑定主机']
 
-function Command({ title, value }: { title: string; value: string }) {
-  const [copied, setCopied] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const text = useRef<HTMLPreElement>(null)
-  useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(timer)
-  }, [copied])
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(true); setFailed(false)
-    } catch {
-      // LAN deployments may use HTTP, where the clipboard API is unavailable.
-      const selection = window.getSelection(), range = document.createRange()
-      range.selectNodeContents(text.current!)
-      selection?.removeAllRanges(); selection?.addRange(range)
-      setFailed(true)
-    }
-  }
-  return <div className="setup-command">
-    <div className="setup-command-heading"><span>{title}</span><Button type="button" className="button-ghost" aria-label={`复制${title}`} onClick={() => void copy()}>{copied ? <Check size={14}/> : <Copy size={14}/>}<span>{copied ? '已复制' : '复制'}</span></Button></div>
-    <pre ref={text} tabIndex={0} aria-label={title}><code>{value}</code></pre>
-    {failed && <small role="status">命令已选中，请使用系统菜单或 Ctrl/Cmd+C 复制。</small>}
-  </div>
-}
 
 export function TailcatSetupGuide({ children, pending, resuming, onClose }: { children: ReactNode; pending: boolean; resuming: boolean; onClose: () => void }) {
   const [step, setStep] = useState(resuming ? 2 : 0)
@@ -78,7 +53,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
     </div>}
     {step === 2 && <div className="form-stack">
       <p className="field-hint">后台服务就绪后，生成一次性绑定凭据并粘贴到下方。绑定完成会自动进入工作台。</p>
-      <Command title="生成绑定凭据" value="~/.local/bin/herdrx connect --plain"/>
+      <RelayConnectCommand release={release}/>
       {children}
       <details className="setup-details"><summary>凭据过期或连接失败</summary><p className="field-hint">重新运行 <code>~/.local/bin/herdrx connect --plain</code> 获取有效凭据；要作废尚未使用的旧凭据，请执行 <code>~/.local/bin/herdrx connect --renew --plain</code>。通过 <code>~/.local/bin/herdrx status</code>、<code>~/.local/bin/herdrx doctor</code>、<code>~/.local/bin/herdrx logs -n 100</code> 检查服务和网络。</p></details>
     </div>}

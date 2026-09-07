@@ -127,6 +127,7 @@ func (a *API) createTailcatEnrollment(writer http.ResponseWriter, request *http.
 	ctrlID := "ctrl_" + mustToken(12)
 	claim := mustToken(18)
 	secret, err := json.Marshal(hostruntime.TailcatCredential{
+		RelayProbeNode:    parsed.Payload.RelayProbeNode,
 		NodePrivate:       formalNodeKey,
 		SSHPrivate:        string(formalSSHPrivPEM),
 		BootstrapAddr:     parsed.Payload.TailcatAddr,

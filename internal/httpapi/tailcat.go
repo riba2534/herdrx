@@ -37,6 +37,7 @@ type pairAgentRequest struct {
 }
 
 func (a *API) tailcatRoutes(router chi.Router) {
+	router.With(a.requireCSRF).Post("/relay-offer", a.createRelayOffer)
 	router.With(a.requireCSRF).Post("/setups", a.createTailcatSetup)
 	router.With(a.requireCSRF).Post("/pair", a.pairTailcatAgent)
 	router.With(a.requireCSRF).Post("/enrollments", a.createTailcatEnrollment)

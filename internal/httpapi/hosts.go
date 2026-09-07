@@ -273,9 +273,9 @@ func (a *API) hostSnapshot(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusNotFound, "host_not_found", "host not found")
 		return
 	}
-	ctx, cancel := context.WithTimeout(request.Context(), 20*time.Second)
-	defer cancel()
-	endpoint, err := a.hosts.Open(ctx, host)
+	connectCtx, cancelConnect := context.WithTimeout(request.Context(), a.config.HostDialTimeout)
+	endpoint, err := a.hosts.Open(connectCtx, host)
+	cancelConnect()
 	if err != nil {
 		var unknown *herdr.UnknownHostKeyError
 		if errors.As(err, &unknown) {
@@ -286,8 +286,16 @@ func (a *API) hostSnapshot(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer endpoint.Close()
+	// A cold Tailcat/SSH connection must not consume the RPC's entire budget.
+	// Match the workbench WebSocket path: begin the snapshot timeout only once
+	// the shared transport is ready, while still honoring request cancellation.
+	ctx, cancel := context.WithTimeout(request.Context(), 10*time.Second)
+	defer cancel()
 	snapshot, err := endpoint.Snapshot(ctx)
 	if err != nil {
+		if request.Context().Err() == nil {
+			a.hosts.CloseHost(host.ID)
+		}
 		writeError(writer, http.StatusBadGateway, "herdr_unavailable", err.Error())
 		return
 	}

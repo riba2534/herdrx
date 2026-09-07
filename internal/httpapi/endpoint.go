@@ -64,7 +64,7 @@ func (a *API) refreshTailcatEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.Revision == secret.EndpointVersion {
-		if payload.Address != raw {
+		if payload.Address != raw || payload.RelayProbeNode != secret.RelayProbeNode {
 			writeError(w, 409, "endpoint_conflict", "此版本已导入其他地址，请重新生成更新包")
 			return
 		}
@@ -77,6 +77,7 @@ func (a *API) refreshTailcatEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	secret.RawFormalAddr = payload.Address
+	secret.RelayProbeNode = payload.RelayProbeNode
 	secret.FormalTailcatAddr = payload.Address
 	secret.DialFormalAddr = dial
 	secret.EndpointVersion = payload.Revision

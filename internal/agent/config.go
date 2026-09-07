@@ -39,22 +39,23 @@ type BindingConfig struct {
 }
 
 type Config struct {
-	EndpointVersion  int64                `json:"endpoint_version,omitempty"`
-	Version          int                  `json:"version"`
-	Node             tailcat.PrivateKey   `json:"node"`
-	PresharedKey     tailcat.PresharedKey `json:"preshared_key,omitempty"`
-	AllowedNodeKey   string               `json:"allowed_node_key,omitempty"`
-	AuthorizedSSHKey string               `json:"authorized_ssh_key,omitempty"`
-	SSHHostPrivate   string               `json:"ssh_host_private"`
-	SSHHostPublic    string               `json:"ssh_host_public,omitempty"`
-	PublicURL        string               `json:"public_url,omitempty"`
-	SetupID          string               `json:"setup_id,omitempty"`
-	PairTokenHash    string               `json:"pair_token_hash,omitempty"`
-	PairExpiresAt    time.Time            `json:"pair_expires_at,omitempty"`
-	Paired           bool                 `json:"paired"`
-	Revoked          bool                 `json:"revoked"`
-	HerdrBin         string               `json:"herdr_bin,omitempty"`
-	LegacyNoPSK      bool                 `json:"legacy_no_psk,omitempty"`
+	RelayProbePrivate key.NodePrivate      `json:"relay_probe_private,omitempty"`
+	EndpointVersion   int64                `json:"endpoint_version,omitempty"`
+	Version           int                  `json:"version"`
+	Node              tailcat.PrivateKey   `json:"node"`
+	PresharedKey      tailcat.PresharedKey `json:"preshared_key,omitempty"`
+	AllowedNodeKey    string               `json:"allowed_node_key,omitempty"`
+	AuthorizedSSHKey  string               `json:"authorized_ssh_key,omitempty"`
+	SSHHostPrivate    string               `json:"ssh_host_private"`
+	SSHHostPublic     string               `json:"ssh_host_public,omitempty"`
+	PublicURL         string               `json:"public_url,omitempty"`
+	SetupID           string               `json:"setup_id,omitempty"`
+	PairTokenHash     string               `json:"pair_token_hash,omitempty"`
+	PairExpiresAt     time.Time            `json:"pair_expires_at,omitempty"`
+	Paired            bool                 `json:"paired"`
+	Revoked           bool                 `json:"revoked"`
+	HerdrBin          string               `json:"herdr_bin,omitempty"`
+	LegacyNoPSK       bool                 `json:"legacy_no_psk,omitempty"`
 
 	// P2 扩展结构：
 	Enrollment EnrollmentConfig `json:"enrollment,omitempty"`

@@ -52,9 +52,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export type CLIRelease = { status: 'available' | 'unpublished' | 'unavailable'; version?: string; prerelease?: boolean }
+export type RelayOffer = { available: boolean; workbench?: string; token?: string; address?: string; expires_at?: string }
 
 export const api = {
   cliRelease: () => request<CLIRelease>('/api/cli-release'),
+  relayOffer: () => request<RelayOffer>('/api/tailcat/relay-offer', { method: 'POST' }),
   bootstrapStatus: () => request<{ required: boolean; registration: 'invite' | 'closed' }>('/api/bootstrap/status'),
   bootstrap: (input: { email: string; password: string; display_name: string; token: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/bootstrap', { method: 'POST', body: JSON.stringify(input) }),

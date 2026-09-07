@@ -28,6 +28,8 @@ type Config struct {
 	AllowPrivateHosts   bool
 	DERPHost            string
 	DERPRegionID        int
+	DERPRelayMode       string
+	DERPSTUNAddr        string
 	TrustedProxies      []netip.Prefix
 	AuthHashConcurrency int
 }
@@ -56,6 +58,8 @@ func Load() (Config, error) {
 		AllowPrivateHosts:   envBool("HERDRX_ALLOW_PRIVATE_HOSTS", true),
 		DERPHost:            strings.TrimSpace(os.Getenv("HERDRX_DERP_HOST")),
 		DERPRegionID:        envInt("HERDRX_DERP_REGION_ID", 304),
+		DERPRelayMode:       env("HERDRX_DERP_RELAY", "auto"),
+		DERPSTUNAddr:        env("HERDRX_DERP_STUN_ADDR", "off"),
 		AuthHashConcurrency: 2,
 	}
 	for name, target := range map[string]*int{
@@ -120,6 +124,12 @@ func Load() (Config, error) {
 }
 
 func (cfg *Config) Validate() error {
+	if cfg.DERPRelayMode == "" {
+		cfg.DERPRelayMode = "auto"
+	}
+	if cfg.DERPRelayMode != "auto" && cfg.DERPRelayMode != "off" {
+		return fmt.Errorf("HERDRX_DERP_RELAY must be auto or off")
+	}
 	origin, err := NormalizeOrigin(cfg.PublicURL)
 	if err != nil {
 		return fmt.Errorf("HERDRX_PUBLIC_URL: %w", err)

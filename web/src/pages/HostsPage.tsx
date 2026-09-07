@@ -8,6 +8,7 @@ import { useAuth } from '../auth'
 import { Button, EmptyState } from '../components/ui'
 import { HostFolders, folderOptions } from '../components/HostFolders'
 import { TailcatSetupGuide } from '../components/TailcatSetupGuide'
+import { RelayConnectCommand } from '../components/RelayConnectCommand'
 import { Modal } from '../components/Modal'
 import { PrivateKeyInput } from '../components/PrivateKeyInput'
 import { AppearanceToggle } from '../components/AppearanceToggle'
@@ -368,7 +369,8 @@ export function HostsPage() {
     {movingHost && <Modal title={`移动 ${movingHost.name}`} busy={movePending} onClose={() => setMovingHost(null)}><Form className="form-stack" onSubmit={(event) => void move(event)}><label className="field"><span className="field-label">目标文件夹</span><Select aria-label="目标文件夹" className="input" data-initial-focus value={moveFolder} onChange={(event) => setMoveFolder(event.target.value)} disabled={movePending}><SelectOption value="">未分组</SelectOption>{options.map((folder) => <SelectOption key={folder.id} value={folder.id}>{folder.path}</SelectOption>)}</Select></label>{moveError && <p className="field-error" role="alert">{moveError}</p>}<div className="modal-actions"><Button type="button" className="button-secondary" disabled={movePending} onClick={() => setMovingHost(null)}>取消</Button><Button type="submit" className="button-primary" pending={movePending}>移动主机</Button></div></Form></Modal>}
     {publicKey && <Modal title="安装公钥" onClose={() => setPublicKey('')}><p>把下面这一整行加入目标用户的 <code>~/.ssh/authorized_keys</code>，然后打开主机确认指纹。</p><pre className="key-block">{publicKey}</pre><div className="modal-actions"><Button className="button-secondary" onClick={() => void navigator.clipboard.writeText(publicKey)}><Copy size={16}/>复制</Button><Button className="button-primary" onClick={() => setPublicKey('')}>完成</Button></div></Modal>}
     {endpointHost && <Modal title={`更新连接端点 · ${endpointHost.name}`} busy={endpointPending} onClose={() => { setEndpointHost(null); setEndpointUpdate('') }}>
-      <p>更换中继后，在这台远程主机上运行 <code>herdrx connect --refresh-endpoint --plain</code>，将更新包粘贴到这里。原绑定和远程任务会保留。</p>
+      <p>在这台远程主机上运行下面的命令，将更新包粘贴到这里。原绑定和远程任务会保留。</p>
+      <RelayConnectCommand refresh/>
       <Form className="form-stack" onSubmit={(event) => void importEndpoint(event)}>
         <label className="field"><span className="field-label">签名端点更新包</span><Textarea className="input" data-initial-focus aria-label="签名端点更新包" value={endpointUpdate} onChange={(event) => setEndpointUpdate(event.target.value)} maxLength={16384} disabled={endpointPending} autoComplete="off" spellCheck={false} required placeholder="herdrx://endpoint-v1/…"/></label>
         <p className="field-hint">更新包含敏感连接地址，10 分钟内有效，请勿分享。</p>

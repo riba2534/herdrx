@@ -112,6 +112,8 @@ sudo cat ./data/bootstrap-token
 2. 执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，按提示启用后台保活。
 3. 执行 `~/.local/bin/herdrx connect --plain`，将一次性绑定凭据粘贴到页面并连接。
 
+从网页复制连接命令时，会优先探测工作台自带中继；工作台具有公网 HTTPS 且中继握手成功时优先使用，连不通则在生成凭据前回退公共中继。默认 HTTP 部署直接使用公共中继，无需额外配置。已有绑定可通过主机卡片「更新连接端点」迁移。
+
 绑定凭据 10 分钟内有效且只能使用一次，请勿公开分享。完整安装、后台运行、手动下载及排障见 [Tailcat 接入教程](docs/tailcat-quickstart.md)。
 
 ## 日常使用
@@ -161,6 +163,8 @@ docker start herdrx                                # 启动网站
 | `HERDRX_ALLOWED_ORIGINS` | 额外允许的完整访问地址，多个用逗号分隔 |
 | `HERDRX_TRUSTED_PROXIES` | 反向代理的出口 IP/CIDR，直接访问时留空 |
 | `HERDRX_MAX_HOST_CONNECTIONS=20` | 全实例同时连接的主机上限 |
+| `HERDRX_DERP_RELAY=auto` | 公网 HTTPS 工作台自动提供受限中继；`off` 关闭 |
+| `HERDRX_DERP_STUN_ADDR=off` | 可选 UDP STUN，开启方式见运维文档 |
 | `HERDRX_HOST_DIAL_CONCURRENCY=4` | 同时建立连接的数量上限 |
 | `HERDRX_SESSION_TTL=720h` | Web 登录有效期 |
 

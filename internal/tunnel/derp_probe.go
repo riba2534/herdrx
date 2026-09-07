@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/derp"
 	"tailscale.com/derp/derphttp"
 	"tailscale.com/net/netmon"
 	"tailscale.com/tailcfg"
@@ -25,6 +26,12 @@ type DERPProbe struct {
 // ProbeDERPRegion performs an authenticated DERP protocol handshake using an
 // unrelated ephemeral relay identity. It does not join a host's Tailcat tunnel.
 func ProbeDERPRegion(ctx context.Context, region *tailcfg.DERPRegion) []DERPProbe {
+	return ProbeDERPRegionWithKey(ctx, region, key.NewNode())
+}
+
+// ProbeDERPRegionWithKey supports relays which admit only registered nodes.
+// Use a separate diagnostic identity; reusing an active node disconnects it.
+func ProbeDERPRegionWithKey(ctx context.Context, region *tailcfg.DERPRegion, probeKey key.NodePrivate) []DERPProbe {
 	if region == nil || len(region.Nodes) == 0 || len(region.Nodes) > 8 {
 		return []DERPProbe{{Stage: "configuration", Error: "尚未保存固定中继区域，请先运行 herdrx connect 或用 setup --derp-config 配置"}}
 	}
@@ -69,13 +76,22 @@ func ProbeDERPRegion(ctx context.Context, region *tailcfg.DERPRegion) []DERPProb
 			result.Stage = "DERP/TLS"
 			monitor := netmon.NewStatic()
 			defer monitor.Close()
-			client := derphttp.NewRegionClient(key.NewNode(), logger.Discard, monitor, func() *tailcfg.DERPRegion { return validated })
+			client := derphttp.NewRegionClient(probeKey, logger.Discard, monitor, func() *tailcfg.DERPRegion { return validated })
 			defer client.Close()
 			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
+			stop := context.AfterFunc(probeCtx, func() { _ = client.Close() })
+			defer stop()
 			start := time.Now()
 			if err := client.Connect(probeCtx); err != nil {
 				result.Error = fmt.Sprintf("DERP 握手失败：%v", err)
+				return
+			}
+			// Connect only exchanges the public key and sends ClientInfo. A
+			// relay can still reject admission before sending ServerInfo.
+			message, err := client.Recv()
+			if _, ok := message.(derp.ServerInfoMessage); err != nil || !ok {
+				result.Error = fmt.Sprintf("DERP 授权握手失败：%v", err)
 				return
 			}
 			result.Reachable = true

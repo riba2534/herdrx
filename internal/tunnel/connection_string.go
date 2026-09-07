@@ -14,23 +14,24 @@ import (
 )
 
 const (
-	PrefixV1              = "herdrx://v1/"
+	PrefixV1               = "herdrx://v1/"
 	MaxConnectionStringLen = 16 * 1024 // 16 KiB
 )
 
 type ConnectionPayload struct {
-	V            int    `json:"v"`
-	AgentID      string `json:"agent_id"`
-	TailcatAddr  string `json:"tc"`
-	ClientPriv   string `json:"tc_client_priv"`
-	SSHHostKey   string `json:"ssh_host_key"`
-	EnrollmentID string `json:"enrollment_id"`
-	PairSecret   string `json:"pair_secret"`
-	Host         string `json:"host,omitempty"`
-	OS           string `json:"os,omitempty"`
-	Arch         string `json:"arch,omitempty"`
-	AgentVer     string `json:"agent_ver,omitempty"`
-	Exp          int64  `json:"exp,omitempty"`
+	RelayProbeNode string `json:"relay_probe_node,omitempty"`
+	V              int    `json:"v"`
+	AgentID        string `json:"agent_id"`
+	TailcatAddr    string `json:"tc"`
+	ClientPriv     string `json:"tc_client_priv"`
+	SSHHostKey     string `json:"ssh_host_key"`
+	EnrollmentID   string `json:"enrollment_id"`
+	PairSecret     string `json:"pair_secret"`
+	Host           string `json:"host,omitempty"`
+	OS             string `json:"os,omitempty"`
+	Arch           string `json:"arch,omitempty"`
+	AgentVer       string `json:"agent_ver,omitempty"`
+	Exp            int64  `json:"exp,omitempty"`
 }
 
 type ParsedConnection struct {
@@ -94,6 +95,12 @@ func ParseConnectionString(raw string) (*ParsedConnection, error) {
 
 	if payload.V != 1 {
 		return nil, fmt.Errorf("unsupported payload version %d", payload.V)
+	}
+	if payload.RelayProbeNode != "" {
+		var probe key.NodePublic
+		if probe.UnmarshalText([]byte(payload.RelayProbeNode)) != nil || probe.IsZero() {
+			return nil, errors.New("invalid relay probe identity")
+		}
 	}
 	if payload.AgentID == "" || len(payload.AgentID) > 128 {
 		return nil, errors.New("invalid or empty agent_id")

@@ -17,6 +17,7 @@ const server = createServer(async (req, res) => {
   if (path === '/api/bootstrap/status') body = { required: false, registration: 'closed' }
   else if (path === '/api/me') body = { user: { id: 'member', email: 'member@example.test', display_name: 'Lin', role: 'user' }, csrf_token: 'fixture', session_id: 'session' }
   else if (path === '/api/cli-release') body = fixture.release
+  else if (path === '/api/tailcat/relay-offer') body = fixture.relay || { available: false }
   else if (path === '/api/tailcat/enrollments' && req.method === 'POST') {
     let content = ''; for await (const chunk of req) content += chunk
     fixture.posted = JSON.parse(content)
@@ -140,6 +141,18 @@ try {
         if (engine === 'chromium' && [1440, 390].includes(width)) await capture(page, `install-${width}-dark`)
         await page.keyboard.press('Escape')
         await expect(page.getByRole('dialog')).toHaveCount(0)
+        fixture.release = { status: 'available', version: 'v0.1.0-rc.2', prerelease: true }
+        fixture.relay = { available: true, workbench: 'https://workbench.example.com', address: '203.0.113.20', token: 'a'.repeat(43), expires_at: new Date(Date.now() + 1_200_000).toISOString() }
+        await page.getByRole('button', { name: '添加主机', exact: true }).click()
+        await page.getByRole('button', { name: '已安装，下一步' }).click()
+        await page.getByRole('button', { name: '服务已就绪，下一步' }).click()
+        const relayCommand = `~/.local/bin/herdrx connect --plain --workbench 'https://workbench.example.com' --relay-token '${fixture.relay.token}' --relay-address '203.0.113.20'`
+        await expect(page.getByLabel('生成绑定凭据', { exact: true })).toHaveText(relayCommand)
+        await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: value => { window.__copiedCommand = value; return Promise.resolve() } } }))
+        await page.getByRole('button', { name: '复制生成绑定凭据', exact: true }).click()
+        assert.equal(await page.evaluate(() => window.__copiedCommand), relayCommand)
+        await fit(page)
+        await page.keyboard.press('Escape')
         assert.deepEqual(errors, [])
         await context.close()
       }

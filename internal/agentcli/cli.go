@@ -287,6 +287,9 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 	plain := fs.Bool("plain", false, "output connection string only on stdout")
 	refresh := fs.Bool("refresh-endpoint", false, "export a signed endpoint update for the current binding")
 	derpConfig := fs.String("derp-config", "", "JSON DERP region for an explicit endpoint migration")
+	workbench := fs.String("workbench", "", "prefer this public HTTPS workbench's built-in relay")
+	relayToken := fs.String("relay-token", "", "short-lived relay permission from the workbench")
+	relayAddress := fs.String("relay-address", "", "verified public workbench IP from the connection command")
 	renew := fs.Bool("renew", false, "revoke previous pending authorization and generate new string")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -299,11 +302,19 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 		fmt.Fprintln(stderr, "--derp-config requires --refresh-endpoint, which cannot be combined with --renew")
 		return 2
 	}
+	if (*derpConfig != "" && *workbench != "") || ((*relayToken == "") != (*workbench == "")) || (*relayAddress != "" && *workbench == "") {
+		fmt.Fprintln(stderr, "--workbench and --relay-token must be supplied together and cannot be combined with --derp-config")
+		return 2
+	}
 	cleanCfgPath, _ := filepath.Abs(filepath.Clean(*configPath))
 	sockPath := filepath.Join(env.RuntimeDir, "control.sock")
+	var relay *tunnel.RelayBootstrap
+	if *workbench != "" {
+		relay = &tunnel.RelayBootstrap{Workbench: strings.TrimRight(*workbench, "/"), Token: *relayToken, Address: *relayAddress}
+	}
 
 	if *refresh {
-		input := refreshEndpointRequest{}
+		input := refreshEndpointRequest{Relay: relay}
 		if *derpConfig != "" {
 			region, err := readDERPConfig(*derpConfig)
 			if err != nil {
@@ -320,6 +331,9 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 		if !*plain {
 			fmt.Fprintln(stdout, "在原网站打开该主机的“更新连接端点”，粘贴下面的更新包（10 分钟有效）。远程任务继续运行。")
 		}
+		if result.Relay != "" {
+			fmt.Fprintln(stderr, "中继选择："+result.Relay)
+		}
 		fmt.Fprintln(stdout, result.Update)
 		return 0
 	}
@@ -329,7 +343,7 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 	}
 
 	var connRes ConnectResult
-	err := ClientCallIPCWithConfig(sockPath, "POST", endpoint, cleanCfgPath, nil, &connRes)
+	err := ClientCallIPCWithConfig(sockPath, "POST", endpoint, cleanCfgPath, connectRequest{Relay: relay}, &connRes)
 	if err != nil {
 		if errors.Is(err, ErrDaemonOffline) {
 			fmt.Fprintln(stderr, "error: herdrx daemon is not running; please run 'herdrx setup' or start 'herdrx serve' first")
@@ -337,6 +351,9 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 			fmt.Fprintf(stderr, "connect failed: %v\n", err)
 		}
 		return 1
+	}
+	if connRes.Relay != "" {
+		fmt.Fprintln(stderr, "中继选择："+connRes.Relay)
 	}
 
 	if *plain {
@@ -475,7 +492,7 @@ func runDoctor(args []string, stdout, stderr io.Writer, env Environment, default
 	if *network && err != nil {
 		if cfg, loadErr := SafeLoadConfig(*configPath); loadErr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			doc.DERP = tunnel.ProbeDERPRegion(ctx, regionFromConfig(cfg))
+			doc.DERP = probeConfiguredRelay(ctx, cfg)
 			cancel()
 		}
 	}
