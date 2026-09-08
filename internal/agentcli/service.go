@@ -216,7 +216,11 @@ func launchdDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 func launchdTarget(label string) string { return launchdDomain() + "/" + label }
 
 func runLaunchctl(timeout time.Duration, args ...string) ([]byte, error) {
-	out, err := RunBoundedCommand(context.Background(), timeout, 64<<10, "launchctl", args...)
+	return runLaunchctlLimited(timeout, 64<<10, args...)
+}
+
+func runLaunchctlLimited(timeout time.Duration, maxBytes int64, args ...string) ([]byte, error) {
+	out, err := RunBoundedCommand(context.Background(), timeout, maxBytes, "launchctl", args...)
 	if err != nil {
 		return out, fmt.Errorf("launchctl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
@@ -226,11 +230,17 @@ func runLaunchctl(timeout time.Duration, args ...string) ([]byte, error) {
 // CheckLinger 在 macOS 上检查 gui 域是否可用。launchd 的 LaunchAgent 依附图形
 // 登录会话：纯 SSH 登录的机器没有 Aqua 会话，bootstrap 会失败，行为上等价于
 // Linux 缺少 linger —— 登出/未登录时后台服务不存活，所以复用同一个告警位。
+//
+// 不能用 `launchctl print gui/<uid>` 判断：它会把域里所有服务全部打印出来，
+// 正常 Mac 上轻易超过 10 万字节，撞上输出上限后会被误判成「没有图形会话」，
+// 于是每台健康的 Mac 都收到一条错误告警。`launchctl managername` 只输出一行
+// （有图形会话时为 Aqua），是这里真正要问的问题。
 func (r *LaunchdServiceRunner) CheckLinger(username string) (bool, error) {
-	if _, err := runLaunchctl(5*time.Second, "print", launchdDomain()); err != nil {
+	out, err := runLaunchctl(5*time.Second, "managername")
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return strings.TrimSpace(string(out)) == "Aqua", nil
 }
 
 // DaemonReload launchd 没有全局 reload：plist 的变化在 bootout+bootstrap 时生效，
@@ -276,7 +286,9 @@ func (r *LaunchdServiceRunner) DisableAndStop(serviceName string) error {
 }
 
 func (r *LaunchdServiceRunner) IsActive(serviceName string) (bool, error) {
-	out, err := runLaunchctl(5*time.Second, "print", launchdTarget(serviceName))
+	// 单个服务的 print 通常 3KB 左右，但环境变量多时会明显变大；给足上限，
+	// 避免「输出超限」被下面的 launchdNotLoaded 误判成「服务不存在」。
+	out, err := runLaunchctlLimited(5*time.Second, 1<<20, "print", launchdTarget(serviceName))
 	if err != nil {
 		if launchdNotLoaded(err) {
 			return false, nil
