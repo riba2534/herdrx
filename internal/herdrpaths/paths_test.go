@@ -29,7 +29,8 @@ func TestConfigRootHonorsXDGOverride(t *testing.T) {
 }
 
 // TestConfigRootIgnoresRelativeXDG 相对路径的 XDG_CONFIG_HOME 按规范应被忽略，
-// 否则 socket 路径会依赖进程的工作目录。
+// 否则 socket 路径会依赖进程的工作目录。os.UserConfigDir() 在这种情况下会直接
+// 报错，所以必须确认我们回落到了一个可用的绝对路径而不是把错误透出去。
 func TestConfigRootIgnoresRelativeXDG(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "relative/path")
 	root, err := ConfigRoot()
@@ -41,6 +42,29 @@ func TestConfigRootIgnoresRelativeXDG(t *testing.T) {
 	}
 	if !filepath.IsAbs(root) {
 		t.Fatalf("config root must be absolute, got %s", root)
+	}
+}
+
+// TestCacheRootHonorsXDGAndStaysAbsolute 缓存目录与配置目录同规则：SSH 分支
+// 已经在用 ${XDG_CACHE_HOME:-$HOME/.cache}，本机分支必须落到同一处。
+func TestCacheRootHonorsXDGAndStaysAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", dir)
+	root, err := CacheRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root != dir {
+		t.Fatalf("expected XDG cache override %s, got %s", dir, root)
+	}
+
+	t.Setenv("XDG_CACHE_HOME", "relative/cache")
+	root, err = CacheRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(root) || root == "relative/cache" {
+		t.Fatalf("relative XDG_CACHE_HOME must fall back to an absolute path, got %s", root)
 	}
 }
 

@@ -19,18 +19,24 @@ import (
 //  1. XDG_CONFIG_HOME（绝对路径时）——Herdr 在所有平台都尊重它；
 //  2. macOS 上的 ~/.config——Herdr 的默认位置；
 //  3. os.UserConfigDir()——其余平台的既有行为。
+//
+// 注意 os.UserConfigDir() 在 XDG_CONFIG_HOME 被设为相对路径时会直接报错
+// （Linux 上尤其如此），所以这里必须回落到 ~/.config，否则一个非法的环境变量
+// 会让受控端完全找不到配置目录。
 func ConfigRoot() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(dir) {
 		return filepath.Clean(dir), nil
 	}
-	if runtime.GOOS == "darwin" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
+	if runtime.GOOS != "darwin" {
+		if dir, err := os.UserConfigDir(); err == nil && filepath.IsAbs(dir) {
+			return dir, nil
 		}
-		return filepath.Join(home, ".config"), nil
 	}
-	return os.UserConfigDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config"), nil
 }
 
 // HerdrDir 返回 Herdr 自己的配置目录，socket 就在其中。
@@ -52,12 +58,14 @@ func CacheRoot() (string, error) {
 	if dir := os.Getenv("XDG_CACHE_HOME"); filepath.IsAbs(dir) {
 		return filepath.Clean(dir), nil
 	}
-	if runtime.GOOS == "darwin" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
+	if runtime.GOOS != "darwin" {
+		if dir, err := os.UserCacheDir(); err == nil && filepath.IsAbs(dir) {
+			return dir, nil
 		}
-		return filepath.Join(home, ".cache"), nil
 	}
-	return os.UserCacheDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache"), nil
 }
