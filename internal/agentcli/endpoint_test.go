@@ -150,7 +150,7 @@ func TestDERPConfigRejectsMalformedDataAndProbeChecksProtocol(t *testing.T) {
 func TestSetupDERPConfigIsRepeatableAndCannotMoveActiveBinding(t *testing.T) {
 	dir := shortTempDir(t)
 	bin, _ := createMockHerdrFixture(t, dir, filepath.Join(dir, "fixture-config"))
-	env := Environment{HomeDir: dir, ConfigDir: filepath.Join(dir, "config"), RuntimeDir: filepath.Join(dir, "run"), HerdrBin: bin}
+	env := Environment{HomeDir: dir, ConfigDir: filepath.Join(dir, "config"), RuntimeDir: filepath.Join(dir, "run"), HerdrBin: bin, CommandRunner: fixtureCommandRunner}
 	configPath := filepath.Join(env.ConfigDir, "config.json")
 	regionPath := filepath.Join(dir, "derp.json")
 	region := []byte(`{"RegionID":7,"Nodes":[{"Name":"relay","HostName":"203.0.113.20","STUNPort":-1}]}`)

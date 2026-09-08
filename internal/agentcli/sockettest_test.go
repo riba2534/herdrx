@@ -1,8 +1,10 @@
 package agentcli
 
 import (
+	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/riba2534/herdrx/internal/testpaths"
 )
@@ -33,4 +35,14 @@ func TestShortTempDirFitsUnixSocket(t *testing.T) {
 	if len(path) > maxUnixSocketPath {
 		t.Fatalf("short temp dir still produced an over-long path: %s", path)
 	}
+}
+
+// fixtureCommandRunner 供依赖 mock Herdr 脚本的测试使用。
+//
+// DefaultEnv 给生产环境的 3 秒上限是刻意的，但夹具会反复 spawn 一个 shell 脚本，
+// 而 macOS 的进程创建比 Linux 慢得多：机器负载高时 3 秒会先到，测试报
+// "command execution timed out" 而不是它真正想验证的东西。这里放宽超时，
+// 不改动被测逻辑本身。
+func fixtureCommandRunner(name string, args ...string) ([]byte, error) {
+	return RunBoundedCommand(context.Background(), 30*time.Second, 1<<20, name, args...)
 }
