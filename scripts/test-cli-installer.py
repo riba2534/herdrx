@@ -49,8 +49,8 @@ shutil.copyfile(source, args[args.index('-o') + 1])
         self.env = {**os.environ, "PATH": str(self.tools) + ":" + os.environ["PATH"], "FIXTURE_RELEASE": str(self.downloads), "FIXTURE_CALLS": str(self.calls)}
         self.package()
 
-    def package(self, arch="amd64", version="v0.1.0-rc.1", binary_version=None, symlink=False):
-        name = f"herdrx-linux-{arch}.tar.gz"
+    def package(self, arch="amd64", version="v0.1.0-rc.1", binary_version=None, symlink=False, goos="linux"):
+        name = f"herdrx-{goos}-{arch}.tar.gz"
         with tarfile.open(self.downloads / name, "w:gz") as archive:
             for filename, value in (("herdrx", f'#!/bin/sh\n[ "$1" = version ] || exit 9\nprintf "herdrx {binary_version or version}\\n"\n'), ("VERSION", version + "\n")):
                 member = tarfile.TarInfo(filename)
@@ -96,6 +96,26 @@ shutil.copyfile(source, args[args.index('-o') + 1])
         self.run_install()
         self.assertIn("/latest/download/herdrx-linux-arm64.tar.gz", self.calls.read_text())
 
+    def test_macos_downloads_darwin_assets(self):
+        for machine, arch in (("arm64", "arm64"), ("x86_64", "amd64")):
+            with self.subTest(machine=machine):
+                self.setUp()
+                self.env["FIXTURE_OS"] = "Darwin"
+                self.env["FIXTURE_ARCH"] = machine
+                self.package(arch=arch, goos="darwin")
+                self.run_install()
+                calls = self.calls.read_text()
+                self.assertIn(f"/latest/download/herdrx-darwin-{arch}.tar.gz", calls)
+                # 绝不能在 macOS 上抓 Linux 附件：装上去无法执行。
+                self.assertNotIn("herdrx-linux-", calls)
+
+    def test_macos_missing_asset_keeps_installed_binary(self):
+        # 只发布了 Linux 附件时，macOS 必须失败并保留原有 CLI，不能装错架构。
+        self.env["FIXTURE_OS"] = "Darwin"
+        self.env["FIXTURE_ARCH"] = "arm64"
+        self.run_install(success=False)
+        self.assert_unchanged()
+
     def test_bad_checksum_keeps_installed_binary(self):
         (self.downloads / "herdrx-linux-amd64.tar.gz").write_bytes(b"broken")
         self.run_install(success=False)
@@ -128,7 +148,7 @@ shutil.copyfile(source, args[args.index('-o') + 1])
         self.assert_unchanged()
 
     def test_invalid_platform_arch_or_version_does_not_download(self):
-        for key, value in (("FIXTURE_OS", "Darwin"), ("FIXTURE_ARCH", "riscv64")):
+        for key, value in (("FIXTURE_OS", "FreeBSD"), ("FIXTURE_ARCH", "riscv64")):
             self.env[key] = value
             self.run_install(success=False)
             self.env.pop(key)

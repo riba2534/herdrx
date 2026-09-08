@@ -25,16 +25,28 @@ func TestPreflight_Missing(t *testing.T) {
 
 // TestPreflight_BinTrueRejected 严格验证 /bin/true 绝不可被误判为有效 Herdr
 func TestPreflight_BinTrueRejected(t *testing.T) {
+	// macOS 只有 /usr/bin/true，Linux 通常是 /bin/true；按实际存在的位置取，
+	// 否则这条断言会退化成「文件不存在」而不再检验兼容性判定。
+	truePath := ""
+	for _, candidate := range []string{"/bin/true", "/usr/bin/true"} {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			truePath = candidate
+			break
+		}
+	}
+	if truePath == "" {
+		t.Skip("no true(1) binary available")
+	}
 	env := Environment{
-		HerdrBin: "/bin/true",
+		HerdrBin: truePath,
 		CommandRunner: func(name string, args ...string) ([]byte, error) {
-			// /bin/true 无论什么参数都退出码 0 且输出为空
+			// true 无论什么参数都退出码 0 且输出为空
 			return []byte{}, nil
 		},
 	}
 	res := RunPreflight(env)
 	if res.Status != PreflightIncompatible {
-		t.Fatalf("expected /bin/true to be rejected as incompatible, got status: %s (details: %s)", res.Status, res.Details)
+		t.Fatalf("expected %s to be rejected as incompatible, got status: %s (details: %s)", truePath, res.Status, res.Details)
 	}
 }
 

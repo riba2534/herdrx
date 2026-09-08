@@ -38,8 +38,8 @@ def canonical(manifest):
     return json.dumps(ordered, separators=(",", ":"), ensure_ascii=True).encode()
 
 
-def sign(binary, version, arch, key, created):
-    manifest = dict(zip(FIELDS, (version, "linux", arch, hashlib.sha256(binary).hexdigest(), 1, 1, 1, 1,
+def sign(binary, version, arch, key, created, goos="linux"):
+    manifest = dict(zip(FIELDS, (version, goos, arch, hashlib.sha256(binary).hexdigest(), 1, 1, 1, 1,
                                  created.strftime("%Y-%m-%dT%H:%M:%SZ"), (created + timedelta(days=180)).strftime("%Y-%m-%dT%H:%M:%SZ"), "")))
     # pkeyutl's Ed25519 one-shot interface requires a regular input file.
     with tempfile.TemporaryDirectory(prefix="herdrx-release-sign-") as temporary:
@@ -48,14 +48,15 @@ def sign(binary, version, arch, key, created):
         signature = subprocess.check_output(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(key), "-in", str(payload)], stderr=subprocess.PIPE)
     assert len(signature) == 64
     manifest["signature"] = signature.hex()
-    verify(manifest, binary, version, arch)
+    verify(manifest, binary, version, arch, goos)
     return manifest
 
 
-def verify(manifest, binary, version, arch):
+def verify(manifest, binary, version, arch, goos="linux"):
     payload = canonical(manifest)
     assert VERSION.fullmatch(version) and manifest["version"] == version
-    assert manifest["goos"] == "linux" and manifest["goarch"] == arch and arch in ("amd64", "arm64")
+    assert goos in ("linux", "darwin"), "unsupported target platform"
+    assert manifest["goos"] == goos and manifest["goarch"] == arch and arch in ("amd64", "arm64")
     assert manifest["sha256"] == hashlib.sha256(binary).hexdigest()
     assert 0 < len(binary) <= 128 << 20
     assert all(type(manifest[k]) is int and manifest[k] == 1 for k in ("min_proto", "max_proto", "min_state", "max_state"))

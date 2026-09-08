@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/riba2534/herdrx/internal/secure"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"github.com/tailscale/tailcat"
 	"golang.org/x/crypto/ssh"
 )
@@ -38,7 +39,7 @@ func setupTestSSH(t *testing.T, paired bool, revoked bool) (string, *SSHServer, 
 		t.Fatalf("parse host public key: %v", err)
 	}
 
-	tempDir := t.TempDir()
+	tempDir := testpaths.ShortTempDir(t)
 	configPath := filepath.Join(tempDir, "config.json")
 
 	node := tailcat.NewPrivateKey()
@@ -100,7 +101,7 @@ func dialLocalTCP(t *testing.T, server *SSHServer, clientConfig *ssh.ClientConfi
 }
 
 func TestStreamLocal_PairedGateControlAndPass(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", tempDir)
 	herdrDir := filepath.Join(tempDir, "herdr")
 	if err := os.MkdirAll(herdrDir, 0o700); err != nil {
@@ -478,11 +479,7 @@ func TestClientSocketPairingRoleAndRevocation(t *testing.T) {
 		t.Run(suffix, func(t *testing.T) {
 			// Keep the Unix path below sockaddr_un's limit, and isolate XDG from
 			// every real Herdr session on the machine running this test.
-			dir, err := os.MkdirTemp("", "herdrx-socket-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			dir := testpaths.ShortTempDir(t)
 			t.Setenv("XDG_CONFIG_HOME", dir)
 			path := filepath.Join(dir, "herdr", suffix)
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -593,7 +590,7 @@ func TestClientSocketPairingRoleAndRevocation(t *testing.T) {
 // TestHerdrBinCustomPathExec_WithSpaces 验证配置中的 HerdrBin 绝对路径被真实用于 SSH terminal 命令执行，
 // 且路径带空格或非标准路径时能安全调用
 func TestHerdrBinCustomPathExec_WithSpaces(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := testpaths.ShortTempDir(t)
 	spacedDir := filepath.Join(tempDir, "custom herdr bin with space")
 	if err := os.MkdirAll(spacedDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)

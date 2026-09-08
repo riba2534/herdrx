@@ -19,6 +19,7 @@ import (
 	"github.com/riba2534/herdrx/internal/config"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 )
 
 func TestBootstrapInviteAndTenantHostFlow(t *testing.T) {
@@ -232,7 +233,7 @@ func postMultipart(t *testing.T, client *http.Client, url, csrf, fieldName, file
 func TestPasteImageEndpointAndValidation(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", dataDir)
-	configDir := t.TempDir()
+	configDir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", configDir)
 	if err := os.MkdirAll(filepath.Join(configDir, "herdr"), 0o700); err != nil {
 		t.Fatal(err)

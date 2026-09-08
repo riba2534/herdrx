@@ -11,6 +11,7 @@ import (
 
 	"github.com/riba2534/herdrx/internal/agent"
 	"github.com/riba2534/herdrx/internal/secure"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -71,11 +72,7 @@ func isolatedClientSocket(t *testing.T) ([]byte, *atomic.Int32) {
 	t.Helper()
 	// A short temporary XDG path avoids sockaddr_un limits without accessing
 	// the test runner's actual Herdr configuration or existing sessions.
-	dir, err := os.MkdirTemp("", "herdrx-tunnel-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	path := filepath.Join(dir, "herdr", "sessions", "isolated", "herdr-client.sock")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -403,8 +404,10 @@ func TestTwoPhaseProtocol_LiveDERPEndToEnd(t *testing.T) {
 			t.Fatalf("uname failed on active channel: %v", err)
 		}
 		actSess.Close()
-		if !strings.Contains(actOut.String(), "linux amd64") {
-			t.Fatalf("unexpected uname output: %s", actOut.String())
+		// 受控端按真实平台回报 GOOS/GOARCH，断言不能写死 linux amd64。
+		wantUname := runtime.GOOS + " " + runtime.GOARCH
+		if !strings.Contains(actOut.String(), wantUname) {
+			t.Fatalf("unexpected uname output: %s (want %s)", actOut.String(), wantUname)
 		}
 	}
 }

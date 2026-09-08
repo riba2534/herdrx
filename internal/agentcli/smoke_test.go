@@ -16,7 +16,7 @@ import (
 )
 
 func TestSubprocessSmoke_RealCLIAndIPC(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("mkdir bin: %v", err)

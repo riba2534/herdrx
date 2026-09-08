@@ -13,11 +13,8 @@ func TestSetupMigrationFailureDoesNotGenerateIdentity(t *testing.T) {
 	for _, running := range []bool{false, true} {
 		t.Run(map[bool]string{false: "invalid legacy config", true: "running legacy service"}[running], func(t *testing.T) {
 			// Keep Unix socket paths below the platform's sockaddr limit.
-			dir, err := os.MkdirTemp("", "herdrx-onboard-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = os.RemoveAll(dir) })
+			// macOS 的 TMPDIR 本身就有 49 个字符，MkdirTemp("") 不足以保证够短。
+			dir := shortTempDir(t)
 			legacy := filepath.Join(dir, ".config", "herdrx-agent", "config.json")
 			if err := os.MkdirAll(filepath.Dir(legacy), 0o700); err != nil {
 				t.Fatal(err)

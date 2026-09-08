@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 )
 
 // Exercise the actual poller and notification transport, including work already
@@ -36,7 +37,7 @@ func TestDisableStopsPushCollectionAndQueuedDelivery(t *testing.T) {
 			if err := db.CreateHost(ctx, host); err != nil {
 				t.Fatal(err)
 			}
-			dir := t.TempDir()
+			dir := testpaths.ShortTempDir(t)
 			t.Setenv("XDG_CONFIG_HOME", dir)
 			if err := os.MkdirAll(filepath.Join(dir, "herdr"), 0700); err != nil {
 				t.Fatal(err)

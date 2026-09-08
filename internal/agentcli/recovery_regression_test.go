@@ -30,7 +30,7 @@ type enrollmentProcess struct {
 
 func newEnrollmentProcess(t *testing.T) *enrollmentProcess {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	f := &enrollmentProcess{t: t, dir: dir, bin: filepath.Join(dir, "herdrx"), config: filepath.Join(dir, "c", "agent.json"), runtime: filepath.Join(dir, "r")}
 	buildCLI(t, f.bin)
 	fakeHerdr, _ := createMockHerdrFixture(t, dir, filepath.Join(dir, "c"))

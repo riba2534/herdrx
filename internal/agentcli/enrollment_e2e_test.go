@@ -173,7 +173,7 @@ func waitDaemonReady(t *testing.T, runtimeDir, configPath string, expectedPID in
 // 当前生产实现截取 node.Public.Addr()[:8]（由于 Tailcat v0.6 紧凑地址前缀为固定 CBOR 头 "tcpGFwWC"），
 // 必定生成完全相同的 SetupID 导致碰撞失败 (exit code 1)！
 func TestSetup_AgentIDUniquenessAcrossInstances(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("mkdir bin dir: %v", err)
@@ -250,7 +250,7 @@ func TestSetup_AgentIDUniquenessAcrossInstances(t *testing.T) {
 // 外部 Controller 经由真实临时端点 prepare -> 生产代码自动拉起正式端点 ->
 // 真实 Ed25519 签名 commit -> 正式通道执行 Herdr 命令 (stdin->stdout) 与真实 streamlocal 双向数据交互。
 func TestCLI_ConnectPrepareCommitAndHerdrIO_FullPipeline(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -583,7 +583,7 @@ func TestCLI_ConnectPrepareCommitAndHerdrIO_FullPipeline(t *testing.T) {
 // 严格检验守护进程能否从持久化材料恢复正式端点与客户端通信。
 // 在当前生产实现下，runServe 重启时未恢复两阶段 formal Server，此测试将必然在重启拨号时触发超时失败，直接揭穿缺陷！
 func TestCLI_CrashRecovery_PreparedRestart(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
@@ -922,7 +922,7 @@ func TestCLI_CrashRecovery_PreparedRestart(t *testing.T) {
 // 严格检验守护进程能否从磁盘恢复正式端点与有效 SSH 凭据，并执行真实 Herdr IO。
 // 在当前生产实现下，runServe 重启时未恢复两阶段 active formal Server，必然触发恢复失败！
 func TestCLI_CrashRecovery_ActiveRestart(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
@@ -1327,7 +1327,7 @@ func TestCLI_CrashRecovery_ActiveRestart(t *testing.T) {
 
 // TestCLI_Security_IdempotencyAndConflictAndReject 测试准备幂等、冲突拒绝、未授权公钥拦截与已激活 commit 重试
 func TestCLI_Security_IdempotencyAndConflictAndReject(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll: %v", err)
@@ -1651,7 +1651,7 @@ func TestCLI_Security_IdempotencyAndConflictAndReject(t *testing.T) {
 
 // TestCLI_RevokeAndReEnroll 测试 unpair 真实连接强断与撤销后新 connect 全新周期绑定
 func TestCLI_RevokeAndReEnroll(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	binDir := filepath.Join(tempDir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatalf("os.MkdirAll: %v", err)

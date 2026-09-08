@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -348,11 +349,17 @@ func TestXDGLegacyMigrationDisablesAutostartAndPreservesRevocation(t *testing.T)
 	env := Environment{HomeDir: dir, ConfigDir: filepath.Join(dir, "xdg-config", "herdrx"), StateDir: filepath.Join(dir, "xdg-state", "herdrx"), ServiceRunner: runner}
 	legacy := filepath.Join(dir, "xdg-config", "herdrx-agent", "config.json")
 	cfg := newUpdateConfig(t, legacy)
-	unit := filepath.Join(dir, "xdg-config", "systemd", "user", "herdrx-agent.service")
+	// 旧版受控端在两个平台用不同的服务机制：Linux 是 systemd user unit，
+	// macOS 是 LaunchAgent。按本平台写夹具，否则迁移逻辑根本看不到这个服务。
+	unit, legacyLabel, unitMarkers := legacyServiceLayout(runtime.GOOS, env, legacy)
+	unitBody := "[Unit]\nDescription=herdrx tailcat agent\n"
+	if runtime.GOOS == "darwin" {
+		unitBody = "<plist><dict><key>Label</key>" + unitMarkers[0] + "</dict></plist>\n"
+	}
 	if err := os.MkdirAll(filepath.Dir(unit), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unit, []byte("[Unit]\nDescription=herdrx tailcat agent\n"), 0o600); err != nil {
+	if err := os.WriteFile(unit, []byte(unitBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(env.ConfigDir, "config.json")
@@ -372,7 +379,7 @@ func TestXDGLegacyMigrationDisablesAutostartAndPreservesRevocation(t *testing.T)
 	}
 	found := false
 	for _, call := range runner.Calls {
-		if call == "DisableAndStop:herdrx-agent.service" {
+		if call == "DisableAndStop:"+legacyLabel {
 			found = true
 		}
 	}

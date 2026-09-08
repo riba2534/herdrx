@@ -45,8 +45,15 @@ func (r *processUpdateRunner) stop() {
 	}
 	r.process = nil
 }
+
+// expectedServiceLabel 是本平台服务的标识，由 layoutFor 给出同一个来源，
+// 避免夹具和实现各写一份而漂移。
+var expectedServiceLabel = layoutFor(runtime.GOOS, Environment{}).Label
+
 func (r *processUpdateRunner) Restart(name string) error {
-	if name != "herdrx.service" {
+	// 期望的标识随平台变化（systemd 单元名 / launchd 标签），但仍必须精确匹配，
+	// 以免 update 误重启别的服务。
+	if name != expectedServiceLabel {
 		return fmt.Errorf("unexpected service %s", name)
 	}
 	r.restarts++
@@ -119,13 +126,15 @@ func TestCLIUpdate_RealProcessesRollbackAndRevocation(t *testing.T) {
 	oldBytes := buildVersionCLI(t, stable, "v0.1.0")
 	nextPath := filepath.Join(dir, "next")
 	nextBytes := buildVersionCLI(t, nextPath, "v0.2.0")
-	unit := serviceUnitPath(env)
+	// 按本平台的服务布局写单元：在 macOS 上放 systemd 单元会被 update 正确拒绝。
+	layout := layoutFor(runtime.GOOS, env)
+	unit := layout.UnitPath
 	os.MkdirAll(filepath.Dir(unit), 0o700)
-	os.WriteFile(unit, []byte(GenerateSystemdUnit(stable, configPath, env.RuntimeDir)), 0o600)
+	os.WriteFile(unit, []byte(layout.Content(stable, configPath, env.RuntimeDir)), 0o600)
 	runner := &processUpdateRunner{stable: stable, config: configPath, run: env.RuntimeDir}
 	env.ServiceRunner = runner
 	defer runner.stop()
-	if err := runner.Restart("herdrx.service"); err != nil {
+	if err := runner.Restart(layout.Label); err != nil {
 		t.Fatal(err)
 	}
 	current, err := probeExecutable(env, stable, configPath)

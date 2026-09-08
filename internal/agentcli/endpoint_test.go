@@ -31,11 +31,7 @@ func TestEndpointMigrationKeepsIdentityAcrossDaemonRestart(t *testing.T) {
 		}
 	}
 	defer tunnel.DefaultSSRFValidator.ClearAllowed()
-	dir, err := os.MkdirTemp("", "herdrx-endpoint-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := shortTempDir(t)
 	node := tailcat.NewPrivateKey()
 	node.Public.Region = []*tailcfg.DERPRegion{oldMap.Regions[1]}
 	hostPrivate, hostPublic, err := secure.GenerateSSHKey("endpoint-root")
@@ -152,11 +148,7 @@ func TestDERPConfigRejectsMalformedDataAndProbeChecksProtocol(t *testing.T) {
 }
 
 func TestSetupDERPConfigIsRepeatableAndCannotMoveActiveBinding(t *testing.T) {
-	dir, err := os.MkdirTemp("", "herdrx-setup-region-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := shortTempDir(t)
 	bin, _ := createMockHerdrFixture(t, dir, filepath.Join(dir, "fixture-config"))
 	env := Environment{HomeDir: dir, ConfigDir: filepath.Join(dir, "config"), RuntimeDir: filepath.Join(dir, "run"), HerdrBin: bin}
 	configPath := filepath.Join(env.ConfigDir, "config.json")

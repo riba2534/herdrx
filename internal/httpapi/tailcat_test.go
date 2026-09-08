@@ -28,6 +28,7 @@ import (
 	"github.com/riba2534/herdrx/internal/push"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"github.com/riba2534/herdrx/internal/tunnel"
 	"github.com/tailscale/tailcat"
 	"golang.org/x/crypto/ssh"
@@ -128,11 +129,7 @@ func TestTailcatEnrollment_SSRFAndSizeValidation(t *testing.T) {
 func TestTailcatEnrollment_EndToEndWithLocalDERP(t *testing.T) {
 	// A Unix socket in an isolated remote configuration supplies a stable pane.
 	// The formal Tailcat server forwards the real SSH stream to this socket.
-	remoteDir, err := os.MkdirTemp("", "herdrx-restore-peer-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(remoteDir)
+	remoteDir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", remoteDir)
 	if err := os.Mkdir(filepath.Join(remoteDir, "herdr"), 0700); err != nil {
 		t.Fatal(err)

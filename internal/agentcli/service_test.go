@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -81,16 +82,20 @@ func TestInstallService_LingerWarningAndCallSequence(t *testing.T) {
 		t.Fatalf("InstallService failed: %v", err)
 	}
 
-	// 1. 验证 Linger 告警
+	// 1. 验证保活告警：每个平台给出自己的修复动作
 	if res.LingerEnabled {
 		t.Fatalf("linger must be false")
 	}
-	if !strings.Contains(res.LingerWarning, "loginctl enable-linger") {
-		t.Fatalf("expected linger warning with fix command, got: %s", res.LingerWarning)
+	wantFix := "loginctl enable-linger"
+	if runtime.GOOS == "darwin" {
+		wantFix = "launchd"
+	}
+	if !strings.Contains(res.LingerWarning, wantFix) {
+		t.Fatalf("expected keep-alive warning mentioning %q, got: %s", wantFix, res.LingerWarning)
 	}
 
 	// 2. 验证调用顺序: WriteUnitFile -> DaemonReload -> EnableAndStart
-	expectedSuffixes := []string{"WriteUnitFile", "DaemonReload", "EnableAndStart:herdrx.service"}
+	expectedSuffixes := []string{"WriteUnitFile", "DaemonReload", "EnableAndStart:" + ServiceLabel(env)}
 	callIdx := 0
 	for _, call := range fakeRunner.Calls {
 		if strings.HasPrefix(call, "CheckLinger") {
@@ -105,13 +110,24 @@ func TestInstallService_LingerWarningAndCallSequence(t *testing.T) {
 	// 3. 验证 Unit 文件内容安全性与完整性
 	unitBytes := fakeRunner.Units[res.UnitPath]
 	unitStr := string(unitBytes)
-	for _, expectedSnippet := range []string{
+	expectedSnippets := []string{
 		`ExecStart="` + binPath + `" serve --config "` + cfgPath + `"`,
 		"Restart=always",
 		"RestartSec=3",
 		"NoNewPrivileges=true",
 		`Environment="PATH=`,
-	} {
+	}
+	if runtime.GOOS == "darwin" {
+		// launchd 用 plist 表达同样的保证：固定绝对路径、崩溃重启、注入 PATH。
+		expectedSnippets = []string{
+			"<string>" + binPath + "</string>",
+			"<string>" + cfgPath + "</string>",
+			"<key>KeepAlive</key>",
+			"<key>ThrottleInterval</key>",
+			"<key>PATH</key>",
+		}
+	}
+	for _, expectedSnippet := range expectedSnippets {
 		if !strings.Contains(unitStr, expectedSnippet) {
 			t.Fatalf("unit file missing expected snippet: %s", expectedSnippet)
 		}
@@ -122,7 +138,7 @@ func TestInstallService_LingerWarningAndCallSequence(t *testing.T) {
 		t.Fatalf("UninstallService failed: %v", err)
 	}
 	lastCalls := fakeRunner.Calls[len(fakeRunner.Calls)-3:]
-	if !strings.Contains(lastCalls[0], "DisableAndStop:herdrx.service") ||
+	if !strings.Contains(lastCalls[0], "DisableAndStop:"+ServiceLabel(env)) ||
 		!strings.Contains(lastCalls[1], "RemoveUnitFile") ||
 		!strings.Contains(lastCalls[2], "DaemonReload") {
 		t.Fatalf("unexpected uninstall call sequence: %v", lastCalls)
@@ -161,7 +177,7 @@ func TestServiceCommand_StopRestartUninstall(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("runService stop failed: %s", stderr.String())
 	}
-	if len(fakeRunner.Calls) == 0 || !strings.Contains(fakeRunner.Calls[len(fakeRunner.Calls)-1], "Stop:herdrx.service") {
+	if len(fakeRunner.Calls) == 0 || !strings.Contains(fakeRunner.Calls[len(fakeRunner.Calls)-1], "Stop:"+ServiceLabel(env)) {
 		t.Fatalf("expected runner Stop call, got: %v", fakeRunner.Calls)
 	}
 
@@ -170,7 +186,7 @@ func TestServiceCommand_StopRestartUninstall(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("runService restart failed: %s", stderr.String())
 	}
-	if len(fakeRunner.Calls) == 0 || !strings.Contains(fakeRunner.Calls[len(fakeRunner.Calls)-1], "Restart:herdrx.service") {
+	if len(fakeRunner.Calls) == 0 || !strings.Contains(fakeRunner.Calls[len(fakeRunner.Calls)-1], "Restart:"+ServiceLabel(env)) {
 		t.Fatalf("expected runner Restart call, got: %v", fakeRunner.Calls)
 	}
 
@@ -182,6 +198,9 @@ func TestServiceCommand_StopRestartUninstall(t *testing.T) {
 }
 
 func TestServiceUsesStableSymlinkAndXDGPaths(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("systemd unit layout; the launchd equivalent is covered in service_platform_test.go")
+	}
 	dir := t.TempDir()
 	realBinary := filepath.Join(dir, "releases", "v0.1.0", "herdrx")
 	stable := filepath.Join(dir, ".local", "bin", "herdrx")

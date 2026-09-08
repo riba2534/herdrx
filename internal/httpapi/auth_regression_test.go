@@ -11,6 +11,7 @@ import (
 	"github.com/riba2534/herdrx/internal/config"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"io"
 	"log/slog"
 	"net"
@@ -28,7 +29,7 @@ import (
 // All data and identities are isolated; real password hashing is covered by the existing HTTP flow test.
 func authFixture(t *testing.T, openRegistration ...bool) (*API, *store.Store, *httptest.Server, *http.Client, map[string]any) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testpaths.ShortTempDir(t)
 	db, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +150,7 @@ func TestAuthRegressionRegistrationRejectsInvalidInviteBeforeHash(t *testing.T) 
 
 func fakeHerdrSocket(t *testing.T) *atomic.Int32 {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "herdr"), 0700); err != nil {
 		t.Fatal(err)
