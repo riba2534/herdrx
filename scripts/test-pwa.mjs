@@ -103,8 +103,17 @@ try {
       await expect(other.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('保留未提交内容')
       await other.close()
       // A broken deployment leaves the previous working shell active and usable.
+      // Observe the new worker before starting the update: an idle registration
+      // can briefly have no installing/waiting worker before installation begins.
+      await page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.getRegistration()
+        globalThis.__failedUpdateWorker = null
+        registration.addEventListener('updatefound', () => {
+          globalThis.__failedUpdateWorker = registration.installing
+        }, { once: true })
+      })
       revision = 'three'; failAsset = true; await checkUpdate(page)
-      await page.waitForFunction(async () => { const reg = await navigator.serviceWorker.getRegistration(); return !reg.installing && !reg.waiting })
+      await page.waitForFunction(() => globalThis.__failedUpdateWorker?.state === 'redundant')
       assert.equal(await page.evaluate(async () => (await caches.keys()).includes('herdrx-shell-test-three')), false)
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true); await page.reload()
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible()
