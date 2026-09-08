@@ -80,7 +80,9 @@ try {
       await page.reload(); await controllerReady(page)
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true)
       await page.goto(base + '/h/original-pane')
-      await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible()
+      // WebKit uses real socket failures here; allow its network error to settle.
+      const offlineTimeout = engine === 'webkit' ? 30000 : 5000
+      await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       assert.equal(new URL(page.url()).pathname, '/h/original-pane')
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
       // Return to the host list after automatic auth recovery (fixture has no terminal).
@@ -116,7 +118,7 @@ try {
       await page.waitForFunction(() => globalThis.__failedUpdateWorker?.state === 'redundant')
       assert.equal(await page.evaluate(async () => (await caches.keys()).includes('herdrx-shell-test-three')), false)
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true); await page.reload()
-      await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible()
+      await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
       failAsset = false; revision = 'two'; denyAPI = true
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
