@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/public/brand/icon-128.png" alt="herdrx Logo" width="128" />
+  <img src="web/public/brand/v2/icon-256.png" alt="herdrx Logo" width="128" />
 </p>
 
 <h1 align="center">herdrx</h1>

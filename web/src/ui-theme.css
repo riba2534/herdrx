@@ -71,7 +71,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .brand-icon { display: block; flex-shrink: 0; object-fit: contain; background: transparent; border-radius: 0; }
 .brand-logo { display: inline-flex; flex: 0 0 auto; width: 96px; height: 24px; align-items: center; gap: 8px; }
 .brand-logo .brand-icon { width: 24px; height: 24px; }
-.brand-wordmark { display: block; width: 64px; height: 18px; background: var(--ui-text); mask: url('/brand/wordmark.png') center / contain no-repeat; }
+.brand-wordmark { display: block; width: 64px; height: 18px; background: var(--ui-text); mask: url('/brand/v2/wordmark.png') center / contain no-repeat; mask-mode: luminance; }
 .hostbar-home .brand-icon { width: 18px; height: 18px; }
 .pair-brand-icon { width: 52px; height: 52px; margin-bottom: 26px; }
 .eyebrow { color: var(--ui-muted); font: 500 12px/1.5 var(--ui-font); letter-spacing: 0; text-transform: none; }

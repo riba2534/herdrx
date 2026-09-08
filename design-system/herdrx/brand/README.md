@@ -1,49 +1,29 @@
-# herdrx 品牌素材
+# herdrx 高清品牌素材
 
-新版标识由两条交错的银白与淡金色带组成 H，中间形成向前的箭头，表达多主机工作台中的连接与继续。图形和小写 herdrx 字标使用内置 image_gen 生图工具生成。
+保留银白与淡金色交错 H、向前箭头及深蓝配色。原稿通过内置 `image_gen` 生成，网页使用独立图标和字标，不再将旧横版 Logo 中的半透明光晕作为字形显示。
 
-- [图标原稿](icon-source.png) 和 [横向 Logo 原稿](logo-source.png) 保留生成的 PNG 与透明度。
-- [网站 Logo](../../../web/public/brand/logo.png) 可作为横向素材使用。
-- [512 px 图标](../../../web/public/brand/icon-512.png) 与 16/32/48/64/128/192 px 导出共享同一原稿。
-- [手机桌面图标](../../../web/public/brand/apple-touch-icon.png) 为 180 px，提供不透明底色。
-- [可裁切应用图标](../../../web/public/brand/icon-maskable-512.png) 为 512 px，留出安全区域。
-- 网页导航复用生成图形和字标，字标透明度作为 CSS mask，由界面文字颜色填充，浅色和深色主题使用完全相同的字形。Logo 保持 96×24 px，不增加顶部高度。
+| 原稿 | 尺寸 | 用途 |
+|---|---:|---|
+| [icon-source.png](icon-source.png) | 1254×1254 | 透明圆角图标，网页与应用图标共用 |
+| [wordmark-source.png](wordmark-source.png) | 2048×768 | 黑底白字的独立亮度遮罩，保留 herdrx 字形 |
+| [logo-source.png](logo-source.png) | 2172×724 | 深蓝底横版 Logo，用于独立展示 |
+
+生成使用内置工具，无 CLI/API 回退。最终提示词见 [PROMPTS.md](PROMPTS.md)。棋盘格背景的试稿未进入项目。
+
+## 网页与应用资源
+
+正式资源位于 [web/public/brand/v2](../../../web/public/brand/v2/)，更换路径使浏览器与 PWA 能请求新版图标。根目录 `favicon.ico` 同时更新，兼容浏览器的默认请求。
+
+- 网页图标提供 1×、2×、3×资源，覆盖实际 18、24、28、52 CSS px 的使用位置。
+- 字标采用 `mask-mode: luminance`：黑色隐藏、白色显示，再由主题文字颜色填充。黑白原稿不能当作普通透明图片直接显示，也不能改成默认 alpha mask。
+- 导出 16 至 1024 px 的 PNG、180 px Apple Touch 图标，以及保留不透明背景和 12.5% 留白的 512 px maskable 图标。
+- 横版 Logo 为实色底高清图片；网页导航使用图标加亮度遮罩，保持 96×24 px 的原有布局。
 
 ## 导出
 
-先安装项目的前端依赖与 Chromium，然后运行：
-
-```bash
+```sh
 node scripts/export-brand-assets.mjs
 make web-build
 ```
 
-脚本只进行透明留白裁切、等比缩放、PNG/ICO 编码及应用图标背景/安全留白处理，不重绘图形。素材由网站自身提供，无外部图床或运行时生图依赖。浏览器图标通过 HTML 的 icon/apple-touch-icon 与 manifest 引用。
-
-## 图标生成提示词
-
-```text
-Use case: logo-brand.
-Asset type: production application icon and brand symbol for "herdrx", a compact professional web workbench that connects multiple remote computers and terminal panes.
-Primary request: design one original, polished, exceptionally simple geometric monogram icon. Two interlocking terminal-pane/ribbon forms suggest the letter h or H and a small forward-pointing negative-space notch. The mark should convey connected workspaces, precision, and continuity. A strong unified silhouette that remains recognizable at 16 and 24 pixels. No tiny interior details.
-Style: flat vector-like brand design with extremely clean edges, confident proportions, restrained corner rounding. Mature developer software identity.
-Composition: one large icon centered in a square canvas. A rounded-square deep blue-gray tile fills the canvas with only about 4% transparent outside margin. Inside it, the bold interlocking monogram is optically centered and fills roughly 65% of the tile width and height, with generous uniform clearspace.
-Color palette: tile #193747, primary monogram #e2ecf0, one restrained complementary segment #dbc37e. Flat solid colors only. This must work on both light and dark websites.
-Text: no words, no letters typeset as text, no captions, no wordmark.
-Constraints: output ONLY the finished single icon asset on genuinely transparent background outside the rounded tile, alpha transparency preserved. Front-facing flat artwork. No mockup, no presentation board, no multiple options, no surrounding labels, no watermark.
-Avoid: gradients, glows, lighting, shadows, bevels, 3D, fine strokes, mascot, generic terminal window with >_, circuit-board decoration, extra ornaments.
-```
-
-## 横向 Logo 生成提示词
-
-输入参考为本目录的 icon-source.png。
-
-```text
-Use case: logo-brand.
-Asset type: finished horizontal website logo for herdrx, with a genuine transparent background.
-Input image 1: authoritative reference for the exact application icon and brand identity; preserve this interlocking silver and muted-gold H/forward arrow symbol and its deep-blue rounded tile.
-Primary request: create the matching horizontal brand lockup. Place a faithful, crisp rendition of the supplied icon at the left, and the exact lowercase word "herdrx" to its right. Letter-by-letter: h e r d r x. Use a custom-looking, restrained, sturdy geometric sans serif wordmark, clean subtly rounded forms, medium-semibold weight, excellent kerning, compact proportions appropriate for a terminal workbench.
-Color palette: wordmark solid deep blue-gray #193747; icon retains the input colors.
-Composition: very wide horizontal canvas approximately 4.5:1; icon and wordmark together occupy almost all of the canvas with small transparent clearspace around their actual bounds. Icon slightly taller than the wordmark letter height; gap roughly one third of the icon width. Everything centered on one horizontal optical baseline.
-Constraints: only ONE production logo, no additional rows or versions, no labels, no tagline, no mockup, no presentation background. Use actual transparent alpha outside the logo, no white or checkerboard pixels. Preserve the exact icon silhouette and color order from the reference. Text must read herdrx exactly in lowercase. No glow, shadows, gradients, texture, 3D or extra decorative elements.
-```
+导出脚本裁切外部留白、等比缩放并编码 PNG/ICO，不重绘字形。字标以亮度 8/255 定位裁剪边界并外扩 4px，避免近黑噪点扩大画布；裁剪框内保留原始 RGB/alpha，不做阈值抠图。亮度遮罩在浏览器中按其实际亮度渲染。
