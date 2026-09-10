@@ -34,10 +34,16 @@ func TestHostQueriesAreTenantScoped(t *testing.T) {
 	for _, transport := range []string{"local", "ssh", "tailcat"} {
 		id := "hst_" + transport
 		original := Host{ID: id, OwnerID: "usr_a", Name: "Original", Transport: transport, Hostname: "example.test", Port: 2222, Username: "tester", SessionName: "work", HostKey: "known-host-key", TailcatAddr: "tailcat-address"}
+		if transport == "ssh" {
+			original.ProxyJump = "jump@bastion.example:22"
+		}
 		if err := dataStore.CreateHost(ctx, original); err != nil {
 			t.Fatal(err)
 		}
 		before, _ := dataStore.HostByID(ctx, "usr_a", id)
+		if transport == "ssh" && before.ProxyJump != "jump@bastion.example:22" {
+			t.Fatalf("proxy_jump not persisted: %+v", before)
+		}
 		if _, err := dataStore.RenameHost(ctx, "usr_b", id, "Intruder"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("other tenant renamed host: %v", err)
 		}

@@ -48,12 +48,133 @@ func DialSSHEndpoint(ctx context.Context, options SSHOptions) (*SSHEndpoint, err
 		options.Timeout = 15 * time.Second
 	}
 	target := net.JoinHostPort(options.Host.Hostname, strconv.Itoa(options.Host.Port))
-	dialer := net.Dialer{Timeout: options.Timeout, KeepAlive: 15 * time.Second}
-	networkConn, err := dialer.DialContext(ctx, "tcp", target)
-	if err != nil {
-		return nil, fmt.Errorf("dial SSH %s: %w", target, err)
+	if strings.TrimSpace(options.Host.ProxyJump) == "" {
+		dialer := net.Dialer{Timeout: options.Timeout, KeepAlive: 15 * time.Second}
+		networkConn, err := dialer.DialContext(ctx, "tcp", target)
+		if err != nil {
+			return nil, fmt.Errorf("dial SSH %s: %w", target, err)
+		}
+		return DialSSHOnConn(ctx, networkConn, target, options, nil)
 	}
-	return DialSSHOnConn(ctx, networkConn, target, options, nil)
+	return dialSSHViaProxyJump(ctx, options, target)
+}
+
+// dialSSHViaProxyJump connects to a single jump host, then opens a direct-tcpip
+// channel to the target. This matches OpenSSH ProxyJump / `ssh -W %h:%p jump`
+// for one hop. Jump auth reuses the target host credential.
+func dialSSHViaProxyJump(ctx context.Context, options SSHOptions, target string) (*SSHEndpoint, error) {
+	jump, err := ParseProxyJump(options.Host.ProxyJump)
+	if err != nil {
+		return nil, err
+	}
+	if jump.User == "" {
+		jump.User = options.Host.Username
+	}
+	jumpAddr := net.JoinHostPort(jump.Host, strconv.Itoa(jump.Port))
+	dialer := net.Dialer{Timeout: options.Timeout, KeepAlive: 15 * time.Second}
+	jumpConn, err := dialer.DialContext(ctx, "tcp", jumpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("dial SSH jump %s: %w", jumpAddr, err)
+	}
+	stopJumpDial := context.AfterFunc(ctx, func() { _ = jumpConn.Close() })
+	auth, err := sshAuth(options.Host.AuthMethod, options.Secret)
+	if err != nil {
+		stopJumpDial()
+		_ = jumpConn.Close()
+		return nil, err
+	}
+	jumpConfig := &ssh.ClientConfig{
+		User: jump.User, Auth: []ssh.AuthMethod{auth}, Timeout: options.Timeout,
+		// v1 does not pin jump host keys; only the target host key is stored.
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	if deadlineConn, ok := jumpConn.(interface{ SetDeadline(time.Time) error }); ok {
+		_ = deadlineConn.SetDeadline(time.Now().Add(options.Timeout))
+	}
+	jumpClientConn, channels, requests, err := ssh.NewClientConn(jumpConn, jumpAddr, jumpConfig)
+	stopJumpDial()
+	if err != nil {
+		_ = jumpConn.Close()
+		return nil, fmt.Errorf("SSH jump handshake %s: %w", jumpAddr, err)
+	}
+	if deadlineConn, ok := jumpConn.(interface{ SetDeadline(time.Time) error }); ok {
+		_ = deadlineConn.SetDeadline(time.Time{})
+	}
+	jumpClient := ssh.NewClient(jumpClientConn, channels, requests)
+	stopJump := context.AfterFunc(ctx, func() { _ = jumpClient.Close() })
+	networkConn, err := jumpClient.DialContext(ctx, "tcp", target)
+	stopJump()
+	if err != nil {
+		_ = jumpClient.Close()
+		return nil, fmt.Errorf("dial SSH %s via jump %s: %w", target, jumpAddr, err)
+	}
+	return DialSSHOnConn(ctx, networkConn, target, options, jumpClient)
+}
+
+// ProxyJumpSpec is one OpenSSH-style ProxyJump hop: [user@]host[:port].
+type ProxyJumpSpec struct {
+	User string
+	Host string
+	Port int
+}
+
+// ParseProxyJump parses a single-hop ProxyJump string. Multi-hop (comma-separated)
+// ProxyCommand scripts, and bare IPv6 without brackets are rejected.
+func ParseProxyJump(spec string) (ProxyJumpSpec, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return ProxyJumpSpec{}, fmt.Errorf("proxy_jump is empty")
+	}
+	if len(spec) > 300 || strings.ContainsAny(spec, " \t\r\n,/") || strings.ContainsFunc(spec, func(r rune) bool {
+		return r < 32 || r == 127
+	}) {
+		return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump (one hop like user@jump-host:22)")
+	}
+	user, hostPort := "", spec
+	if at := strings.LastIndex(spec, "@"); at >= 0 {
+		user, hostPort = spec[:at], spec[at+1:]
+		if user == "" || strings.Contains(user, "@") || strings.ContainsFunc(user, func(r rune) bool { return r < 32 || r == 127 }) {
+			return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump user")
+		}
+		if len(user) > 128 {
+			return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump user")
+		}
+	}
+	if hostPort == "" {
+		return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump host")
+	}
+	host, port := hostPort, 22
+	if strings.HasPrefix(hostPort, "[") {
+		end := strings.IndexByte(hostPort, ']')
+		if end < 1 {
+			return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump IPv6 host")
+		}
+		host = hostPort[1:end]
+		rest := hostPort[end+1:]
+		if rest == "" {
+			// ok, default port
+		} else if strings.HasPrefix(rest, ":") {
+			parsed, err := strconv.Atoi(rest[1:])
+			if err != nil || parsed < 1 || parsed > 65535 {
+				return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump port")
+			}
+			port = parsed
+		} else {
+			return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump host")
+		}
+	} else if colon := strings.LastIndex(hostPort, ":"); colon >= 0 {
+		host = hostPort[:colon]
+		parsed, err := strconv.Atoi(hostPort[colon+1:])
+		if err != nil || parsed < 1 || parsed > 65535 {
+			return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump port")
+		}
+		port = parsed
+	}
+	host = strings.TrimSpace(host)
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, " @") {
+		return ProxyJumpSpec{}, fmt.Errorf("invalid proxy_jump host")
+	}
+	return ProxyJumpSpec{User: user, Host: host, Port: port}, nil
 }
 
 func DialSSHOnConn(ctx context.Context, networkConn net.Conn, target string, options SSHOptions, extraClose io.Closer) (*SSHEndpoint, error) {

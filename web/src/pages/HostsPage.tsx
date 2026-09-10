@@ -23,6 +23,7 @@ type HostDraft = {
   port: number
   username: string
   session_name: string
+  proxy_jump: string
   auth_method: 'generated' | 'private_key' | 'private_key_bundle' | 'password' | 'saved_key'
   secret: string
   passphrase: string
@@ -31,7 +32,7 @@ type HostDraft = {
 }
 
 const emptyDraft: HostDraft = {
-  name: '', transport: 'tailcat', hostname: '', port: 22, username: '', session_name: '', auth_method: 'saved_key', secret: '', passphrase: '', ssh_key_id: '', folder_id: '',
+  name: '', transport: 'tailcat', hostname: '', port: 22, username: '', session_name: '', proxy_jump: '', auth_method: 'saved_key', secret: '', passphrase: '', ssh_key_id: '', folder_id: '',
 }
 
 function enrollmentErrorMessage(reason: unknown): string {
@@ -277,7 +278,7 @@ export function HostsPage() {
   const openAdd = (trigger: HTMLButtonElement) => { addTrigger.current = trigger; setEditingHost(null); setDraft({ ...emptyDraft, folder_id: selectedFolder === '*' ? '' : selectedFolder, ssh_key_id: keys[0]?.id || '' }); setFormError(''); setShowAdd(true) }
   const editSSH = (host: Host, trigger: HTMLButtonElement) => {
     addTrigger.current = trigger; setEditingHost(host)
-    setDraft({ ...emptyDraft, name: host.name, transport: 'ssh', hostname: host.hostname || '', port: host.port || 22, username: host.username || '', session_name: host.session_name || '', auth_method: (host.auth_method || 'password') as HostDraft['auth_method'], ssh_key_id: host.ssh_key_id || '', folder_id: host.folder_id || '' })
+    setDraft({ ...emptyDraft, name: host.name, transport: 'ssh', hostname: host.hostname || '', port: host.port || 22, username: host.username || '', session_name: host.session_name || '', proxy_jump: host.proxy_jump || '', auth_method: (host.auth_method || 'password') as HostDraft['auth_method'], ssh_key_id: host.ssh_key_id || '', folder_id: host.folder_id || '' })
     setFormError(''); setShowAdd(true)
   }
   const move = async (event: FormEvent) => {
@@ -352,6 +353,8 @@ export function HostsPage() {
           {draft.transport === 'ssh' && <>
             <div className="field-row"><label className="field field-grow"><span className="field-label">主机名或 IP</span><Input aria-label="主机名或 IP" className="input" value={draft.hostname} onChange={(event) => setDraft({ ...draft, hostname: event.target.value })} required /></label><label className="field field-port"><span className="field-label">端口</span><Input aria-label="端口" className="input" type="number" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} required /></label></div>
             <label className="field"><span className="field-label">SSH 用户</span><Input aria-label="SSH 用户" className="input" autoComplete="username" value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} required /></label>
+            <label className="field"><span className="field-label">跳板机 ProxyJump（可选）</span><Input aria-label="跳板机 ProxyJump（可选）" className="input" value={draft.proxy_jump} onChange={(event) => setDraft({ ...draft, proxy_jump: event.target.value })} placeholder="user@jump-host:22" disabled={pending} /></label>
+            <p className="field-hint">单跳跳板；跳板与目标共用上方认证（密钥/密码）。不支持多跳、ProxyCommand 脚本或 agent 转发。</p>
             <label className="field"><span className="field-label">认证</span><Select aria-label="认证" className="input" value={draft.auth_method} disabled={pending} onChange={(event) => setDraft({ ...draft, auth_method: event.target.value as HostDraft['auth_method'], secret: '', passphrase: '' })}><SelectOption value="saved_key">选择已保存密钥（公钥认证）</SelectOption><SelectOption value="password">密码认证</SelectOption><SelectOption value="private_key">为此主机粘贴或导入私钥</SelectOption>{editingHost?.auth_method === 'private_key_bundle' && <SelectOption value="private_key_bundle">已保存的主机私钥</SelectOption>}<SelectOption value="generated">为此主机生成独立 Ed25519 密钥</SelectOption></Select></label>
             {draft.auth_method === 'saved_key' && <><label className="field"><span className="field-label">认证密钥</span><Select aria-label="认证密钥" className="input" value={draft.ssh_key_id} onChange={(event) => setDraft({ ...draft, ssh_key_id: event.target.value })} required disabled={pending}><SelectOption value="">请选择密钥</SelectOption>{keys.map((key) => <SelectOption key={key.id} value={key.id}>{key.name} · {key.algorithm.replace('ssh-', '')}</SelectOption>)}</Select></label><p className="field-hint">{keys.find((key) => key.id === draft.ssh_key_id)?.fingerprint || '还没有密钥？先在密钥页面导入或生成。'}</p><a className="inline-link" href="/keys" target="_blank" rel="noopener noreferrer">管理密钥（新标签页）</a><Button type="button" className="button-ghost" onClick={async () => { try { setKeys((await api.sshKeys()).keys) } catch (reason) { setFormError(reason instanceof Error ? reason.message : '无法刷新密钥') } }}>刷新密钥列表</Button></>}
             {draft.auth_method === 'password' && <label className="field"><span className="field-label">SSH 密码</span><Input aria-label="SSH 密码" className="input" type="password" autoComplete="new-password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} required={editingHost?.auth_method !== 'password'} placeholder={editingHost?.auth_method === 'password' ? '留空保留已保存的密码' : ''} disabled={pending}/></label>}

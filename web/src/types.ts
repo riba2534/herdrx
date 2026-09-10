@@ -20,6 +20,7 @@ export type Host = {
   port?: number
   username?: string
   session_name?: string
+  proxy_jump?: string
   auth_method?: string
   ssh_key_id?: string
   folder_id?: string

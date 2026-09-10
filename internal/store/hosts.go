@@ -85,12 +85,12 @@ func (s *Store) SaveHost(ctx context.Context, host Host, credential *Credential,
 	}
 	stamp := now()
 	if previous == nil {
-		_, err = tx.ExecContext(ctx, `INSERT INTO hosts(id,owner_id,name,transport,hostname,port,username,session_name,auth_method,credential_id,host_key,pending_host_key,tailcat_addr,root_ssh_fp,folder_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			host.ID, host.OwnerID, host.Name, host.Transport, host.Hostname, host.Port, host.Username, host.SessionName, host.AuthMethod, nullable(host.CredentialID), host.HostKey, host.PendingHostKey, host.TailcatAddr, host.RootSSHFingerprint, nullable(host.FolderID), stamp, stamp)
+		_, err = tx.ExecContext(ctx, `INSERT INTO hosts(id,owner_id,name,transport,hostname,port,username,session_name,proxy_jump,auth_method,credential_id,host_key,pending_host_key,tailcat_addr,root_ssh_fp,folder_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			host.ID, host.OwnerID, host.Name, host.Transport, host.Hostname, host.Port, host.Username, host.SessionName, host.ProxyJump, host.AuthMethod, nullable(host.CredentialID), host.HostKey, host.PendingHostKey, host.TailcatAddr, host.RootSSHFingerprint, nullable(host.FolderID), stamp, stamp)
 	} else {
 		var result sql.Result
-		result, err = tx.ExecContext(ctx, `UPDATE hosts SET name=?,hostname=?,port=?,username=?,session_name=?,auth_method=?,credential_id=?,host_key=?,pending_host_key=?,folder_id=?,updated_at=? WHERE id=? AND owner_id=? AND transport='ssh' AND updated_at=?`,
-			host.Name, host.Hostname, host.Port, host.Username, host.SessionName, host.AuthMethod, nullable(host.CredentialID), host.HostKey, host.PendingHostKey, nullable(host.FolderID), stamp, host.ID, host.OwnerID, previous.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		result, err = tx.ExecContext(ctx, `UPDATE hosts SET name=?,hostname=?,port=?,username=?,session_name=?,proxy_jump=?,auth_method=?,credential_id=?,host_key=?,pending_host_key=?,folder_id=?,updated_at=? WHERE id=? AND owner_id=? AND transport='ssh' AND updated_at=?`,
+			host.Name, host.Hostname, host.Port, host.Username, host.SessionName, host.ProxyJump, host.AuthMethod, nullable(host.CredentialID), host.HostKey, host.PendingHostKey, nullable(host.FolderID), stamp, host.ID, host.OwnerID, previous.UpdatedAt.UTC().Format(time.RFC3339Nano))
 		if err == nil {
 			count, _ := result.RowsAffected()
 			if count != 1 {
@@ -116,7 +116,7 @@ func deleteUnusedCredential(ctx context.Context, tx *sql.Tx, owner, id string) e
 
 // Revalidate local access for existing records as well as newly created hosts.
 // This also filters legacy records owned by users who are no longer admins.
-const hostColumns = `id,owner_id,name,transport,hostname,port,username,session_name,auth_method,COALESCE(credential_id,''),host_key,pending_host_key,tailcat_addr,COALESCE(root_ssh_fp,''),created_at,updated_at,COALESCE(folder_id,''),COALESCE((SELECT id FROM ssh_keys WHERE id=hosts.credential_id AND owner_id=hosts.owner_id),'')`
+const hostColumns = `id,owner_id,name,transport,hostname,port,username,session_name,COALESCE(proxy_jump,''),auth_method,COALESCE(credential_id,''),host_key,pending_host_key,tailcat_addr,COALESCE(root_ssh_fp,''),created_at,updated_at,COALESCE(folder_id,''),COALESCE((SELECT id FROM ssh_keys WHERE id=hosts.credential_id AND owner_id=hosts.owner_id),'')`
 
 const allowedHost = `(transport<>'local' OR EXISTS (SELECT 1 FROM users WHERE users.id=hosts.owner_id AND users.role='admin' AND users.disabled=0))`
 
@@ -210,7 +210,7 @@ func scanHost(row interface{ Scan(...any) error }) (Host, error) {
 	var host Host
 	var created, updated string
 	err := row.Scan(&host.ID, &host.OwnerID, &host.Name, &host.Transport, &host.Hostname, &host.Port, &host.Username,
-		&host.SessionName, &host.AuthMethod, &host.CredentialID, &host.HostKey, &host.PendingHostKey, &host.TailcatAddr, &host.RootSSHFingerprint, &created, &updated, &host.FolderID, &host.SSHKeyID)
+		&host.SessionName, &host.ProxyJump, &host.AuthMethod, &host.CredentialID, &host.HostKey, &host.PendingHostKey, &host.TailcatAddr, &host.RootSSHFingerprint, &created, &updated, &host.FolderID, &host.SSHKeyID)
 	if err != nil {
 		return Host{}, err
 	}

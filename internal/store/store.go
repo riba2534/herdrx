@@ -54,6 +54,7 @@ type Host struct {
 	Port               int       `json:"port,omitempty"`
 	Username           string    `json:"username,omitempty"`
 	SessionName        string    `json:"session_name,omitempty"`
+	ProxyJump          string    `json:"proxy_jump,omitempty"`
 	AuthMethod         string    `json:"auth_method,omitempty"`
 	CredentialID       string    `json:"-"`
 	SSHKeyID           string    `json:"ssh_key_id,omitempty"`
@@ -269,6 +270,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS enrollment_tasks_owner_inflight
 		return err
 	}
 	if err := ensureColumn(db, "hosts", "folder_id", `ALTER TABLE hosts ADD COLUMN folder_id TEXT REFERENCES host_folders(id) ON DELETE SET NULL`); err != nil {
+		return err
+	}
+	if err := ensureColumn(db, "hosts", "proxy_jump", `ALTER TABLE hosts ADD COLUMN proxy_jump TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	for _, column := range []struct{ name, ddl string }{

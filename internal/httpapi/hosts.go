@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -27,6 +28,7 @@ type hostRequest struct {
 	Port        int    `json:"port"`
 	Username    string `json:"username"`
 	SessionName string `json:"session_name"`
+	ProxyJump   string `json:"proxy_jump"`
 	AuthMethod  string `json:"auth_method"`
 	Secret      string `json:"secret"`
 	Passphrase  string `json:"passphrase"`
@@ -159,6 +161,7 @@ func (a *API) buildHost(ctx context.Context, user store.User, input hostRequest,
 		return fail("请选择 SSH 或本机连接")
 	}
 	host.Hostname, host.Username, host.AuthMethod = strings.TrimSpace(input.Hostname), strings.TrimSpace(input.Username), input.AuthMethod
+	host.ProxyJump = strings.TrimSpace(input.ProxyJump)
 	if host.Hostname == "" || host.Username == "" || host.Port < 1 || host.Port > 65535 || strings.ContainsAny(host.Hostname, " /\\\t\r\n") || strings.ContainsFunc(host.Username, unicode.IsControl) {
 		return fail("请填写有效的主机地址、SSH 用户和 1–65535 之间的端口")
 	}
@@ -167,6 +170,21 @@ func (a *API) buildHost(ctx context.Context, user store.User, input hostRequest,
 	}
 	if len(host.Hostname) > 253 || len(host.Username) > 128 || len(host.SessionName) > 128 || strings.ContainsFunc(host.SessionName, unicode.IsControl) {
 		return fail("主机地址、用户或会话名称无效")
+	}
+	if host.ProxyJump != "" {
+		jump, err := herdr.ParseProxyJump(host.ProxyJump)
+		if err != nil {
+			return fail("跳板机格式无效，请使用 user@jump-host:22（仅支持单跳）")
+		}
+		if ip := net.ParseIP(jump.Host); ip != nil && !a.config.AllowPrivateHosts && isPrivateAddress(ip) {
+			return fail("管理员已禁用内网跳板机连接")
+		}
+		// Normalize to a stable stored form.
+		if jump.User != "" {
+			host.ProxyJump = jump.User + "@" + jump.Host + ":" + strconv.Itoa(jump.Port)
+		} else {
+			host.ProxyJump = jump.Host + ":" + strconv.Itoa(jump.Port)
+		}
 	}
 	if previous != nil {
 		host.ID = previous.ID
