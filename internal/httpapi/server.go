@@ -56,6 +56,7 @@ type API struct {
 	enrollmentRunning  map[string]bool
 	cliReleases        *cliReleaseCache
 	relay              *workbenchRelay
+	scriptHashes       string
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {
@@ -75,6 +76,9 @@ func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets 
 	count, err := dataStore.UserCount(context.Background())
 	if err != nil {
 		return nil, err
+	}
+	if api.assets != nil {
+		api.loadInlineScriptHashes()
 	}
 	if count == 0 {
 		api.bootstrapToken = cfg.BootstrapToken
@@ -173,7 +177,11 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
 		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		scriptSrc := "script-src 'self'"
+		if a.scriptHashes != "" {
+			scriptSrc += " " + a.scriptHashes
+		}
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; "+scriptSrc+"; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(writer, request)
 	})
 }
@@ -240,34 +248,6 @@ func (a *API) requireCSRF(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(writer, request)
-	})
-}
-
-func (a *API) frontend() http.Handler {
-	if a.assets == nil {
-		return http.NotFoundHandler()
-	}
-	fileServer := http.FileServer(http.FS(a.assets))
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		path := strings.TrimPrefix(request.URL.Path, "/")
-		if path != "" {
-			if _, err := fs.Stat(a.assets, path); err == nil {
-				if strings.HasPrefix(path, "assets/") {
-					writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-				} else if path == "sw.js" || path == "manifest.webmanifest" {
-					writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-				}
-				fileServer.ServeHTTP(writer, request)
-				return
-			}
-			if strings.HasPrefix(path, "assets/") || filepath.Ext(path) != "" {
-				http.NotFound(writer, request)
-				return
-			}
-		}
-		writer.Header().Set("Cache-Control", "no-store")
-		request.URL.Path = "/"
-		fileServer.ServeHTTP(writer, request)
 	})
 }
 

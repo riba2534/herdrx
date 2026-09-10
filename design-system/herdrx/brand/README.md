@@ -12,11 +12,11 @@
 
 ## 网页与应用资源
 
-正式资源位于 [web/public/brand/v2](../../../web/public/brand/v2/)，更换路径使浏览器与 PWA 能请求新版图标。根目录 `favicon.ico` 同时更新，兼容浏览器的默认请求。
+网站实际分发的图标位于 [web/public/brand/v2](../../../web/public/brand/v2/)，只保留页面、manifest 与导航会请求的尺寸。高分辨率原稿导出（横版 Logo、1024px、未引用的中间尺寸）放在 [exported](exported/)，避免进入 Service Worker 预缓存。根目录 `web/public/favicon.ico` 是站点唯一 ICO，兼容浏览器的默认请求。
 
 - 网页图标提供 1×、2×、3×资源，覆盖实际 18、24、28、52 CSS px 的使用位置。
 - 字标采用 `mask-mode: luminance`：黑色隐藏、白色显示，再由主题文字颜色填充。黑白原稿不能当作普通透明图片直接显示，也不能改成默认 alpha mask。
-- 导出 16 至 1024 px 的 PNG、180 px Apple Touch 图标，以及保留不透明背景和 12.5% 留白的 512 px maskable 图标。
+- 导出 16 至 1024 px 的 PNG、180 px Apple Touch 图标，以及保留不透明背景和 12.5% 留白的 192/512 px maskable 图标。
 - 横版 Logo 为实色底高清图片；网页导航使用图标加亮度遮罩，保持 96×24 px 的原有布局。
 
 ## 导出

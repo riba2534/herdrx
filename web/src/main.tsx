@@ -8,10 +8,13 @@ import { Tooltips } from './components/Tooltips'
 import './controls.css'
 import { AuthProvider } from './auth'
 import { initializeAppearance } from './lib/appearance'
+import { preloadWorkbenchChunk } from './lib/preload'
 import { startPWA } from './lib/pwa'
 import { PWAStatus } from './components/PWA'
 import './pwa.css'
 
+window.__herdrxBooted = true
+preloadWorkbenchChunk()
 initializeAppearance()
 startPWA()
 
