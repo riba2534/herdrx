@@ -196,11 +196,12 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .workbench .keybar button { background: var(--ui-input); border-color: var(--ui-control-border); }
 .workbench .keybar .key-active { background: var(--ui-accent); color: var(--ui-accent-ink); }
 .workbench .composer-input { background: var(--ui-input); border-color: var(--ui-control-border); color: var(--ui-text); }
+.workbench .composer-mode-trigger { background: var(--ui-input); border-color: var(--ui-control-border); color: var(--ui-text); }
 .workbench .composer-modes > button { background: var(--ui-input); border-color: var(--ui-control-border); }
 .workbench .composer-modes > .composer-mode-active { background: var(--ui-selected); color: var(--ui-text); border-color: var(--ui-accent); }
 .workbench .ownership-control { color: var(--ui-accent); }
 .workbench .display-font { font-family: var(--ui-font); }
-.workbench .terminal-title small { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+.workbench .terminal-title small { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace; }
 .workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 32px; }
 .sidebar-section-title { min-height: 32px; font-size: 12px; padding-left: 12px; }
 .sidebar-list { padding-inline: 6px; }
@@ -325,8 +326,11 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .topbar .button, .auth-topbar .button, .appearance-toggle { min-width: 44px; min-height: 44px; }
   .topbar > .brand, .auth-topbar > .brand { min-height: 44px; }
 }
+.topbar-more { display: none; }
 @media (max-width: 600px) {
-  .topbar .appearance-label, .auth-topbar .appearance-label, .topbar-hosts .nav-action-label { display: none; }
+  .topbar .appearance-label, .auth-topbar .appearance-label { display: none; }
+  .topbar-hosts .topbar-nav-action { display: none; }
+  .topbar-hosts .topbar-more { display: inline-flex; }
   .topbar-hosts .topbar-actions > .button { width: 44px; padding-inline: 0; }
 }
 

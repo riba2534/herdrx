@@ -1,5 +1,10 @@
 type FontMetrics = { width: number; height: number }
 export type FontMeasure = (fontSize: number) => FontMetrics | null
+export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace'
+
+export function whenFontsReady(): Promise<void> {
+  return document.fonts?.ready ? document.fonts.ready.then(() => undefined) : Promise.resolve()
+}
 
 type FitBounds = {
   width: number

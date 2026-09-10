@@ -12,10 +12,13 @@ function composing(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
 const idleSend: ComposerSendState = { status: 'idle', error: '', revision: 0 }
 
 function resizeCompactInput(textarea: HTMLTextAreaElement) {
-  textarea.style.height = '44px'
+  const short = Boolean(textarea.closest('.workbench-short'))
+  const min = short ? 36 : 44
+  const max = short ? 36 : 104
+  textarea.style.height = `${min}px`
   const contentHeight = textarea.scrollHeight + 2
-  textarea.style.height = `${Math.max(44, Math.min(104, contentHeight))}px`
-  textarea.style.overflowY = contentHeight > 104 ? 'auto' : 'hidden'
+  textarea.style.height = `${Math.max(min, Math.min(max, contentHeight))}px`
+  textarea.style.overflowY = contentHeight > max ? 'auto' : 'hidden'
 }
 
 function InputModeMenu({ directInput, onDirectInput, onLocalInput }: {
