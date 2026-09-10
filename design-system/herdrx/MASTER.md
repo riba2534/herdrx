@@ -37,7 +37,7 @@ Never communicate agent state by color alone. Pair color with text and a dot/sym
 ## Typography
 
 - UI: `Noto Sans CJK SC`、`Noto Sans SC`、`PingFang SC`、`Microsoft YaHei` 与无衬线回退。正文桌面 14px、手机 16px，表单在手机至少 16px。
-- Terminal: `JetBrains Mono`, `SFMono-Regular`, `Consolas`, system monospace. Default 14px.
+- Terminal: `JetBrains Mono`, `ui-monospace`, `Menlo`, `Roboto Mono`, `SFMono-Regular`, `Consolas`, system monospace. Default 14px.
 - Numeric counters and connection timings use tabular figures.
 - Do not download Google Fonts at runtime; use system fallbacks and optional self-hosted assets.
 

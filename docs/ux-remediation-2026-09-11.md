@@ -78,7 +78,7 @@
 27. **部分。** 工作台锁到 visualViewport 高度，`offsetTop` + `position:fixed`，禁止页面滚动。真机 iOS 软键盘未测。
 28. **完成。** 手机顶栏 StatusDot、连接点、其他 pane blocked 角标。
 29. **完成。** 「选择文本」开关与「复制屏幕」；非安全上下文弹出可全选文本框。
-30. **完成。** `.workbench-short` 收矮顶栏/composer；短布局下辅助键与输入框互斥。
+30. **完成。** `.workbench-short` 收矮顶栏/composer；短布局下辅助键与输入框互斥。短布局（横屏+软键盘）顶栏与触点收到 32px 是为保住终端行数的刻意权衡，待真机确认。
 31. **完成。** toast/mode-bar 使用 `--dock-height`；toast 5s 消失。
 32. **部分。** 等宽栈含 `ui-monospace, Menlo`；`fonts.ready` 后再 fit。iOS Courier 回退待真机。
 33. **完成。** 多 pane 时手机 chip 行一键切换。
