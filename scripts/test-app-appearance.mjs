@@ -236,7 +236,8 @@ try {
         }
       })
       const legacyPage = await legacy.newPage()
-      const boot = await readFile(join(dist, 'boot.js'), 'utf8')
+      const html = await readFile(join(dist, 'index.html'), 'utf8')
+      const boot = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] || await readFile(join(dist, 'boot.js'), 'utf8')
       await legacyPage.goto(base)
       await expectTheme(legacyPage, 'light')
       await compactHeader(legacyPage)

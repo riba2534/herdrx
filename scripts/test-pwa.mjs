@@ -12,7 +12,18 @@ const worker = await readFile(join(dist, 'sw.js'), 'utf8')
 assert.ok(!worker.includes('__BUILD_ID__') && !worker.includes('__PRECACHE__'), 'build must generate complete PWA precache')
 const manifest = JSON.parse(await readFile(join(dist, 'manifest.webmanifest'), 'utf8'))
 assert.equal(manifest.id, '/'); assert.equal(manifest.scope, '/'); assert.equal(manifest.display, 'standalone')
+assert.equal(manifest.orientation, 'any')
+assert.ok(manifest.icons.some(icon => icon.sizes === '192x192' && icon.purpose === 'maskable'))
 for (const icon of manifest.icons) assert.ok((await readFile(join(dist, icon.src))).length > 0)
+const html = await readFile(join(dist, 'index.html'), 'utf8')
+assert.ok(html.includes('apple-mobile-web-app-title'), 'PWA title meta')
+assert.ok(html.includes('interactive-widget=resizes-content'), 'viewport keyboard widget')
+assert.ok(html.includes('<script>'), 'boot.js must be inlined')
+assert.ok(!html.includes('src="/boot.js"'), 'boot.js must not remain an extra request')
+const workerPrecache = JSON.parse(worker.match(/const PRECACHE = (\[[\s\S]*?\n?])/)?.[1] || worker.match(/const PRECACHE = (\[.*\])/)[1])
+assert.ok(!workerPrecache.includes('/boot.js'), 'inlined boot.js stays out of precache')
+assert.ok(!workerPrecache.some(path => /logo|icon-1024|icon-256/.test(path)), 'unused brand files stay out of precache')
+assert.ok(!workerPrecache.some(path => path.endsWith('.gz') || path.endsWith('.br')))
 let revision = 'one', denyAPI = false, failAsset = false, droppedNetwork = false
 const calls = []
 const server = createServer(async (req, res) => {
