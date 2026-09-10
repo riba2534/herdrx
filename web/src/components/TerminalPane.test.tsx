@@ -5,17 +5,18 @@ import { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], last: null as { options: { disableStdin: boolean }, cols: number, rows: number, focus: () => void } | null }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], focuses: 0, searches: [] as Array<{ dir: string; query: string }>, last: null as { options: { disableStdin: boolean; macOptionIsMeta?: boolean; screenReaderMode?: boolean; minimumContrastRatio?: number }, cols: number, rows: number, focus: () => void } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
     Terminal: class MockTerminal {
-      options = { fontSize: 14, theme: {}, minimumContrastRatio: 1, disableStdin: false }
-      constructor() {
+      options = { fontSize: 14, theme: {}, minimumContrastRatio: 1, disableStdin: false, macOptionIsMeta: false, macOptionClickForcesSelection: false, screenReaderMode: false, scrollback: 0 }
+      constructor(init: Record<string, unknown> = {}) {
+        Object.assign(this.options, init)
         terminalHarness.instances++
         terminalHarness.last = this
-        let size = 14
-        let scrollback = 0
+        let size = Number(this.options.fontSize) || 14
+        let scrollback = Number(this.options.scrollback) || 0
         Object.defineProperty(this.options, 'fontSize', { get: () => size, set: (value: number) => { size = value; terminalHarness.fontWrites.push(value) } })
         Object.defineProperty(this.options, 'scrollback', {
           configurable: true,
@@ -30,8 +31,12 @@ vi.mock('@xterm/xterm', () => {
       cols = 80
       rows = 24
       buffer = { active: { viewportY: 0, baseY: 200 } }
+      selection = ''
       loadAddon() {}
       open(el: HTMLElement) {
+        const textarea = document.createElement('textarea')
+        textarea.className = 'xterm-helper-textarea'
+        el.appendChild(textarea)
         const div = document.createElement('div')
         div.className = 'xterm'
         el.appendChild(div)
@@ -52,7 +57,11 @@ vi.mock('@xterm/xterm', () => {
         terminalHarness.disposals++
         terminalHarness.disposalsWhileWrites.push(terminalHarness.writeCallbacks.length)
       }
-      focus() {}
+      focus() { terminalHarness.focuses++ }
+      getSelection() { return this.selection }
+      hasSelection() { return Boolean(this.selection) }
+      selectAll() { this.selection = 'all' }
+      clearSelection() { this.selection = '' }
       attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { terminalHarness.keyHandler = handler }
       onData() {
         return { dispose: () => {} }
@@ -74,7 +83,14 @@ vi.mock('@xterm/addon-fit', () => ({
     }
   },
 }))
-vi.mock('@xterm/addon-search', () => ({ SearchAddon: class {} }))
+vi.mock('@xterm/addon-search', () => ({
+  SearchAddon: class {
+    handler: ((result: { resultIndex: number; resultCount: number }) => void) | null = null
+    findNext(query: string) { terminalHarness.searches.push({ dir: 'next', query }); this.handler?.({ resultIndex: 0, resultCount: 3 }) }
+    findPrevious(query: string) { terminalHarness.searches.push({ dir: 'prev', query }); this.handler?.({ resultIndex: 1, resultCount: 3 }) }
+    onDidChangeResults(handler: (result: { resultIndex: number; resultCount: number }) => void) { this.handler = handler; return { dispose() {} } }
+  },
+}))
 vi.mock('@xterm/addon-unicode11', () => ({ Unicode11Addon: class {} }))
 vi.mock('@xterm/addon-web-links', () => ({ WebLinksAddon: class { constructor(handler: (event: MouseEvent, uri: string) => void) { terminalHarness.linkHandler = handler } } }))
 
@@ -100,6 +116,8 @@ describe('TerminalPane paste interception', () => {
     terminalHarness.scrollbackDuringWrite = []
     terminalHarness.disposals = 0
     terminalHarness.disposalsWhileWrites = []
+    terminalHarness.focuses = 0
+    terminalHarness.searches = []
   })
   it('opens links only from the custom confirmation click without restarting the terminal', async () => {
     const client = new WorkbenchClient('hst_test')
@@ -110,16 +128,19 @@ describe('TerminalPane paste interception', () => {
     const instances = terminalHarness.instances
     act(() => terminalHarness.linkHandler!(new MouseEvent('click'), 'https://example.test/docs'))
     expect(open).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    act(() => terminalHarness.linkHandler!(new MouseEvent('click', { ctrlKey: true }), 'https://example.test/docs'))
+    expect(open).not.toHaveBeenCalled()
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '取消' }))
     expect(open).not.toHaveBeenCalled()
-    act(() => terminalHarness.linkHandler!(new MouseEvent('click'), 'https://example.test/docs'))
+    act(() => terminalHarness.linkHandler!(new MouseEvent('click', { metaKey: true }), 'https://example.test/docs'))
     const accept = within(screen.getByRole('alertdialog')).getByRole('button', { name: '打开链接' })
     fireEvent.pointerDown(accept)
     expect(focus).not.toHaveBeenCalled()
     fireEvent.click(accept)
     expect(open).toHaveBeenCalledExactlyOnceWith('https://example.test/docs', '_blank', 'noopener,noreferrer')
     expect(terminalHarness.instances).toBe(instances)
-    act(() => terminalHarness.linkHandler!(new MouseEvent('click'), 'https://example.test/unmounted'))
+    act(() => terminalHarness.linkHandler!(new MouseEvent('click', { ctrlKey: true }), 'https://example.test/unmounted'))
     unmount()
     await act(async () => {})
     expect(open).toHaveBeenCalledTimes(1)
@@ -644,10 +665,11 @@ describe('TerminalPane paste interception', () => {
     expect(frames).toHaveBeenCalledTimes(1)
   })
 
-  it('sends one newline for Shift+Enter without submitting or duplicating keyup', async () => {
+  it('sends Shift+Enter through pane.send_keys without submitting or duplicating keyup', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const call = vi.spyOn(client, 'call').mockResolvedValue({})
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
     await waitFor(() => expect(frames).toHaveBeenCalled())
@@ -655,7 +677,8 @@ describe('TerminalPane paste interception', () => {
     expect(terminalHarness.keyHandler!(event)).toBe(false)
     expect(event.defaultPrevented).toBe(true)
     terminalHarness.keyHandler!(new KeyboardEvent('keyup', { key: 'Enter', shiftKey: true }))
-    expect(input).toHaveBeenCalledExactlyOnceWith(7, '\n')
+    expect(call).toHaveBeenCalledExactlyOnceWith('pane.send_keys', { pane_id: 'p1', keys: ['shift+enter'] })
+    expect(input).not.toHaveBeenCalled()
     expect(terminalHarness.keyHandler!(new KeyboardEvent('keydown', { key: 'Enter' }))).toBe(true)
     expect(terminalHarness.keyHandler!(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, isComposing: true }))).toBe(true)
     for (const key of ['+', '=', '-', '0']) {
@@ -663,6 +686,46 @@ describe('TerminalPane paste interception', () => {
       expect(terminalHarness.keyHandler!(zoom)).toBe(false)
       expect(zoom.defaultPrevented).toBe(false)
     }
+  })
+
+  it('focuses the terminal when it becomes the active pane unless a local field has focus', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const props = { client, pane: mockPane, connectionEpoch: 1, onFocus: () => {}, theme: {}, enhancedContrast: false, directInput: true }
+    const { rerender } = render(<TerminalPane {...props} active={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    const focusedOnMount = terminalHarness.focuses
+    rerender(<TerminalPane {...props} active/>)
+    expect(terminalHarness.focuses).toBe(focusedOnMount + 1)
+    const composer = document.createElement('textarea')
+    composer.className = 'composer-input'
+    document.body.append(composer)
+    composer.focus()
+    rerender(<TerminalPane {...props} active={false}/>)
+    rerender(<TerminalPane {...props} active/>)
+    expect(terminalHarness.focuses).toBe(focusedOnMount + 1)
+    composer.remove()
+  })
+
+  it('opens search from Ctrl+Shift+F, loads history, and reports match index', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const read = vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'needle-1\nneedle-2\nneedle-3' } })
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    const shortcut = new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, shiftKey: true, cancelable: true })
+    expect(terminalHarness.keyHandler!(shortcut)).toBe(false)
+    await waitFor(() => expect(read).toHaveBeenCalledWith('pane.read', { pane_id: 'p1', source: 'recent', format: 'ansi', lines: 10000 }))
+    const box = screen.getByRole('textbox', { name: '搜索内容' })
+    fireEvent.change(box, { target: { value: 'needle' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(terminalHarness.searches).toEqual([{ dir: 'next', query: 'needle' }])
+    expect(screen.getByText('第 1/3 个')).toBeInTheDocument()
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true })
+    expect(terminalHarness.searches[1]).toEqual({ dir: 'prev', query: 'needle' })
+    expect(screen.getByText('第 2/3 个')).toBeInTheDocument()
   })
 
   it('routes mouse wheel to Herdr history while keeping browser zoom untouched', async () => {
