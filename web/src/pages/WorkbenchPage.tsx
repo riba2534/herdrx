@@ -4,10 +4,11 @@ import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { Bell, Columns2, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Server, Settings, Trash2, X, ZoomIn } from 'lucide-react'
+import { Bell, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Search, Server, Settings, Square, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
-import { TerminalPane } from '../components/TerminalPane'
+import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
+import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, paneDisplayName, prefixModeBarItems } from '../lib/keymap'
 import { Composer } from '../components/Composer'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
@@ -70,10 +71,24 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     else setDesktopInput(apply)
   }
   const focusDirectInput = () => { patchInput({ directInput: true }); setInputFocusRequest((request) => request + 1) }
+  const afterSelectLocation = (fromOverlay = false) => {
+    if (!directInput) return
+    if (fromOverlay) requestAnimationFrame(() => focusDirectInput())
+    else focusDirectInput()
+  }
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const [themeName, setThemeName] = useState(() => localStorage.getItem('herdrx.terminal-theme') || 'Cobalt2')
   const terminalTheme = terminalThemes[themeName] || terminalThemes.Cobalt2
-  const [enhancedContrast, setEnhancedContrast] = useState(() => localStorage.getItem('herdrx.enhanced-contrast') !== 'false')
+  const [enhancedContrast, setEnhancedContrast] = useState(() => localStorage.getItem('herdrx.enhanced-contrast') === 'true')
+  const [optionAsMeta, setOptionAsMeta] = useState(() => {
+    const stored = localStorage.getItem('herdrx.option-as-meta')
+    if (stored === 'true') return true
+    if (stored === 'false') return false
+    return /Mac/.test(navigator.platform || '')
+  })
+  const [screenReaderMode, setScreenReaderMode] = useState(() => localStorage.getItem('herdrx.screen-reader-mode') === 'true')
+  const paneSurfaces = useRef(new Map<string, PaneSurfaceHandle>())
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => 'Notification' in window ? Notification.permission : 'denied')
   const [actionError, setActionError] = useState('')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: ContextTarget } | null>(null)
@@ -110,6 +125,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
 
   useEffect(() => { localStorage.setItem('herdrx.sidebar-open', String(sidebarOpen)) }, [sidebarOpen])
+
+  useEffect(() => {
+    const unload = (event: BeforeUnloadEvent) => {
+      if (!client.hasOpenTerminals()) return
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', unload)
+    return () => window.removeEventListener('beforeunload', unload)
+  }, [client])
 
 
 
@@ -209,35 +234,94 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement).closest('[role="dialog"], [role="alertdialog"], [data-ui-overlay]')) return
-      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'b') {
+      if (isLocalInputTarget(event.target)) return
+      if (isModifierKey(event)) return
+      if (isPrefixChord(event)) {
+        if (event.repeat) return
         event.preventDefault()
         event.stopPropagation()
-        setPrefix((value) => !value)
+        if (prefix) {
+          setPrefix(false)
+          terminalInput?.('\x02')
+        } else {
+          setPrefix(true)
+        }
         return
       }
       if (!prefix) return
       event.preventDefault()
       event.stopPropagation()
       setPrefix(false)
-      void runPrefixAction(event.key)
+      if (event.key === 'Escape') return
+      void runPrefixAction(event)
     }
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
-  }, [prefix, paneID, tabID, workspaceID, snapshot])
+  }, [prefix, paneID, tabID, workspaceID, snapshot, terminalInput, directInput])
 
-  const runPrefixAction = async (key: string) => {
+  const runPrefixAction = async (eventOrKey: KeyboardEvent | string) => {
     try {
       if (!snapshot || !paneID) return
-      if (key === 'Escape') return
-      if (key === 'v') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'right', ratio: 0.5, focus: false })
-      else if (key === '-') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'down', ratio: 0.5, focus: false })
-      else if (key === 'z') await client.call('pane.zoom', { pane_id: paneID })
-      else if (key === 'x' && await confirm('关闭当前 Pane？其中运行的进程也会结束。', { title: '关闭 Pane', confirmLabel: '关闭 Pane' })) await client.call('pane.close', { pane_id: paneID })
-      else if (['h', 'j', 'k', 'l'].includes(key)) focusNeighbor(key)
-      else if (key === 'c') await createTab()
-      else if (key === 'b') setSidebarOpen((value) => !value)
-      else if (key === 'w' || key === 'g') setSwitcherOpen(true)
+      if (typeof eventOrKey === 'string') {
+        if (eventOrKey === 'Escape') return
+        if (eventOrKey === 'v') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'right', ratio: 0.5, focus: false })
+        else if (eventOrKey === '-') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'down', ratio: 0.5, focus: false })
+        else if (eventOrKey === 'z') await client.call('pane.zoom', { pane_id: paneID })
+        else if (eventOrKey === 'x' && await confirm('关闭当前 Pane？其中运行的进程也会结束。', { title: '关闭 Pane', confirmLabel: '关闭 Pane' })) await client.call('pane.close', { pane_id: paneID })
+        else if (['h', 'j', 'k', 'l'].includes(eventOrKey)) focusNeighbor(eventOrKey)
+        else if (eventOrKey === 'c') await createTab()
+        else if (eventOrKey === 'b') setSidebarOpen((value) => !value)
+        else if (eventOrKey === 'w' || eventOrKey === 'g') setSwitcherOpen(true)
+        setActionError('')
+        return
+      }
+      const match = matchPrefixAction(eventOrKey)
+      if (!match || !match.binding.implemented) { setActionError(''); return }
+      const action = match.binding.action
+      if (action === 'split-right') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'right', ratio: 0.5, focus: false })
+      else if (action === 'split-down') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'down', ratio: 0.5, focus: false })
+      else if (action === 'zoom') await client.call('pane.zoom', { pane_id: paneID })
+      else if (action === 'close-pane' && await confirm('关闭当前 Pane？其中运行的进程也会结束。', { title: '关闭 Pane', confirmLabel: '关闭 Pane' })) await client.call('pane.close', { pane_id: paneID })
+      else if (action === 'focus-left') focusNeighbor('h')
+      else if (action === 'focus-down') focusNeighbor('j')
+      else if (action === 'focus-up') focusNeighbor('k')
+      else if (action === 'focus-right') focusNeighbor('l')
+      else if (action === 'swap-left') await swapNeighbor('h')
+      else if (action === 'swap-down') await swapNeighbor('j')
+      else if (action === 'swap-up') await swapNeighbor('k')
+      else if (action === 'swap-right') await swapNeighbor('l')
+      else if (action === 'cycle-pane-next') cyclePane(1)
+      else if (action === 'cycle-pane-previous') cyclePane(-1)
+      else if (action === 'new-tab') await createTab()
+      else if (action === 'close-tab') {
+        const tab = snapshot.tabs.find((item) => item.tab_id === tabID)
+        if (tab) await closeTab(tab)
+      }
+      else if (action === 'next-tab') cycleTab(1)
+      else if (action === 'previous-tab') cycleTab(-1)
+      else if (action === 'switch-tab' && match.tabIndex) {
+        const workspaceTabs = snapshot.tabs.filter((item) => item.workspace_id === workspaceID)
+        const next = workspaceTabs.find((item) => item.number === match.tabIndex) || workspaceTabs[match.tabIndex - 1]
+        if (next) selectTab(next)
+      }
+      else if (action === 'toggle-sidebar') setSidebarOpen((value) => !value)
+      else if (action === 'switcher') setSwitcherOpen(true)
+      else if (action === 'new-workspace') await createWorkspace()
+      else if (action === 'switch-workspace') cycleWorkspace()
+      else if (action === 'close-workspace') {
+        const workspace = snapshot.workspaces.find((item) => item.workspace_id === workspaceID)
+        if (workspace && await confirm(`关闭工作区“${workspace.label}”？其中运行的进程也会结束。`, { title: '关闭工作区', confirmLabel: '关闭工作区' })) await client.call('workspace.close', { workspace_id: workspace.workspace_id, close_group: true })
+      }
+      else if (action === 'rename-tab') {
+        const tab = snapshot.tabs.find((item) => item.tab_id === tabID)
+        if (tab) openPrompt({ title: '重命名标签页', label: '名称', value: tab.label, submitLabel: '保存', onSubmit: async (label) => { await client.call('tab.rename', { tab_id: tab.tab_id, label }) } })
+      }
+      else if (action === 'rename-pane') {
+        const pane = snapshot.panes.find((item) => item.pane_id === paneID)
+        if (pane) openPrompt({ title: '重命名 Pane', label: '名称', value: pane.label || '', submitLabel: '保存', onSubmit: async (label) => { await client.call('pane.rename', { pane_id: pane.pane_id, label }) } })
+      }
+      else if (action === 'help') setHelpOpen(true)
+      else if (action === 'settings') setSettingsOpen(true)
       setActionError('')
     } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Herdr 操作失败') }
   }
@@ -402,8 +486,14 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       ]
     }
     const pane = target.pane
+    const surface = paneSurfaces.current.get(pane.pane_id)
     const items: ContextMenuItem[] = [
-      { id: 'rename', label: '重命名 Pane', icon: <Pencil size={15}/>, onSelect: () => openPrompt({ title: '重命名 Pane', label: '名称', value: pane.label || '', submitLabel: '保存', onSubmit: async (label) => { await client.call('pane.rename', { pane_id: pane.pane_id, label }) } }) },
+      { id: 'copy', label: '复制', icon: <Copy size={15}/>, disabled: !surface?.hasSelection(), onSelect: () => runAction(async () => { await surface?.copy() }) },
+      { id: 'paste', label: '粘贴', icon: <ClipboardPaste size={15}/>, onSelect: () => runAction(async () => { await surface?.paste() }) },
+      { id: 'select-all', label: '全选', icon: <TextSelect size={15}/>, onSelect: () => { surface?.selectAll() } },
+      { id: 'clear-selection', label: '清除选区', icon: <Square size={15}/>, onSelect: () => { surface?.clearSelection() } },
+      { id: 'search', label: '搜索', icon: <Search size={15}/>, separatorBefore: true, onSelect: () => { surface?.openSearch() } },
+      { id: 'rename', label: '重命名 Pane', icon: <Pencil size={15}/>, separatorBefore: true, onSelect: () => openPrompt({ title: '重命名 Pane', label: '名称', value: pane.label || '', submitLabel: '保存', onSubmit: async (label) => { await client.call('pane.rename', { pane_id: pane.pane_id, label }) } }) },
     ]
     if (pane.label) items.push({ id: 'clear-name', label: '清除 Pane 名称', icon: <X size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.rename', { pane_id: pane.pane_id, label: null }) }) })
     if (target.sourcePaneID) items.push({ id: 'swap', label: '与当前 Pane 互换', icon: <Move size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.swap', { source_pane_id: target.sourcePaneID, target_pane_id: pane.pane_id }); setPaneID(target.sourcePaneID!) }) })
@@ -411,32 +501,71 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       { id: 'split-right', label: '向右分屏', icon: <Columns2 size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { await client.call('pane.split', { workspace_id: pane.workspace_id, target_pane_id: pane.pane_id, direction: 'right', ratio: 0.5, focus: false }) }) },
       { id: 'split-down', label: '向下分屏', icon: <Rows2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.split', { workspace_id: pane.workspace_id, target_pane_id: pane.pane_id, direction: 'down', ratio: 0.5, focus: false }) }) },
       { id: 'zoom', label: '切换 Pane 缩放', icon: <Maximize2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.zoom', { pane_id: pane.pane_id, mode: 'toggle' }) }) },
-      { id: 'right-click', label: pane.right_click_passthrough ? '恢复 Herdrx 右键菜单' : '将右键发送给 Pane', icon: <Menu size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { const value = pane.right_click_passthrough ? 'herdr' : 'pane'; await client.call('pane.input.set', { pane_id: pane.pane_id, right_click: value }); setPaneRightClickTarget(pane.pane_id, value) }) },
+      { id: 'right-click', label: pane.right_click_passthrough ? '恢复 Herdrx 右键菜单' : '将右键发送给 Pane（Shift+右键仍打开本菜单）', icon: <Menu size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { const value = pane.right_click_passthrough ? 'herdr' : 'pane'; await client.call('pane.input.set', { pane_id: pane.pane_id, right_click: value }); setPaneRightClickTarget(pane.pane_id, value) }) },
       { id: 'close', label: '关闭 Pane', icon: <Trash2 size={15}/>, danger: true, separatorBefore: true, onSelect: async () => { if (await confirm('关闭这个 Pane？其中运行的进程也会结束。', { title: '关闭 Pane', confirmLabel: '关闭 Pane' })) runAction(async () => { await client.call('pane.close', { pane_id: pane.pane_id }) }) } },
     )
     return items
   }
 
-  const focusNeighbor = (key: string) => {
+  const neighborPaneID = (key: string) => {
     const layout = currentLayout(snapshot, tabID)
     const current = layout?.panes.find((item) => item.pane_id === paneID)
-    if (!layout || !current) return
+    if (!layout || !current) return ''
     const center = (rect: typeof current.rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 })
     const from = center(current.rect)
     const candidates = layout.panes.filter((item) => item.pane_id !== paneID).map((item) => ({ item, point: center(item.rect) })).filter(({ point }) =>
       key === 'h' ? point.x < from.x : key === 'l' ? point.x > from.x : key === 'k' ? point.y < from.y : point.y > from.y)
     candidates.sort((left, right) => Math.hypot(left.point.x - from.x, left.point.y - from.y) - Math.hypot(right.point.x - from.x, right.point.y - from.y))
-    if (candidates[0]) setPaneID(candidates[0].item.pane_id)
+    return candidates[0]?.item.pane_id || ''
+  }
+
+  const focusNeighbor = (key: string) => {
+    const next = neighborPaneID(key)
+    if (!next) return
+    setPaneID(next)
+    afterSelectLocation()
+  }
+
+  const swapNeighbor = async (key: string) => {
+    const next = neighborPaneID(key)
+    if (!next) return
+    await client.call('pane.swap', { source_pane_id: paneID, target_pane_id: next })
+    setPaneID(next)
+    afterSelectLocation()
+  }
+
+  const cyclePane = (direction: 1 | -1) => {
+    const ids = currentLayout(snapshot, tabID)?.panes.map((item) => item.pane_id) || []
+    if (!ids.length) return
+    const index = Math.max(0, ids.indexOf(paneID))
+    setPaneID(ids[(index + direction + ids.length) % ids.length])
+    afterSelectLocation()
+  }
+
+  const cycleTab = (direction: 1 | -1) => {
+    const workspaceTabs = snapshot?.tabs.filter((item) => item.workspace_id === workspaceID) || []
+    if (!workspaceTabs.length) return
+    const index = Math.max(0, workspaceTabs.findIndex((item) => item.tab_id === tabID))
+    selectTab(workspaceTabs[(index + direction + workspaceTabs.length) % workspaceTabs.length])
+  }
+
+  const cycleWorkspace = () => {
+    const list = snapshot?.workspaces || []
+    if (!list.length) return
+    const index = Math.max(0, list.findIndex((item) => item.workspace_id === workspaceID))
+    selectWorkspace(list[(index + 1) % list.length])
   }
 
   const selectWorkspace = (workspace: Workspace) => {
+    const fromSwitcher = switcherOpen
     setMobileToolsOpen(false)
     setWorkspaceID(workspace.workspace_id)
     setTabID(workspace.active_tab_id)
     setSwitcherOpen(false)
+    afterSelectLocation(fromSwitcher)
   }
-  const selectTab = (tab: Tab) => { setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false) }
-  const selectAgent = (agent: Agent) => { setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false) }
+  const selectTab = (tab: Tab) => { const fromSwitcher = switcherOpen; setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
+  const selectAgent = (agent: Agent) => { const fromSwitcher = switcherOpen; setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
 
   const workspaces = snapshot?.workspaces || []
   const visibleWorkspaces = workspaces.filter((workspace) => !workspace.worktree?.is_linked_worktree || !collapsedGroups.has(workspace.worktree.repo_key))
@@ -451,6 +580,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const hostEntries = availableHosts.some((item) => item.id === hostID) ? availableHosts : [{ id: hostID, name: host?.name || '加载主机…' }, ...availableHosts]
 
   return <div className={`workbench ${mobile ? 'workbench-compact' : ''} ${mobile && viewportHeight < 500 ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
+    <h1 className="workbench-title">{host?.name || '工作台'}</h1>
     {mobile ? <header className="mobile-topbar" aria-label="工作台导航">
       <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
         <Menu size={18}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
@@ -478,7 +608,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SidebarSection title="Agent 状态">
         {agents.length === 0 ? <p className="sidebar-empty">暂无 Agent</p> : agents.map((agent) => <button className={`sidebar-row agent-row ${agent.pane_id === paneID ? 'sidebar-row-active' : ''}`} key={agent.pane_id} data-tooltip={`${agent.name || agent.agent} · ${workspaceName(workspaces, agent.workspace_id)} · ${agent.agent_status}`} aria-current={agent.pane_id === paneID ? 'true' : undefined} onClick={() => selectAgent(agent)} onContextMenu={(event) => openAgentContextMenu(event, agent)}><StatusDot status={agent.agent_status}/><span className="agent-meta"><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)}</small></span><span className="agent-state">{({ working: '运行', blocked: '待确认', done: '完成', idle: '空闲', unknown: '未知' })[agent.agent_status]}</span></button>)}
       </SidebarSection>
-      <div className="sidebar-footer"><span>herdrx</span><button data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={13}/>设置</button></div>
+      <div className="sidebar-footer"><span>herdrx</span><span className="sidebar-footer-actions"><button data-tooltip="快捷键" onClick={() => setHelpOpen(true)}><Keyboard size={13}/>快捷键</button><button data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={13}/>设置</button></span></div>
     </aside>}
 
     <main className="workbench-main">
@@ -494,13 +624,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
           const sourceRect = layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
-            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} theme={terminalTheme} enhancedContrast={enhancedContrast} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput}/>
+            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput}/>
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
       </section>
 
-      {prefix && <div className="mode-bar"><strong>PREFIX</strong><span>esc cancel</span><span>v split right</span><span>− split down</span><span>hjkl focus</span><span>z zoom</span><span>x close</span><span>w switch</span></div>}
+      {prefix && <div className="mode-bar"><strong>PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {(composerOpen || mobile) && <div className="workbench-dock">
       <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
@@ -512,7 +642,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     </main>
 
     {switcherOpen && <Modal title="切换 Herdr 位置" className="switcher" closeLabel="关闭切换位置" onClose={() => setSwitcherOpen(false)}>
-      <SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{pane.label || pane.terminal_title_stripped || pane.pane_id}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup>
+      <SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false); afterSelectLocation(true) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{paneDisplayName(pane)}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup>
       <SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button aria-pressed={tab.tab_id === tabID} key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{tab.pane_count} panes</small></span></button>)}</SwitcherGroup>
       <SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspace.pane_count} panes</small></span></button>)}</SwitcherGroup>
       {agents.length > 0 && <SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agent.agent_status}</small></span></button>)}</SwitcherGroup>}
@@ -520,7 +650,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SwitcherGroup title="操作">{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
-    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>满足可读性要求，但会轻微修正主题中的低对比色。</small></span></label><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'}</small></span><Button className="button-secondary" disabled={notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationPermission === 'granted' ? '已启用' : '启用'}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
+    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'}</small></span><Button className="button-secondary" disabled={notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationPermission === 'granted' ? '已启用' : '启用'}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
+    {helpOpen && <Modal title="快捷键" className="keymap-modal" closeLabel="关闭快捷键" onClose={() => setHelpOpen(false)}><div className="keymap-help">{keymapHelpGroups().map((group) => <section key={group.id} className="keymap-group"><h3>{group.title}</h3><ul>{group.entries.map((entry) => <li key={entry.chord} className={entry.implemented ? undefined : 'keymap-unimplemented'}><kbd>{entry.chord}</kbd><span>{entry.label}</span></li>)}</ul></section>)}</div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={`${contextMenu.target.kind} 右键菜单`} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
     {confirmationDialog}

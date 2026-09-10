@@ -10,8 +10,16 @@ const snapshot: Snapshot = {
   version: 'test', protocol: 1,
   focused_workspace_id: 'w1', focused_tab_id: 'w1:t1', focused_pane_id: 'w1:p1',
   workspaces: ['alpha', 'beta'].map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1, active_tab_id: `w${i + 1}:t1`, agent_status: 'idle', focused: i === 0, pane_count: 1, tab_count: 1 })),
-  tabs: [1, 2].map((i) => ({ tab_id: `w${i}:t1`, workspace_id: `w${i}`, label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: i === 1 })),
-  panes: [1, 2].map((i) => ({ pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, terminal_id: `term${i}`, agent_status: 'idle', focused: i === 1, revision: 1 })),
+  tabs: [
+    { tab_id: 'w1:t1', workspace_id: 'w1', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
+    { tab_id: 'w1:t2', workspace_id: 'w1', label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false },
+    { tab_id: 'w2:t1', workspace_id: 'w2', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: false },
+  ],
+  panes: [
+    { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'idle', focused: true, revision: 1 },
+    { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t2', terminal_id: 'term3', agent_status: 'idle', focused: false, revision: 1 },
+    { pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
+  ],
   layouts: [],
   agents: [1, 2].map((i) => ({ name: `agent${i}`, agent: 'codex', agent_status: 'idle', pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, focused: i === 1 })),
 }
@@ -24,6 +32,7 @@ vi.mock('../lib/workbench', () => ({
     onEpoch() { return () => {} }
     connect() {}
     dispose() {}
+    hasOpenTerminals() { return false }
   },
 }))
 vi.mock('../lib/api', () => ({
@@ -160,5 +169,55 @@ describe('workbench composer', () => {
     fireEvent.change(box, { target: { value: 'while connecting' } })
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
     expect(call).not.toHaveBeenCalledWith('pane.send_input', expect.anything())
+  })
+})
+
+describe('workbench prefix keymap and focus', () => {
+  function press(key: string, init: KeyboardEventInit = {}) {
+    fireEvent.keyDown(window, { key, ctrlKey: false, altKey: false, metaKey: false, ...init })
+  }
+
+  it('sends 0x02 on Ctrl+B Ctrl+B, ignores Shift cancel, and does not steal composer Ctrl+B', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    press('b', { ctrlKey: true })
+    expect(screen.getByText('PREFIX')).toBeInTheDocument()
+    press('Shift', { shiftKey: true })
+    expect(screen.getByText('PREFIX')).toBeInTheDocument()
+    press('b', { ctrlKey: true })
+    expect(screen.queryByText('PREFIX')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '本地输入框' }))
+    const box = screen.getByRole('textbox', { name: '本地输入内容' })
+    box.focus()
+    fireEvent.keyDown(box, { key: 'b', ctrlKey: true })
+    expect(screen.queryByText('PREFIX')).not.toBeInTheDocument()
+  })
+
+  it('switches to tab 2 with Ctrl+B 2', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    expect(screen.getByRole('button', { pressed: true, name: 'idle 1' })).toBeInTheDocument()
+    press('b', { ctrlKey: true })
+    press('2')
+    expect(screen.getByRole('button', { pressed: true, name: 'idle 2' })).toBeInTheDocument()
+  })
+
+  it('opens shortcut help from the sidebar and settings', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    fireEvent.click(screen.getByRole('button', { name: /快捷键/ }))
+    expect(screen.getByRole('dialog', { name: '快捷键' })).toBeInTheDocument()
+    expect(screen.getByText('向终端发送 Ctrl+B')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '关闭快捷键' }))
+    fireEvent.click(screen.getByRole('button', { name: '工作台设置' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '工作台设置' })).getByRole('button', { name: /快捷键/ }))
+    expect(screen.getByRole('dialog', { name: '快捷键' })).toBeInTheDocument()
+  })
+
+  it('keeps the Agent row as the selected pane after a sidebar click', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    const agent2 = await screen.findByRole('button', { name: /agent2/ })
+    fireEvent.click(agent2)
+    expect(agent2).toHaveAttribute('aria-current', 'true')
   })
 })
