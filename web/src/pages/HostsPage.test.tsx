@@ -79,3 +79,22 @@ it('imports a Tailcat endpoint update, retains a failed draft, and clears it aft
   fireEvent.click(screen.getByRole('button', { name: '更新连接端点 Old host' }))
   expect(screen.getByRole('textbox', { name: '签名端点更新包' })).toHaveValue('')
 })
+
+describe('site topbar', () => {
+  it('opens a more menu with the account name and confirms sign out', async () => {
+    const signOut = vi.fn()
+    auth.signOut = signOut
+    vi.mocked(api.hosts).mockResolvedValue({ hosts: [host] })
+    render(<HostsPage/>)
+    await screen.findByRole('heading', { name: 'Old host' })
+    fireEvent.click(screen.getByRole('button', { name: '更多' }))
+    expect(screen.getByRole('menu', { name: '更多' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Tester/ })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: '密钥' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: '退出登录' }))
+    const dialog = await screen.findByRole('alertdialog', { name: '退出登录' })
+    expect(signOut).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '退出登录' }))
+    await waitFor(() => expect(signOut).toHaveBeenCalled())
+  })
+})
