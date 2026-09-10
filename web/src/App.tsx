@@ -13,12 +13,16 @@ const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage').then((module) =
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })))
 const KeysPage = lazy(() => import('./pages/KeysPage').then((module) => ({ default: module.KeysPage })))
 
+function routePath() {
+  return window.location.hash.startsWith('#pair=') ? '/pair' : window.location.pathname
+}
+
 export default function App() {
   const auth = useAuth()
   const pwa = usePWA()
-  const [path, setPath] = useState(window.location.pathname)
+  const [path, setPath] = useState(routePath)
   useEffect(() => {
-    const update = () => setPath(window.location.pathname)
+    const update = () => setPath(routePath())
     window.addEventListener('popstate', update)
     return () => window.removeEventListener('popstate', update)
   }, [])
