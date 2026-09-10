@@ -510,7 +510,9 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 
 /* Keep one header row at any split width; all display options remain in settings. */
 @container terminal-pane (max-width: 560px) {
-  .display-zoom, .display-fit, .terminal-title small { display: none; }
+  .display-zoom, .display-fit, .terminal-title small, .terminal-titlebar .terminal-title { display: none; }
+  .terminal-titlebar { height: auto; min-height: var(--pane-bar-height); }
+  .terminal-tools { flex: 1; flex-shrink: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
 }
 @container terminal-pane (max-width: 280px) {
   .display-toolbar { display: none; }
