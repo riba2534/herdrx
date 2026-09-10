@@ -56,8 +56,16 @@ beforeEach(() => {
   connection.state = 'ready'
   connection.message = ''
   connection.retryAt = 0
-  snapshot.tabs = [1, 2].map((i) => ({ tab_id: `w${i}:t1`, workspace_id: `w${i}`, label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: i === 1 }))
-  snapshot.panes = [1, 2].map((i) => ({ pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, terminal_id: `term${i}`, agent_status: 'idle', focused: i === 1, revision: 1 }))
+  snapshot.tabs = [
+    { tab_id: 'w1:t1', workspace_id: 'w1', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
+    { tab_id: 'w1:t2', workspace_id: 'w1', label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false },
+    { tab_id: 'w2:t1', workspace_id: 'w2', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: false },
+  ]
+  snapshot.panes = [
+    { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'idle', focused: true, revision: 1 },
+    { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t2', terminal_id: 'term3', agent_status: 'idle', focused: false, revision: 1 },
+    { pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
+  ]
   snapshot.layouts = []
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
@@ -273,10 +281,10 @@ describe('workbench prefix keymap and focus', () => {
   it('switches to tab 2 with Ctrl+B 2', async () => {
     render(<WorkbenchPage hostID="host"/>)
     await screen.findByRole('button', { name: /agent1/ })
-    expect(screen.getByRole('button', { pressed: true, name: 'idle 1' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { pressed: true, name: '空闲 1' })).toBeInTheDocument()
     press('b', { ctrlKey: true })
     press('2')
-    expect(screen.getByRole('button', { pressed: true, name: 'idle 2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { pressed: true, name: '空闲 2' })).toBeInTheDocument()
   })
 
   it('opens shortcut help from the sidebar and settings', async () => {
