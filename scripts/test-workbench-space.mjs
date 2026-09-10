@@ -117,7 +117,7 @@ async function geometry(page) {
     const bottomSafe = dock ? parseFloat(getComputedStyle(dock).paddingBottom) || 0 : 0
     return {
       viewport: { width: innerWidth, height: innerHeight, visualHeight: visualViewport.height },
-      workbench: box(bench), hostbar: visible('.hostbar'), topbar: visible('.mobile-topbar'), mobileHeader: visible('.mobile-header'), mobileTabs: visible('.mobile-tabs'),
+      workbench: box(bench), hostbar: visible('.hostbar'), topbar: visible('.mobile-topbar'), mobileHeader: visible('.mobile-header'), mobileTabs: visible('.mobile-tabs'), paneChips: visible('.mobile-pane-chips'),
       titlebars: visible('.terminal-titlebar'), terminals: visible('.terminal-viewport'), panes: visible('.terminal-pane'), surface: visible('.terminal-surface'),
       composer: visible('.composer'), keybar: visible('.keybar'), dock: visible('.workbench-dock'),
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
@@ -152,7 +152,8 @@ async function assertMobileSpace(page, minimum = .8) {
   assert.equal(g.topbar.length, 1, 'missing unified mobile navigation')
   assert.ok(g.topbar[0].height - g.safeArea.top <= 45, `mobile navigation taller than one row: ${JSON.stringify(g.topbar)}`)
   assert.ok(g.composer[0].height <= 56, `empty/single-line composer grew: ${JSON.stringify(g.composer)}`)
-  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom
+  const chipHeight = g.paneChips[0]?.height || 0
+  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom - chipHeight
   const ratio = g.terminals[0].height / available
   assert.ok(ratio >= minimum, `terminal only uses ${(100 * ratio).toFixed(1)}% of available height; minimum ${100 * minimum}%`)
   await contained(page, '.mobile-topbar button, .composer, .composer-send, .composer-input')
@@ -181,7 +182,7 @@ async function assertOverlayStable(page, toggle) {
 
 async function switchTo(page, title, name) {
   await page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '切换 Herdr 位置', exact: true })
+  const dialog = page.getByRole('dialog', { name: '切换工作区或终端', exact: true })
   await expect(dialog).toBeVisible()
   const group = dialog.locator('.switcher-group').filter({ has: page.getByRole('heading', { name: title, exact: true }) })
   await group.getByRole('button', { name: new RegExp(name) }).click()
@@ -197,10 +198,10 @@ async function mobileNavigation(page) {
   await expect(page.locator('.xterm-rows')).toContainText('Space p4')
   await switchTo(page, '工作区', '开发工作区')
   await page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
-  await page.getByRole('dialog', { name: '切换 Herdr 位置', exact: true }).getByRole('link', { name: '另一台布局主机', exact: true }).click()
+  await page.getByRole('dialog', { name: '切换工作区或终端', exact: true }).getByRole('link', { name: '另一台布局主机', exact: true }).click()
   await expect(page).toHaveURL(base + '/h/space-other')
   await page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
-  await page.getByRole('dialog', { name: '切换 Herdr 位置', exact: true }).getByRole('link', { name: '布局测试主机', exact: true }).click()
+  await page.getByRole('dialog', { name: '切换工作区或终端', exact: true }).getByRole('link', { name: '布局测试主机', exact: true }).click()
   await expect(page).toHaveURL(base + '/h/space-test')
   await expect(page.locator('.xterm-rows')).toContainText('Space')
 }

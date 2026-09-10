@@ -11,11 +11,11 @@ const OP_RESIZE = 4
 const OP_RELEASE = 6
 const FLAG_FULL = 1
 
-type ConnectionState = 'connecting' | 'ready' | 'degraded' | 'offline'
+export type ConnectionState = 'connecting' | 'ready' | 'degraded' | 'offline'
 type TerminalFrame = { streamID: number; seq: bigint; full: boolean; cols: number; rows: number; ansi: Uint8Array }
 type TerminalHandler = (frame: TerminalFrame) => void
 type TerminalCloseHandler = (reason: string) => void
-type StateHandler = (state: ConnectionState, message?: string) => void
+type StateHandler = (state: ConnectionState, message?: string, retryAt?: number) => void
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -62,6 +62,8 @@ export class WorkbenchClient {
   private connectionError = ''
   private retryAfter = 0
   private retryBlocked = false
+  private retryGeneration = 0
+  private nextRetryAt = 0
   private snapshotHandlers = new Set<(snapshot: Snapshot) => void>()
   private stateHandlers = new Set<StateHandler>()
   private epochHandlers = new Set<(epoch: number) => void>()
@@ -90,12 +92,32 @@ export class WorkbenchClient {
     this.disposed = false
     this.retryBlocked = false
     window.clearTimeout(this.reconnectTimer)
+    this.nextRetryAt = 0
     this.authGeneration = authenticationGeneration()
+    this.openSocket()
+  }
+
+  retryNow() {
+    if (this.disposed) return
+    this.retryGeneration++
+    window.clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = 0
+    this.nextRetryAt = 0
+    this.retryBlocked = false
+    this.reconnectAttempt = 0
+    const socket = this.socket
+    if (socket) {
+      this.socket = null
+      if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
+        socket.close(1000, 'retry')
+      }
+    }
     this.openSocket()
   }
 
   dispose() {
     this.disposed = true
+    this.retryGeneration++
     window.clearTimeout(this.reconnectTimer)
     window.clearInterval(this.presenceTimer)
     this.socket?.close(1000, 'unmount')
@@ -188,6 +210,7 @@ export class WorkbenchClient {
     if (this.disposed) return
     this.connectionError = ''
     this.retryAfter = 0
+    this.nextRetryAt = 0
     this.emitState('connecting')
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${window.location.host}/api/hosts/${encodeURIComponent(this.hostID)}/ws`)
@@ -227,6 +250,7 @@ export class WorkbenchClient {
   }
 
   private async afterDisconnect(code: number) {
+    const generation = this.retryGeneration
     if (code === 4401) {
       this.disposed = true
       invalidateAuthentication(this.authGeneration)
@@ -240,10 +264,13 @@ export class WorkbenchClient {
     catch (reason) {
       if (reason instanceof APIError && (reason.status === 401 || reason.code === 'auth_changed')) return
     }
-    if (this.disposed || this.authGeneration !== authenticationGeneration()) return
+    if (this.disposed || this.socket || generation !== this.retryGeneration || this.authGeneration !== authenticationGeneration()) return
     const ladder = [1000, 2000, 5000, 5000, 10_000, 30_000]
     const delay = Math.max(this.retryAfter, ladder[Math.min(this.reconnectAttempt++, ladder.length - 1)])
-    this.reconnectTimer = window.setTimeout(() => this.openSocket(), delay * (0.9 + Math.random() * 0.2))
+    const wait = delay * (0.9 + Math.random() * 0.2)
+    this.nextRetryAt = Date.now() + wait
+    this.emitState('offline', this.connectionError || '连接已断开', this.nextRetryAt)
+    this.reconnectTimer = window.setTimeout(() => this.openSocket(), wait)
   }
 
   private handleJSON(encoded: string) {
@@ -354,7 +381,7 @@ export class WorkbenchClient {
     this.socket.send(frame)
   }
 
-  private emitState(state: ConnectionState, message?: string) {
-    for (const handler of this.stateHandlers) handler(state, message)
+  private emitState(state: ConnectionState, message?: string, retryAt = this.nextRetryAt) {
+    for (const handler of this.stateHandlers) handler(state, message, retryAt || undefined)
   }
 }

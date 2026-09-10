@@ -5,7 +5,7 @@ import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
 
-const { call, connection } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string } }))
+const { call, connection, retryNow } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string, message: '', retryAt: 0 }, retryNow: vi.fn() }))
 const snapshot: Snapshot = {
   version: 'test', protocol: 1,
   focused_workspace_id: 'w1', focused_tab_id: 'w1:t1', focused_pane_id: 'w1:p1',
@@ -28,9 +28,10 @@ vi.mock('../lib/workbench', () => ({
   WorkbenchClient: class {
     call = call
     onSnapshot(handler: (value: Snapshot) => void) { handler(snapshot); return () => {} }
-    onState(handler: (state: string) => void) { handler(connection.state); return () => {} }
+    onState(handler: (state: string, message?: string, retryAt?: number) => void) { handler(connection.state, connection.message, connection.retryAt); return () => {} }
     onEpoch() { return () => {} }
     connect() {}
+    retryNow = retryNow
     dispose() {}
     hasOpenTerminals() { return false }
   },
@@ -51,7 +52,13 @@ beforeEach(() => {
   sessionStorage.clear()
   clearComposerDrafts()
   call.mockClear()
+  retryNow.mockClear()
   connection.state = 'ready'
+  connection.message = ''
+  connection.retryAt = 0
+  snapshot.tabs = [1, 2].map((i) => ({ tab_id: `w${i}:t1`, workspace_id: `w${i}`, label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: i === 1 }))
+  snapshot.panes = [1, 2].map((i) => ({ pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, terminal_id: `term${i}`, agent_status: 'idle', focused: i === 1, revision: 1 }))
+  snapshot.layouts = []
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
 afterEach(() => vi.unstubAllGlobals())
@@ -79,7 +86,7 @@ describe('workbench sidebar context menus', () => {
     await screen.findByRole('button', { name: /agent1/ })
     const blank = container.querySelectorAll('.sidebar-section')[1]
     expect(fireEvent.contextMenu(blank, { clientX: 40, clientY: 400 })).toBe(false)
-    expect(screen.getByRole('menu', { name: 'sidebar 右键菜单' })).toBeInTheDocument()
+    expect(screen.getByRole('menu', { name: '侧栏右键菜单' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: '新建工作区' })).toBeEnabled()
     expect(screen.queryByRole('menuitem', { name: '关闭工作区' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('menuitem', { name: '工作台设置' }))
@@ -92,7 +99,7 @@ describe('workbench sidebar context menus', () => {
     await screen.findByRole('button', { name: /agent1/ })
     const label = container.querySelector('.workspace-row strong')!
     expect(fireEvent.contextMenu(label)).toBe(false)
-    expect(screen.getByRole('menu', { name: 'workspace 右键菜单' })).toBeInTheDocument()
+    expect(screen.getByRole('menu', { name: '工作区右键菜单' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: '重命名工作区' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '新建工作区' })).not.toBeInTheDocument()
   })
@@ -101,9 +108,9 @@ describe('workbench sidebar context menus', () => {
     render(<WorkbenchPage hostID="host"/>)
     const agent = await screen.findByRole('button', { name: /agent2/ })
     expect(fireEvent.contextMenu(agent.querySelector('strong')!)).toBe(false)
-    expect(screen.getByRole('menu', { name: 'pane 右键菜单' })).toBeInTheDocument()
-    expect(screen.queryByRole('menuitem', { name: '与当前 Pane 互换' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('menuitem', { name: '重命名 Pane' }))
+    expect(screen.getByRole('menu', { name: '终端右键菜单' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: '与当前终端互换' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: '重命名终端' }))
     fireEvent.change(screen.getByRole('textbox', { name: '名称' }), { target: { value: 'renamed-agent' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('pane.rename', { pane_id: 'w2:p1', label: 'renamed-agent' }))
@@ -134,7 +141,7 @@ describe('workbench composer', () => {
     call.mockRejectedValueOnce(new Error('没有创建工作区的权限'))
     render(<WorkbenchPage hostID="host"/>)
     fireEvent.click(await screen.findByRole('button', { name: '切换工作区或终端' }))
-    const switcher = screen.getByRole('dialog', { name: '切换 Herdr 位置' })
+    const switcher = screen.getByRole('dialog', { name: '切换工作区或终端' })
     fireEvent.click(within(switcher).getByRole('button', { name: '新建工作区' }))
     expect(await within(switcher).findByRole('alert')).toHaveTextContent('没有创建工作区的权限')
     expect(within(switcher).getByRole('button', { name: '新建工作区' })).toBeEnabled()
@@ -169,6 +176,76 @@ describe('workbench composer', () => {
     fireEvent.change(box, { target: { value: 'while connecting' } })
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
     expect(call).not.toHaveBeenCalledWith('pane.send_input', expect.anything())
+  })
+
+  it('maps connection and transport to Chinese and reconnects without reloading', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByText('本机')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    expect(retryNow).toHaveBeenCalled()
+  })
+
+  it('keeps the last frame visible on a degraded connection and offers an immediate retry', async () => {
+    connection.state = 'degraded'
+    connection.message = '链路不稳定'
+    connection.retryAt = Date.now() + 5000
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    expect(screen.getByRole('status')).toHaveTextContent('连接受限')
+    expect(screen.getByRole('status')).toHaveTextContent('链路不稳定')
+    expect(screen.queryByRole('heading', { name: '主机暂时不可用' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '立即重连' }))
+    expect(retryNow).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '本地输入框' }))
+    expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveAttribute('placeholder', '主机未连接，暂不能发送')
+  })
+
+  it('uses an offline overlay with a primary retry action', async () => {
+    connection.state = 'offline'
+    connection.message = '连接已断开'
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByRole('heading', { name: '主机暂时不可用' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '立即重连' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '返回主机' })).toBeInTheDocument()
+  })
+})
+
+describe('workbench tab and mobile status', () => {
+  it('opens a tab context menu without selecting that tab first', async () => {
+    snapshot.tabs = [
+      { tab_id: 'w1:t1', workspace_id: 'w1', label: '开发', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
+      { tab_id: 'w1:t2', workspace_id: 'w1', label: '日志', number: 2, pane_count: 1, agent_status: 'working', focused: false },
+    ]
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    const logTab = screen.getByText('日志').closest('.tab')!
+    const logSelect = logTab.querySelector('.tab-select')!
+    expect(logSelect).toHaveAttribute('aria-pressed', 'false')
+    expect(fireEvent.contextMenu(logTab)).toBe(false)
+    expect(screen.getByRole('menu', { name: '标签页右键菜单' })).toBeInTheDocument()
+    expect(logSelect).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByText('开发').closest('.tab')!.querySelector('.tab-select')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('shows mobile connection and pane chips when multiple panes exist', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    snapshot.panes = [
+      { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'working', focused: true, revision: 1, label: '前端' },
+      { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term2', agent_status: 'blocked', focused: false, revision: 1, label: '审查' },
+    ]
+    snapshot.layouts = [{
+      workspace_id: 'w1', tab_id: 'w1:t1', focused_pane_id: 'w1:p1', splits: [], zoomed: false,
+      area: { x: 0, y: 0, width: 80, height: 40 },
+      panes: [
+        { pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 40, height: 40 } },
+        { pane_id: 'w1:p2', focused: false, rect: { x: 40, y: 0, width: 40, height: 40 } },
+      ],
+    }]
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByRole('navigation', { name: '切换终端' })).toBeInTheDocument()
+    expect(screen.getByLabelText('已连接')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /审查/ }))
+    expect(screen.getByRole('button', { name: /审查/ })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 

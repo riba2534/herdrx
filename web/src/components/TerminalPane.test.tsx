@@ -929,3 +929,38 @@ describe('TerminalPane paste interception', () => {
     expect(pasteSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('TerminalPane status chip and crop badge', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps a floating pane label next to the tools button', () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    render(<TerminalPane client={client} pane={{ ...mockPane, label: 'Claude 前端', agent_status: 'working' }} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    const chip = document.querySelector('.pane-status-chip')
+    expect(chip).toHaveTextContent('Claude 前端')
+    expect(chip?.querySelector('.status-working')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '分屏工具' })).toBeInTheDocument()
+  })
+
+  it('shows a crop badge in fixed mode when the remote grid is larger than the viewport', async () => {
+    const onDisplayChange = vi.fn()
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const { rerender } = render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} sourceCols={80} sourceRows={40} onDisplayChange={onDisplayChange} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
+    rerender(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} sourceCols={80} sourceRows={40} onDisplayChange={onDisplayChange} layoutVersion={1}/>)
+    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '80×40 · 已裁切 → 适应窗口' }))
+    expect(onDisplayChange).toHaveBeenCalledWith({ mode: 'fit', zoom: 100 })
+  })
+
+  it('does not show a crop badge in responsive mode', () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }} sourceCols={80} sourceRows={40} layoutVersion={0}/>)
+    expect(screen.queryByRole('button', { name: /已裁切/ })).not.toBeInTheDocument()
+  })
+})

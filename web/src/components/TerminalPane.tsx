@@ -11,7 +11,8 @@ import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePas
 import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize } from '../lib/terminalFit'
 import { attachTerminalTouch } from '../lib/terminalTouch'
 import type { TerminalDisplay } from '../lib/displayPreferences'
-import { isLocalInputTarget, paneDisplayName } from '../lib/keymap'
+import { isLocalInputTarget } from '../lib/keymap'
+import { paneDisplayName } from '../lib/labels'
 import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { Button, StatusDot } from './ui'
@@ -31,7 +32,7 @@ function clipboardBlocked() {
   return !window.isSecureContext || !navigator.clipboard
 }
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -111,6 +112,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const [historyActive, setHistoryActive] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [streamGeneration, setStreamGeneration] = useState(0)
+  const [cropHint, setCropHint] = useState<{ cols: number; rows: number } | null>(null)
   const historyRef = useRef({ active: false, loading: false, delta: 0, generation: 0 })
   const returnToLiveRef = useRef<() => void>(() => {})
   const scrollHistoryRef = useRef<(lines: number) => void>(() => {})
@@ -389,6 +391,17 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       }
     }
     if (fontSize !== null) onFontSizeChange?.(fontSize)
+    if (display.mode === 'fixed' && !compact && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
+      const metrics = fontMeasureRef.current.measure(fontSize)
+      const cropped = Boolean(metrics && (cols * metrics.width > bounds.width + 0.5 || rows * metrics.height > bounds.height + 0.5))
+      setCropHint((current) => {
+        if (!cropped) return current ? null : current
+        if (current?.cols === cols && current?.rows === rows) return current
+        return { cols, rows }
+      })
+    } else {
+      setCropHint((current) => current ? null : current)
+    }
   }
   fitRef.current = fitTerminal
 
@@ -783,6 +796,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
     onContextMenu?.(event)
   }}>
+    {!compact && <span className="pane-status-chip" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
     {!compact && <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="分屏工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 分屏工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>}
     {!compact && onContextMenu && pane.right_click_passthrough && <Button className="tool-button pane-menu-button pane-menu-standalone" aria-label="终端操作" data-tooltip="终端操作 · Shift+右键" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
     <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
@@ -797,6 +811,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
       </div>
     </header>
+    {cropHint && display.mode === 'fixed' && <button type="button" className="pane-crop-badge" onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
     {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
     {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
     {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}

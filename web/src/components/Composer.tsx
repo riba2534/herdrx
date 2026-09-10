@@ -89,13 +89,14 @@ function InputModeMenu({ directInput, onDirectInput, onLocalInput }: {
   </div>
 }
 
-export function Composer({ hostID, paneID, visible, directInput, compact = false, sendDisabled, onDirectInput, onLocalInput, submit, onPasteImages }: {
+export function Composer({ hostID, paneID, visible, directInput, compact = false, sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages }: {
   hostID: string
   paneID: string
   visible: boolean
   directInput: boolean
   compact?: boolean
   sendDisabled?: boolean
+  placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
   submit: (paneID: string, text: string) => Promise<void>
@@ -183,7 +184,7 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
       aria-label="本地输入内容"
       rows={compact ? 1 : 2}
       value={value}
-      placeholder={canEdit ? compact ? '本地输入，可换行' : '在本地编辑，发送后整段进入当前终端' : '请先选择一个终端再编辑'}
+      placeholder={placeholder || (canEdit ? compact ? '本地输入，可换行' : '在本地编辑，发送后整段进入当前终端' : '请先选择一个终端再编辑')}
       autoComplete="off"
       autoCorrect="off"
       autoCapitalize="off"
