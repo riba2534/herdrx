@@ -5,6 +5,8 @@ export interface TerminalTouchOptions {
   onGestureCancel?: () => void
   getGeneration: () => number | string | null
   hasSelection?: () => boolean
+  /** When false, native selection/zoom owns the pointer and capture handlers stand down. */
+  enabled?: () => boolean
 }
 
 /** Keep single-finger vertical movement in the terminal, including at its edges. */
@@ -22,10 +24,11 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   let blocked = false
   const previousTouchAction = viewport.style.touchAction
   const zoomed = () => (window.visualViewport?.scale || 1) > 1.01
+  const active = () => options.enabled?.() !== false
   const updateTouchAction = () => {
     // Native horizontal panning and pinch remain available. When the page is
     // zoomed, the browser also owns vertical panning of the visual viewport.
-    viewport.style.touchAction = zoomed() ? 'auto' : 'pan-x pinch-zoom'
+    viewport.style.touchAction = !active() || zoomed() ? 'auto' : 'pan-x pinch-zoom'
   }
   const selected = () => {
     if (options.hasSelection?.()) return true
@@ -39,6 +42,7 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     gesture = null
   }
   const start = (event: TouchEvent) => {
+    if (!active()) return
     // xterm's local touch handler cannot scroll Herdr's observe-only frames.
     // Stopping propagation does not cancel taps, selection, or native zoom.
     event.stopImmediatePropagation()
@@ -53,6 +57,7 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     }
   }
   const move = (event: TouchEvent) => {
+    if (!active()) return
     event.stopImmediatePropagation()
     if (event.touches.length !== 1) { cancel(); blocked = true; return }
     if (!gesture || blocked) return
@@ -87,6 +92,7 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     if (remaining) options.onScrollPixels(remaining, touch.clientX, touch.clientY)
   }
   const end = (event: TouchEvent) => {
+    if (!active()) return
     event.stopImmediatePropagation()
     if (event.type === 'touchcancel') cancel()
     gesture = null
@@ -104,6 +110,8 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   }
   const otherEnd = (event: TouchEvent) => { if (!event.touches.length) blocked = false }
   updateTouchAction()
+  const classObserver = typeof MutationObserver === 'undefined' ? null : new MutationObserver(updateTouchAction)
+  classObserver?.observe(viewport, { attributes: true, attributeFilter: ['class'] })
   viewport.addEventListener('touchstart', start, { capture: true, passive: true })
   viewport.addEventListener('touchmove', move, { capture: true, passive: false })
   viewport.addEventListener('touchend', end, { capture: true, passive: true })
@@ -118,6 +126,7 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   document.addEventListener('touchcancel', otherEnd, { capture: true, passive: true })
   return () => {
     cancel()
+    classObserver?.disconnect()
     viewport.style.touchAction = previousTouchAction
     viewport.removeEventListener('touchstart', start, true)
     viewport.removeEventListener('touchmove', move, true)

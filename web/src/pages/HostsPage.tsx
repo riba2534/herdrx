@@ -3,7 +3,8 @@ import { Input, Form, Textarea } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, Pencil, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, MoreHorizontal, Pencil, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
+import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { useAuth } from '../auth'
 import { Button, EmptyState, Field } from '../components/ui'
 import { HostFolders, folderOptions, hostInFolder, hostSearchText } from '../components/HostFolders'
@@ -87,6 +88,7 @@ export function HostsPage() {
   const [timeoutNotice, setTimeoutNotice] = useState('')
   const [publicKey, setPublicKey] = useState('')
   const [signingOut, setSigningOut] = useState(false)
+  const [moreMenu, setMoreMenu] = useState<{ x: number; y: number } | null>(null)
   const [connectionString, setConnectionString] = useState('')
   const [enrollmentProgress, setEnrollmentProgress] = useState<string | null>(null)
   const [enrollmentElapsed, setEnrollmentElapsed] = useState(0)
@@ -328,6 +330,7 @@ export function HostsPage() {
   }
 
   const signOut = async () => {
+    if (!await confirm('退出后需要重新登录才能打开工作台。远程主机上的 Herdr 和任务会继续运行。', { title: '退出登录', confirmLabel: '退出登录' })) return
     setSigningOut(true)
     setError('')
     try { await auth.signOut() }
@@ -367,12 +370,22 @@ export function HostsPage() {
       <a className="brand" href="/" onClick={(event) => { event.preventDefault(); navigate('/') }}><BrandLogo/></a>
       <div className="topbar-actions">
         <AppearanceToggle/>
-        <Button className="button-ghost" aria-label="密钥" data-tooltip="密钥管理" onClick={() => navigate('/keys')}><KeyRound size={16}/><span className="nav-action-label">密钥</span></Button>
+        <Button className="button-ghost topbar-nav-action" aria-label="密钥" data-tooltip="密钥管理" onClick={() => navigate('/keys')}><KeyRound size={16}/><span className="nav-action-label">密钥</span></Button>
         <span className="user-chip"><span data-tooltip={auth.user?.display_name}>{auth.user?.display_name}</span><small>{auth.user?.role === 'admin' ? '管理员' : '普通用户'}</small></span>
-        {auth.user?.role === 'admin' && <Button className="button-ghost" aria-label="管理" data-tooltip="访问管理" onClick={() => navigate('/admin')}><ShieldCheck size={16} /><span className="nav-action-label">管理</span></Button>}
-        <Button className="button-ghost" aria-label="退出" data-tooltip="退出登录" pending={signingOut} onClick={() => void signOut()}><LogOut size={16} /><span className="nav-action-label">退出</span></Button>
+        {auth.user?.role === 'admin' && <Button className="button-ghost topbar-nav-action" aria-label="管理" data-tooltip="访问管理" onClick={() => navigate('/admin')}><ShieldCheck size={16} /><span className="nav-action-label">管理</span></Button>}
+        <Button className="button-ghost topbar-nav-action" aria-label="退出" data-tooltip="退出登录" pending={signingOut} onClick={() => void signOut()}><LogOut size={16} /><span className="nav-action-label">退出</span></Button>
+        <Button className="button-ghost topbar-more" aria-label="更多" aria-haspopup="menu" aria-expanded={Boolean(moreMenu)} onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          setMoreMenu(moreMenu ? null : { x: Math.min(rect.right, window.innerWidth - 8), y: rect.bottom + 4 })
+        }}><MoreHorizontal size={16}/></Button>
       </div>
     </header>
+    {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} label="更多" onClose={() => setMoreMenu(null)} items={([
+      { id: 'user', label: `${auth.user?.display_name || '当前用户'} · ${auth.user?.role === 'admin' ? '管理员' : '普通用户'}`, disabled: true, onSelect: () => {} },
+      { id: 'keys', label: '密钥', icon: <KeyRound size={15}/>, onSelect: () => navigate('/keys') },
+      ...(auth.user?.role === 'admin' ? [{ id: 'admin', label: '管理', icon: <ShieldCheck size={15}/>, onSelect: () => navigate('/admin') }] : []),
+      { id: 'logout', label: '退出登录', icon: <LogOut size={15}/>, danger: true, separatorBefore: true, onSelect: () => { void signOut() } },
+    ] satisfies ContextMenuItem[])}/>}
     <main className="page page-hosts">
       <div className="page-heading">
         <div><h1>主机</h1><p>选择一台主机，继续你的工作。</p></div>

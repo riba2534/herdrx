@@ -69,7 +69,10 @@ beforeEach(() => {
   snapshot.layouts = []
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 describe('workbench sidebar context menus', () => {
   it('switches the current host from the top navigation', async () => {
@@ -175,6 +178,13 @@ describe('workbench composer', () => {
     expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
   })
 
+  it('shows the iOS home-screen notice on the notification button', async () => {
+    vi.spyOn(await import('../lib/pwa'), 'needsHomeScreenForNotifications').mockReturnValue(true)
+    render(<WorkbenchPage hostID="host"/>)
+    fireEvent.click(await screen.findByRole('button', { name: '工作台设置' }))
+    expect(screen.getByRole('button', { name: '请先添加到主屏幕后再开启通知' })).toBeDisabled()
+  })
+
   it('lets the user edit a pane draft while the host is still connecting', async () => {
     connection.state = 'connecting'
     render(<WorkbenchPage hostID="host"/>)
@@ -215,6 +225,18 @@ describe('workbench composer', () => {
     expect(await screen.findByRole('heading', { name: '主机暂时不可用' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '立即重连' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '返回主机' })).toBeInTheDocument()
+  })
+
+  it('dismisses an action toast after five seconds', async () => {
+    call.mockRejectedValueOnce(new Error('没有创建工作区的权限'))
+    render(<WorkbenchPage hostID="host"/>)
+    const create = await screen.findByRole('button', { name: '新建工作区' })
+    vi.useFakeTimers()
+    fireEvent.click(create)
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('alert')).toHaveTextContent('没有创建工作区的权限')
+    await act(async () => { vi.advanceTimersByTime(5000) })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 
@@ -304,5 +326,18 @@ describe('workbench prefix keymap and focus', () => {
     const agent2 = await screen.findByRole('button', { name: /agent2/ })
     fireEvent.click(agent2)
     expect(agent2).toHaveAttribute('aria-current', 'true')
+  })
+})
+
+describe('compact short workbench', () => {
+  it('hides the composer when auxiliary keys open in a short viewport', async () => {
+    vi.stubGlobal('innerHeight', 390)
+    vi.stubGlobal('visualViewport', undefined)
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '终端辅助键' }))
+    expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
+    expect(screen.getByRole('toolbar', { name: '终端辅助键' })).toBeInTheDocument()
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fittedTerminalFont } from './terminalFit'
+import { fittedTerminalFont, TERMINAL_FONT_FAMILY, whenFontsReady } from './terminalFit'
 
 describe('offscreen terminal sizing', () => {
   const bounds = { width: 1260, height: 840, cols: 200, rows: 80, lineHeight: 1, letterSpacing: 0, dpr: 1 }
@@ -27,5 +27,17 @@ describe('offscreen terminal sizing', () => {
     expect(spy).not.toHaveBeenCalled()
     expect(fittedTerminalFont({ ...bounds, width: 4000, height: 3000 }, measure)).toBe(14)
     expect(fittedTerminalFont(bounds, () => null)).toBeNull()
+  })
+
+  it('prefers JetBrains Mono then ui-monospace, Menlo and Roboto Mono before generic monospace', () => {
+    expect(TERMINAL_FONT_FAMILY.startsWith('"JetBrains Mono"')).toBe(true)
+    expect(TERMINAL_FONT_FAMILY).toContain('ui-monospace')
+    expect(TERMINAL_FONT_FAMILY).toContain('Menlo')
+    expect(TERMINAL_FONT_FAMILY).toContain('"Roboto Mono"')
+    expect(TERMINAL_FONT_FAMILY.endsWith('monospace')).toBe(true)
+  })
+
+  it('waits for document.fonts.ready before measuring', async () => {
+    await expect(whenFontsReady()).resolves.toBeUndefined()
   })
 })

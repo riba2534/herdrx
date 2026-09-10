@@ -140,6 +140,32 @@ describe('terminal finger scrolling', () => {
     expect(onScrollPixels).toHaveBeenCalledTimes(1)
   })
 
+  it('stands down capture handlers when text selection is enabled', () => {
+    const viewport = document.createElement('div')
+    document.body.appendChild(viewport)
+    const onScrollPixels = vi.fn()
+    const enabled = { value: false }
+    cleanups.push(attachTerminalTouch(viewport, {
+      onScrollPixels, getGeneration: () => 1, enabled: () => enabled.value,
+    }))
+    const touch = (type: string, points: Array<[number, number]>) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'touches', { value: points.map(([x, y]) => ({ clientX: x, clientY: y, identifier: 1 })) })
+      const stop = vi.spyOn(event, 'stopImmediatePropagation')
+      viewport.dispatchEvent(event)
+      return stop
+    }
+    expect(touch('touchstart', [[50, 100]])).not.toHaveBeenCalled()
+    expect(touch('touchmove', [[50, 120]])).not.toHaveBeenCalled()
+    expect(onScrollPixels).not.toHaveBeenCalled()
+    enabled.value = true
+    viewport.classList.add('terminal-selecting')
+    viewport.classList.remove('terminal-selecting')
+    touch('touchstart', [[50, 100]])
+    expect(touch('touchmove', [[50, 120]])).toHaveBeenCalled()
+    expect(onScrollPixels).toHaveBeenCalled()
+  })
+
   it('leaves an existing terminal selection and long-press menu alone', () => {
     const { viewport, onScrollPixels, touch, state } = fixture()
     state.selection = true

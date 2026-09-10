@@ -89,6 +89,16 @@ async function compactHeader(page) {
     previousRight = control.right
   }
 }
+async function openSiteNav(page, name) {
+  const direct = page.getByRole('button', { name, exact: true })
+  if (await direct.isVisible().catch(() => false)) {
+    await direct.click()
+    return
+  }
+  await page.getByRole('button', { name: '更多', exact: true }).click()
+  await page.getByRole('menuitem', { name, exact: true }).click()
+}
+
 async function capture(page, name) {
   if (!process.env.HERDRX_UI_SCREENSHOTS) return
   await mkdir(process.env.HERDRX_UI_SCREENSHOTS, { recursive: true })
@@ -127,7 +137,7 @@ try {
         await page.getByRole('button', { name: '切换为浅色', exact: true }).press('Space')
         await expectTheme(page, 'light')
         await expect(toggle).toBeFocused()
-        await page.getByRole('button', { name: '密钥', exact: true }).click()
+        await openSiteNav(page, '密钥')
         await expect(page.getByRole('heading', { name: '密钥', exact: true })).toBeVisible()
         for (const theme of ['dark', 'light']) { await changeTheme(page, theme); await compactHeader(page); await fit(page) }
         await page.getByRole('button', { name: '返回主机', exact: true }).click()
@@ -147,7 +157,7 @@ try {
         await chooseOption(page.getByLabel('连接方式'), 'ssh')
         await fit(page)
         await page.getByRole('button', { name: '关闭', exact: true }).click()
-        await page.getByRole('button', { name: '管理', exact: true }).click()
+        await openSiteNav(page, '管理')
         await expect(page.locator('.admin-user-row')).toHaveCount(2)
         for (const theme of ['dark', 'light']) {
           await changeTheme(page, theme)

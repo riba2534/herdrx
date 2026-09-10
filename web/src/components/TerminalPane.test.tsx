@@ -39,6 +39,9 @@ vi.mock('@xterm/xterm', () => {
         el.appendChild(textarea)
         const div = document.createElement('div')
         div.className = 'xterm'
+        const rows = document.createElement('div')
+        rows.className = 'xterm-rows'
+        div.appendChild(rows)
         el.appendChild(div)
       }
       fit() {}
@@ -927,6 +930,49 @@ describe('TerminalPane paste interception', () => {
     fireEvent(screen.getByTestId('editor'), event)
     expect(event.defaultPrevented).toBe(false)
     expect(pasteSpy).not.toHaveBeenCalled()
+  })
+
+  it('turns on native text selection for the terminal rows', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    const toggle = screen.getByRole('button', { name: '选择文本' })
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    expect(document.querySelector('.terminal-viewport')).toHaveClass('terminal-selecting')
+    expect(getComputedStyle(document.querySelector('.xterm-rows')!).userSelect).toBe('text')
+  })
+
+  it('copies visible screen text through the clipboard API', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const read = vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'visible screen' } })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('isSecureContext', true)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '复制屏幕' }))
+    await waitFor(() => expect(read).toHaveBeenCalledWith('pane.read', { pane_id: 'p1', source: 'visible', format: 'text' }))
+    expect(writeText).toHaveBeenCalledWith('visible screen')
+    expect(await screen.findByRole('status', { name: '复制提示' })).toHaveTextContent('已复制屏幕文本')
+  })
+
+  it('shows a selectable fallback when the clipboard API is unavailable', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'manual copy' } })
+    vi.stubGlobal('isSecureContext', false)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '复制屏幕' }))
+    expect(await screen.findByRole('dialog', { name: '复制屏幕文本' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '屏幕文本' })).toHaveValue('manual copy')
   })
 })
 

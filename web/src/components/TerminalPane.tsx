@@ -5,10 +5,11 @@ import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
-import { History, ImagePlus, Keyboard, MoreHorizontal, Search, X } from 'lucide-react'
+import { Copy, History, ImagePlus, Keyboard, MoreHorizontal, Search, Type, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
-import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize } from '../lib/terminalFit'
+import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize, TERMINAL_FONT_FAMILY, whenFontsReady } from '../lib/terminalFit'
+import { Modal } from './Modal'
 import { attachTerminalTouch } from '../lib/terminalTouch'
 import type { TerminalDisplay } from '../lib/displayPreferences'
 import { isLocalInputTarget } from '../lib/keymap'
@@ -45,8 +46,9 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   useLayoutEffect(() => {
     if (!toolbarOpen) return
     toolbarOpenerRef.current = document.activeElement as HTMLElement | null
+    if (compact) return
     toolbarRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-  }, [toolbarOpen])
+  }, [toolbarOpen, compact])
   const restoreToolbarFocus = () => {
     const opener = externalControlsTrigger?.current || controlsTriggerRef.current || toolbarOpenerRef.current
     requestAnimationFrame(() => { if (opener?.isConnected) opener.focus() })
@@ -89,6 +91,11 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   connectionEpochRef.current = connectionEpoch
   const [status, setStatus] = useState('正在连接终端…')
   const [streamFailed, setStreamFailed] = useState(false)
+  const [textSelectMode, setTextSelectMode] = useState(false)
+  const textSelectModeRef = useRef(false)
+  textSelectModeRef.current = textSelectMode
+  const [copyFallback, setCopyFallback] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState('')
   const inputBlockedRef = useRef(false)
   const directInputRef = useRef(directInput)
   const wasDirectInputRef = useRef(directInput)
@@ -323,6 +330,38 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     return () => window.clearTimeout(timer)
   }, [imageFeedback])
 
+  useEffect(() => {
+    if (!copyStatus) return
+    const timer = window.setTimeout(() => setCopyStatus(''), 3500)
+    return () => window.clearTimeout(timer)
+  }, [copyStatus])
+
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    for (const node of host.querySelectorAll<HTMLElement>('.xterm, .xterm-rows')) {
+      node.style.userSelect = textSelectMode ? 'text' : ''
+      node.style.setProperty('-webkit-user-select', textSelectMode ? 'text' : '')
+    }
+    if (!textSelectMode) window.getSelection()?.removeAllRanges()
+  }, [textSelectMode])
+
+  const copyScreen = async () => {
+    try {
+      const { read } = await client.call<{ read: { text: string } }>('pane.read', { pane_id: pane.pane_id, source: 'visible', format: 'text' })
+      const text = read?.text || ''
+      if (!text) { setCopyStatus('当前屏幕没有可复制的文本'); return }
+      if (window.isSecureContext && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        setCopyStatus('已复制屏幕文本')
+        return
+      }
+      setCopyFallback(text)
+    } catch (error) {
+      setCopyStatus(error instanceof Error ? error.message : '无法读取屏幕文本，请重试')
+    }
+  }
+
   uploadImagesRef.current = (files: File[]) => {
     if (!files.length) return
     if (historyRef.current.active) returnToLiveRef.current()
@@ -413,7 +452,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (!hostRef.current) return
     const terminal = new Terminal({
       allowProposedApi: true, cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline',
-      fontFamily: '"JetBrains Mono", "SFMono-Regular", Consolas, monospace', fontSize: 14, lineHeight: 1,
+      fontFamily: TERMINAL_FONT_FAMILY, fontSize: 14, lineHeight: 1,
       scrollback: 0, theme, minimumContrastRatio: enhancedContrast ? 4.5 : 1, convertEol: false,
       macOptionIsMeta: optionAsMeta, macOptionClickForcesSelection: optionAsMeta, screenReaderMode,
     })
@@ -438,6 +477,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     terminal.open(hostRef.current)
     const helper = hostRef.current.querySelector('textarea')
     if (helper) helper.setAttribute('aria-label', `${paneDisplayName(pane)} 终端输入`)
+    void whenFontsReady().then(() => { if (mountedRef.current && termRef.current === terminal) fitRef.current() })
     terminal.attachCustomKeyEventHandler((event) => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && ['+', '=', '-', '0'].includes(event.key)) {
         return false // Preserve the browser's page zoom and reset shortcuts.
@@ -743,6 +783,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const detachTouch = attachTerminalTouch(viewport, {
       onScrollPixels: queuePixels, onGestureCancel: cancelQueuedScroll, getGeneration: generation,
       hasSelection: () => termRef.current?.hasSelection?.() ?? false,
+      enabled: () => !textSelectModeRef.current,
     })
     return () => { detachTouch(); viewport.removeEventListener('wheel', wheel, true); window.cancelAnimationFrame(timer) }
   }, [client])
@@ -804,6 +845,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       {headerControls}
       <div className="terminal-tools">
         {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
+        <Button className="tool-button" aria-label="选择文本" aria-pressed={textSelectMode} data-tooltip={textSelectMode ? '关闭文本选择' : '选择终端文本后可复制'} onClick={() => setTextSelectMode((value) => !value)}><Type size={14}/></Button>
+        <Button className="tool-button" aria-label="复制屏幕" data-tooltip="复制当前屏幕文本" onClick={() => void copyScreen()}><Copy size={14}/></Button>
         <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
         {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
         <Button className="tool-button" onClick={(event) => { event.stopPropagation(); if (searchOpen) closeSearch(); else openSearch() }} aria-label="搜索终端"><Search size={14}/></Button>
@@ -816,6 +859,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
     {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
     <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; termRef.current?.focus() }}/>
+    {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
     {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">
       <span>{imageFeedback.message}</span>
       {imageFeedback.failed && imageFeedback.files && <button className="button-secondary" onClick={() => uploadImagesRef.current(imageFeedback.files!)}>重试</button>}
@@ -826,7 +870,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       else if (event.key === 'Enter') { event.preventDefault(); runSearch(event.currentTarget.value, event.shiftKey ? 'previous' : 'next') }
     }}/><span className="terminal-search-count" aria-live="polite">{searchResults.count > 0 ? `第 ${searchResults.index + 1}/${searchResults.count} 个` : '无匹配'}</span><button type="submit">下一个</button><button type="button" onClick={(event) => { const form = (event.currentTarget as HTMLButtonElement).form; const query = String(new FormData(form!).get('query') || ''); runSearch(query, 'previous') }}>上一个</button><button type="button" aria-label="关闭搜索" onClick={closeSearch}><X size={14}/></button></Form>}
     {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
-    <div className="terminal-viewport" ref={viewportRef} tabIndex={0} role="region" aria-label="终端画面，可滚动查看"><div className="terminal-host" ref={hostRef}/></div>
+    <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={0} role="region" aria-label="终端画面，可滚动查看"><div className="terminal-host" ref={hostRef}/></div>
+    {copyFallback !== null && <Modal title="复制屏幕文本" onClose={() => setCopyFallback(null)}><p>当前页面无法写入剪贴板，请全选下方文本后手动复制。</p><textarea className="input" readOnly value={copyFallback} rows={8} aria-label="屏幕文本" data-initial-focus onFocus={(event) => event.currentTarget.select()}/><div className="modal-actions"><Button className="button-primary" onClick={() => setCopyFallback(null)}>关闭</Button></div></Modal>}
     {confirmationDialog}
   </section>
 }

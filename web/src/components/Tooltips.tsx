@@ -13,7 +13,8 @@ export function Tooltips() {
       current = null
     }
     const show = (event: Event) => {
-      if (event instanceof PointerEvent && event.pointerType !== 'mouse') return
+      if (typeof PointerEvent !== 'undefined' && event instanceof PointerEvent && event.pointerType !== 'mouse') return
+      if (event.type === 'focusin' && !(event.target instanceof Element && event.target.matches(':focus-visible'))) return
       const target = (event.target as Element)?.closest<HTMLElement>('[data-tooltip]')
       if (target === current) return
       hide()

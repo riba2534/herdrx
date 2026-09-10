@@ -24,13 +24,22 @@
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 0; min-height: 100%; margin: 0; }
 body { min-height: 100dvh; overflow-x: hidden; }
+html[data-appearance-scope="workbench"],
+html[data-appearance-scope="workbench"] body,
+html[data-appearance-scope="workbench"] #root {
+  height: var(--workbench-height, 100%);
+  max-height: var(--workbench-height, 100%);
+  min-height: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:disabled { cursor: not-allowed; opacity: .48; }
 a { color: inherit; }
 h1, h2, h3, p { margin-top: 0; }
-code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace; }
 
 .spin { animation: spin 900ms linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -155,7 +164,8 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
   --unknown: var(--muted);
   --danger-surface: color-mix(in srgb, var(--panel) 76%, #773241);
   width: 100%; height: var(--workbench-height, 100dvh); display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); grid-template-rows: var(--hostbar-height) minmax(0, 1fr); overflow: hidden; background: var(--terminal); color: var(--text); color-scheme: dark;
-  font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font: 12px/1.4 ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --dock-height: 0px; --workbench-offset-top: 0px;
   font-variant-numeric: tabular-nums;
 }
 .workbench :is(button, input, select):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -216,7 +226,7 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .composer-send { min-width: 64px; min-height: 44px; }
 .composer-meta { grid-area: meta; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .composer-modes { display: flex; flex-wrap: wrap; gap: 6px; }
-.composer-modes > button { min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal); color: var(--muted); }
+.composer-modes > button { min-height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--muted); }
 .composer-modes > .composer-mode-active { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
 .composer-status { min-width: 0; flex: 1; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .composer-status-compact { display: none; }
@@ -424,9 +434,9 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
   .composer { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); }
   .composer-modes > button { min-height: 44px; }
   .keybar { flex: 0 0 auto; min-height: 52px; padding: 4px 6px; display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
-  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--terminal); color: var(--text); font: 12px monospace; }
+  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; }
   .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
-  .mode-bar { left: 5px; right: 5px; bottom: calc(132px + env(safe-area-inset-bottom)); overflow-x: auto; white-space: nowrap; }
+  .mode-bar { left: 5px; right: 5px; bottom: calc(var(--dock-height, 0px) + 8px); overflow-x: auto; white-space: nowrap; }
   .context-menu-item { min-height: 44px; font-size: 14px; }
   .workbench .tool-button, .workbench .image-paste-feedback button, .workbench .terminal-search button { min-width: 44px; min-height: 44px; }
   .workbench .context-menu-item { min-height: 44px; }
@@ -535,7 +545,9 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 
 /* Keep one header row at any split width; all display options remain in settings. */
 @container terminal-pane (max-width: 560px) {
-  .display-zoom, .display-fit, .terminal-title small { display: none; }
+  .display-zoom, .display-fit, .terminal-title small, .terminal-titlebar .terminal-title { display: none; }
+  .terminal-titlebar { height: auto; min-height: var(--pane-bar-height); }
+  .terminal-tools { flex: 1; flex-shrink: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
 }
 @container terminal-pane (max-width: 280px) {
   .display-toolbar { display: none; }
@@ -553,7 +565,34 @@ code, pre { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace
 .switcher-group a:hover, .switcher-group a[aria-current=page] { background: var(--accent-soft); }
 .switcher-group a > span { min-width: 0; overflow-wrap: anywhere; }
 .switcher-group a strong { font-size: 13px; font-weight: 500; }
-.workbench-compact .mode-bar { bottom: calc(64px + env(safe-area-inset-bottom)); }
+.workbench-compact .mode-bar,
+.workbench-compact .action-toast { bottom: calc(var(--dock-height, 0px) + 8px); }
+html[data-appearance-scope="workbench"] .workbench { position: fixed; top: var(--workbench-offset-top, 0px); left: 0; right: 0; }
+html[data-appearance-scope="workbench"] .workbench button,
+html[data-appearance-scope="workbench"] .keybar,
+html[data-appearance-scope="workbench"] .mobile-topbar,
+html[data-appearance-scope="workbench"] .composer { touch-action: manipulation; }
+.terminal-viewport.terminal-selecting { touch-action: auto; }
+.terminal-viewport.terminal-selecting,
+.terminal-viewport.terminal-selecting .xterm,
+.terminal-viewport.terminal-selecting .xterm-rows { user-select: text; -webkit-user-select: text; }
+.workbench-short .mobile-topbar { min-height: 32px; height: 32px; overflow: hidden; }
+.workbench-short .mobile-topbar > .tool-button,
+.workbench-short .mobile-topbar > .button {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+}
+.workbench-short .mobile-location { height: 32px; min-height: 32px; flex: 1; width: auto; min-width: 0; }
+.workbench-short .mobile-location small { display: none; }
+.workbench-short .composer.composer-compact { padding-block: 0; gap: 2px; }
+.workbench-short .composer.composer-compact .composer-input,
+.workbench-short .composer.composer-compact .composer-mode-trigger,
+.workbench-short .composer.composer-compact .composer-send { min-height: 36px; height: 36px; max-height: 36px; }
+.workbench-short .composer.composer-compact .composer-input { padding-block: 6px; overflow: hidden; }
+.workbench-short:has(.keybar) .composer { display: none; }
 @media (pointer: coarse) {
   .pane-controls-toggle { opacity: 1; }
 }

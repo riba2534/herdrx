@@ -189,6 +189,21 @@ async function showAuxiliaryKeys(page) {
   await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toBeVisible()
 }
 
+async function hideAuxiliaryKeys(page) {
+  const toggle = page.getByRole('button', { name: '终端辅助键', exact: true })
+  if (await toggle.getAttribute('aria-expanded') === 'true') await toggle.click()
+  await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toHaveCount(0)
+}
+
+async function assertShortKeyboardKeybar(page, keyboard = 360) {
+  await expect.poll(() => page.locator('.keybar').evaluate((el) => el.getBoundingClientRect().bottom)).toBe(keyboard)
+  await expect(page.getByRole('region', { name: '本地输入' })).toHaveCount(0)
+  const m = await metrics(page)
+  assert.ok(m.height / m.rowHeight >= 4, `terminal shorter than 4 rows with keyboard and keybar: ${JSON.stringify(m)}`)
+  await hideAuxiliaryKeys(page)
+  await expect.poll(() => page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(keyboard)
+}
+
 async function setDisplayMode(page, mode) {
   await page.getByRole('button', { name: '工作台设置', exact: true }).click()
   await chooseOption(page.getByRole('combobox', { name: '显示方式', exact: true }), mode)
@@ -240,8 +255,7 @@ async function touchAndKeyboardChecks(context, page) {
     Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 360 })
     window.visualViewport.dispatchEvent(new Event('resize'))
   })
-  await expect.poll(() => page.locator('.keybar').evaluate((el) => el.getBoundingClientRect().bottom)).toBe(360)
-  await expect.poll(() => page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360)
+  await assertShortKeyboardKeybar(page, 360)
   await expect(page.locator('.workbench')).toHaveClass(/workbench-short/)
   await page.getByRole('button', { name: '工作台设置', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '工作台设置' })
@@ -444,6 +458,10 @@ try {
         window.visualViewport.dispatchEvent(new Event('resize'))
       })
       await expect.poll(() => reflow.page.locator('.keybar').evaluate(el => el.getBoundingClientRect().bottom)).toBe(360)
+      await expect(reflow.page.getByRole('region', { name: '本地输入' })).toHaveCount(0)
+      const keyboardMetrics = await metrics(reflow.page)
+      assert.ok(keyboardMetrics.height / keyboardMetrics.rowHeight >= 4, `terminal shorter than 4 rows with keyboard and keybar: ${JSON.stringify(keyboardMetrics)}`)
+      await hideAuxiliaryKeys(reflow.page)
       await expect.poll(() => reflow.page.getByRole('button', { name: '发送', exact: true }).evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360)
       await assertReflow()
       await expect.poll(() => reflow.messages.filter(m => m.op === 4).length).toBeGreaterThan(0)
@@ -467,7 +485,7 @@ try {
           assert.equal((await metrics(f.page)).font, 14, 'mobile default must remain readable')
           await expect(f.page.locator('.display-toolbar')).toHaveCount(0)
           await expect(f.page.locator('.mobile-topbar')).toBeVisible()
-          assert.equal((await f.page.locator('.mobile-topbar').boundingBox()).height, 44, 'mobile navigation must remain one 44px row')
+          assert.equal((await f.page.locator('.mobile-topbar').boundingBox()).height, height < 500 ? 32 : 44, 'mobile navigation must remain one row')
           await expect(f.page.getByRole('button', { name: '切换工作区或终端', exact: true })).toBeVisible()
           const terminalBox = await f.page.locator('.terminal-viewport').boundingBox()
           await expect(f.page.getByRole('region', { name: '本地输入' })).toBeVisible()
@@ -478,11 +496,17 @@ try {
           assert.ok(Math.abs(foldedComposer.y + foldedComposer.height - height) <= 1, 'folded auxiliary keys must not reserve bottom space')
           await showAuxiliaryKeys(f.page)
           const keybar = await f.page.locator('.keybar').boundingBox()
-          const composer = await f.page.locator('.composer').boundingBox()
-          const send = await f.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
           assert.ok(Math.abs(keybar.y + keybar.height - height) <= 1, 'keyboard toolbar must stay at the viewport bottom')
-          assert.ok(composer.y + composer.height <= keybar.y + 1, 'composer covered the auxiliary keys')
-          assert.ok(send.y + send.height <= height + 1 && send.x + send.width <= width + 1, 'send button was covered or overflowed')
+          if (height < 500) {
+            await expect(f.page.getByRole('region', { name: '本地输入' })).toHaveCount(0)
+            const openTerminal = await f.page.locator('.terminal-viewport').boundingBox()
+            assert.ok(openTerminal.height >= 64, `short-layout terminal collapsed with keybar: ${JSON.stringify(openTerminal)}`)
+          } else {
+            const composer = await f.page.locator('.composer').boundingBox()
+            const send = await f.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
+            assert.ok(composer.y + composer.height <= keybar.y + 1, 'composer covered the auxiliary keys')
+            assert.ok(send.y + send.height <= height + 1 && send.x + send.width <= width + 1, 'send button was covered or overflowed')
+          }
           if (height >= 500) {
             await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
             await expect(f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
@@ -497,7 +521,8 @@ try {
         await assertContained(f.page, ['.hostbar', '.mobile-topbar', '.display-toolbar', '.terminal-titlebar', '.terminal-viewport', '.keybar', '.composer', '.hostbar button', '.mobile-topbar button', '.display-toolbar button', '.terminal-titlebar button', '.composer-send'])
         if (touch) {
           const sizes = await f.page.locator('.mobile-topbar button, .display-toolbar button, .terminal-titlebar button').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => ({ width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })))
-          assert.ok(sizes.every((s) => s.height >= 44 && s.width >= 44), `touch target smaller than 44px: ${JSON.stringify(sizes)}`)
+          const min = height < 500 ? 32 : 44
+          assert.ok(sizes.every((s) => s.height >= min && s.width >= min), `touch target smaller than ${min}px: ${JSON.stringify(sizes)}`)
         }
         await closePaneTools(f.page)
         await screenshot(f.page, `${name}-${width}x${height}`)

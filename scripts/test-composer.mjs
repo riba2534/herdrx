@@ -214,25 +214,35 @@ try {
         const foldedComposer = await view.page.locator('.composer').boundingBox()
         assert.ok(foldedComposer && Math.abs(foldedComposer.y + foldedComposer.height - height) <= 1, `composer does not meet viewport bottom at ${width}x${height}`)
         await showAuxiliaryKeys(view.page)
-        const send = await view.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
-        const composer = await view.page.locator('.composer').boundingBox()
         const keybar = await view.page.locator('.keybar').boundingBox()
-        assert.ok(send && composer && keybar, `missing composer chrome at ${width}x${height}`)
-        assert.ok(send.y + send.height <= height + 1 && composer.y + composer.height <= keybar.y + 1)
+        assert.ok(keybar, `missing keybar at ${width}x${height}`)
+        if (height < 500) {
+          await expect(view.page.getByRole('region', { name: '本地输入' })).toHaveCount(0)
+          assert.ok(Math.abs(keybar.y + keybar.height - height) <= 1, `keybar does not meet viewport bottom at ${width}x${height}`)
+        } else {
+          const send = await view.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
+          const composer = await view.page.locator('.composer').boundingBox()
+          assert.ok(send && composer, `missing composer chrome at ${width}x${height}`)
+          assert.ok(send.y + send.height <= height + 1 && composer.y + composer.height <= keybar.y + 1)
+        }
         await view.page.evaluate(() => {
           Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: Math.min(360, window.innerHeight) })
           window.visualViewport.dispatchEvent(new Event('resize'))
         })
         const keyboard = Math.min(360, height)
         await expect.poll(() => view.page.locator('.keybar').evaluate((el) => el.getBoundingClientRect().bottom)).toBe(keyboard)
-        await expect.poll(() => view.page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(keyboard + 1)
-        await expect(view.page.getByRole('status')).toHaveCount(0)
-        await view.page.getByRole('button', { name: '输入方式：本地输入', exact: true }).click()
-        await view.page.getByRole('menuitemradio', { name: /^直接输入终端/ }).click()
-        await expect(view.page.locator('.xterm-helper-textarea')).toBeFocused()
-        await view.page.getByRole('button', { name: '输入方式：直接输入终端', exact: true }).click()
-        await view.page.getByRole('menuitemradio', { name: /^本地输入/ }).click()
-        await expect(view.page.getByRole('textbox', { name: '本地输入内容' })).toBeFocused()
+        if (keyboard < 500) {
+          await expect(view.page.getByRole('region', { name: '本地输入' })).toHaveCount(0)
+        } else {
+          await expect.poll(() => view.page.getByRole('button', { name: '发送', exact: true }).evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(keyboard + 1)
+          await expect(view.page.getByRole('status')).toHaveCount(0)
+          await view.page.getByRole('button', { name: '输入方式：本地输入', exact: true }).click()
+          await view.page.getByRole('menuitemradio', { name: /^直接输入终端/ }).click()
+          await expect(view.page.locator('.xterm-helper-textarea')).toBeFocused()
+          await view.page.getByRole('button', { name: '输入方式：直接输入终端', exact: true }).click()
+          await view.page.getByRole('menuitemradio', { name: /^本地输入/ }).click()
+          await expect(view.page.getByRole('textbox', { name: '本地输入内容' })).toBeFocused()
+        }
         await view.context.close()
       }
 
@@ -241,7 +251,6 @@ try {
         [390, 'unknown', { closeOnSend: true }],
       ]) {
         const view = await fixture(browser, { viewport: { width, height: 844 }, hasTouch: true, ...(name !== 'firefox' ? { isMobile: true } : {}) }, options)
-        await showAuxiliaryKeys(view.page)
         await view.page.evaluate(() => {
           Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 360 })
           window.visualViewport.dispatchEvent(new Event('resize'))
@@ -252,10 +261,8 @@ try {
         await expect(view.page.getByRole('status')).toContainText(kind === 'failed' ? '失败' : '结果未知')
         const status = await view.page.getByRole('status').boundingBox()
         const send = await view.page.getByRole('button', { name: '发送', exact: true }).boundingBox()
-        const keybar = await view.page.locator('.keybar').boundingBox()
         assert.ok(status && status.height > 0 && status.y + status.height <= 360 + 1, `${kind} status hidden under keyboard at ${width}`)
         assert.ok(send && send.y + send.height <= 360 + 1)
-        assert.ok(keybar && Math.abs(keybar.y + keybar.height - 360) <= 1)
         await screenshot(view.page, `${name}-${width}-keyboard-${kind}`)
         await view.context.close()
       }
