@@ -36,6 +36,7 @@ if (typeof window !== 'undefined') {
 afterEach(cleanup)
 
 HTMLElement.prototype.scrollIntoView ||= () => {}
+HTMLElement.prototype.scrollTo ||= () => {}
 HTMLElement.prototype.hasPointerCapture ||= () => false
 HTMLElement.prototype.setPointerCapture ||= () => {}
 HTMLElement.prototype.releasePointerCapture ||= () => {}

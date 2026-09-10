@@ -88,7 +88,13 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .input::placeholder, .host-search input::placeholder { color: var(--ui-muted); opacity: .85; }
 .input-error { border-color: var(--ui-danger); }
 .field-label { font-weight: 500; font-size: 14px; }
-.field-hint, .field-error { font-size: 13px; line-height: 1.6; }
+.form-stack > * { min-width: 0; }
+.field-hint, .field-error { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.field-password { display: grid; }
+.field-password > input { grid-area: 1 / 1; padding-right: 44px; }
+.field-password-toggle { grid-area: 1 / 1; justify-self: end; align-self: start; width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+.site-toast { margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-selected); color: var(--ui-text); }
+.skeleton-status { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--ui-muted); }
 .notice { border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-panel); }
 .notice-error { color: var(--ui-danger); border-color: var(--ui-danger); background: var(--ui-danger-bg); }
 .notice-info { color: var(--ui-text); background: var(--ui-selected); border-color: var(--ui-border); }
@@ -147,12 +153,13 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .host-card .host-rename-form { grid-column: 2 / -1; grid-row: 1; }
 .host-card-renaming .host-card-actions { grid-column: 2 / -1; grid-row: 3; justify-content: start; margin-top: 10px; }
 .host-card-renaming .host-warning { grid-row: 4; }
-.host-card-renaming .host-card-top { align-self: start; }
+.host-card-renaming .host-card-top { align-self: start; grid-row: 1; }
+.host-card-renaming .transport-badge { visibility: hidden; }
 .host-search-empty { padding: 36px 0; border-block: 1px solid var(--ui-border); }
 .host-search-empty h2 { font-size: 18px; }
 .host-search-empty p { color: var(--ui-muted); }
-.skeleton-grid { grid-template-columns: minmax(0,1fr); gap: 1px; }
-.skeleton-grid i { height: 98px; border-radius: 0; background: var(--ui-panel); animation: none; }
+.skeleton-grid { grid-template-columns: minmax(0,1fr); gap: 1px; border: 1px solid var(--ui-border); border-radius: 8px; overflow: hidden; }
+.skeleton-grid i { height: 98px; border-radius: 0; background: linear-gradient(90deg, var(--ui-panel), var(--ui-raised), var(--ui-panel)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .admin-registration { background: var(--ui-panel); border-radius: 8px; padding: 20px 24px; gap: 24px; }
 .admin-registration h2 { font-size: 16px; font-weight: 500; }
 .admin-registration p { font-size: 14px; color: var(--ui-text); }
