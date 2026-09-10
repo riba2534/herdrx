@@ -288,7 +288,10 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (isLocalInputTarget(event.target)) return
+      if (isLocalInputTarget(event.target)) {
+        if (prefix) setPrefix(false)
+        return
+      }
       if (isModifierKey(event)) return
       if (resizeMode) {
         if (isPrefixChord(event)) {
@@ -334,8 +337,15 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       if (event.key === 'Escape') return
       void runPrefixAction(event)
     }
+    const focusin = (event: FocusEvent) => {
+      if (prefix && isLocalInputTarget(event.target)) setPrefix(false)
+    }
     window.addEventListener('keydown', keydown, true)
-    return () => window.removeEventListener('keydown', keydown, true)
+    window.addEventListener('focusin', focusin, true)
+    return () => {
+      window.removeEventListener('keydown', keydown, true)
+      window.removeEventListener('focusin', focusin, true)
+    }
   }, [prefix, resizeMode, paneID, tabID, workspaceID, snapshot, terminalInput, directInput, client])
 
   const runPrefixAction = async (eventOrKey: KeyboardEvent | string) => {
@@ -724,7 +734,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <Button className="tool-button" aria-label="重命名当前主机" data-tooltip="重命名当前主机" disabled={!host} onClick={() => { if (host) openPrompt({ title: '重命名主机', label: '主机名称', value: host.name, submitLabel: '保存名称', onSubmit: async (name) => { const result = await api.renameHost(hostID, name); setHost(result.host); setAvailableHosts((current) => current.map((item) => item.id === hostID ? result.host : item)) } }) }}><Pencil size={13}/></Button>
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostConnectionText(connection, host?.transport, hostListError)}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => client.retryNow()}><RefreshCw size={13}/></Button></div>
     </header>}
-    {mobile && (panes?.length || 0) > 1 && <nav className="mobile-pane-chips" aria-label="切换终端">{panes!.map((pane) => <button type="button" key={pane.pane_id} className={`mobile-pane-chip${pane.pane_id === paneID ? ' mobile-pane-chip-active' : ''}`} aria-pressed={pane.pane_id === paneID} onClick={() => setPaneID(pane.pane_id)}><StatusDot status={pane.agent_status || 'unknown'}/>{paneDisplayName(pane)}</button>)}</nav>}
+    {mobile && (panes?.length || 0) > 1 && <nav className="mobile-pane-chips" aria-label="切换终端">{panes!.map((pane) => <button type="button" key={pane.pane_id} className={`mobile-pane-chip${pane.pane_id === paneID ? ' mobile-pane-chip-active' : ''}`} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); afterSelectLocation() }}><StatusDot status={pane.agent_status || 'unknown'}/>{paneDisplayName(pane)}</button>)}</nav>}
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>
       <SidebarSection title="工作区" action={<button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={14}/><span>{workspaceBusy ? '创建中…' : '新建'}</span></button>}>
         {visibleWorkspaces.map((workspace) => <button className={`sidebar-row workspace-row ${workspace.workspace_id === workspaceID ? 'sidebar-row-active' : ''}`} key={workspace.workspace_id} aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} data-tooltip={`${workspace.label} · ${workspaceCountLabel(workspace.pane_count, workspace.tab_count)}`} onClick={() => selectWorkspace(workspace)} onContextMenu={(event) => openWorkspaceContextMenu(event, workspace)}><StatusDot status={workspace.agent_status}/><span className="workspace-number">{workspace.number}</span><strong>{workspace.label}</strong>{workspace.tab_count > 1 && <small className="workspace-count">{workspace.tab_count}</small>}</button>)}
@@ -756,8 +766,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         {!mobile && !layout?.zoomed && layout?.splits.map((split) => <div key={split.id} role="separator" aria-orientation={split.direction === 'right' ? 'vertical' : 'horizontal'} aria-label={split.direction === 'right' ? '左右调整分屏' : '上下调整分屏'} className={`split-resize-handle split-resize-handle-${split.direction}${splitDrag?.id === split.id ? ' split-resize-handle-active' : ''}`} style={splitHandleStyle(layout, split, splitDrag?.id === split.id ? splitDrag.ratio : undefined)} onPointerDown={(event) => beginSplitDrag(event, split)}/>)}
       </section>
 
-      {resizeMode && <div className="mode-bar"><strong>RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
-      {prefix && !resizeMode && <div className="mode-bar"><strong>PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
+      {resizeMode && <div className="mode-bar"><strong>调整分屏 RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
+      {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {(composerOpen || mobile) && <div className="workbench-dock" ref={dockRef}>
       <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
