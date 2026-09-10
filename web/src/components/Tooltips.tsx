@@ -42,5 +42,14 @@ export function Tooltips() {
   }, [tip])
   if (!tip) return null
   const width = Math.min(320, window.innerWidth - 24), left = Math.max(12, Math.min(tip.left - width / 2, window.innerWidth - width - 12))
-  return createPortal(<div ref={popup} id={id} role="tooltip" className="ui-tooltip" style={{ left, top: tip.top, maxWidth: width }}>{tip.text}</div>, document.body)
+  return createPortal(<div ref={popup} id={id} role="tooltip" className="ui-tooltip" style={{ left, top: tip.top, maxWidth: width }}>{renderTooltipText(tip.text)}</div>, document.body)
+}
+
+function renderTooltipText(text: string) {
+  const parts = text.split(' · ')
+  return parts.map((part, index) => {
+    const shortcut = /(?:Ctrl|Cmd|Shift|Alt|Option|Meta|Esc)\b|⌘|⌥|\S+\+\S+/.test(part)
+    const node = shortcut ? <span className="tooltip-shortcut" key={index}>{part}</span> : <span key={index}>{part}</span>
+    return index === 0 ? node : [' · ', node]
+  })
 }

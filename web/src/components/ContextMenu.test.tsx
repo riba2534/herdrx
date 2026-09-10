@@ -28,4 +28,19 @@ describe('ContextMenu', () => {
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     expect(close).toHaveBeenCalledOnce()
   })
+
+  it('restores the previously focused element after close', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'opener'
+    document.body.append(opener)
+    opener.focus()
+    const close = vi.fn()
+    const { unmount } = render(<ContextMenu x={0} y={0} label="菜单" onClose={close} items={[{ id: 'rename', label: '重命名', onSelect: vi.fn() }]}/>)
+    expect(screen.getByRole('menuitem')).toHaveFocus()
+    unmount()
+    await Promise.resolve()
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
+    expect(opener).toHaveFocus()
+    opener.remove()
+  })
 })

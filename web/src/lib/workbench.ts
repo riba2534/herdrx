@@ -81,6 +81,10 @@ export class WorkbenchClient {
     return this.hostID
   }
 
+  hasOpenTerminals() {
+    return this.terminalStreams.size > 0
+  }
+
   connect() {
     if (this.socket) return
     this.disposed = false
