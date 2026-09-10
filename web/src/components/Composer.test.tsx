@@ -138,6 +138,11 @@ describe('Composer', () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
   })
 
+  it('shows a disconnected placeholder while the host cannot send', () => {
+    render(<Composer hostID="host" paneID="p1" sendDisabled placeholder="主机未连接，暂不能发送" {...props} submit={vi.fn()}/>)
+    expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveAttribute('placeholder', '主机未连接，暂不能发送')
+  })
+
   it('keeps the textarea editable while send is blocked, and refuses drafts without a pane', () => {
     const submit = vi.fn()
     const { rerender } = render(<Composer hostID="host" paneID="p1" sendDisabled {...props} submit={submit}/>)
