@@ -7,7 +7,12 @@ import { parseArgs } from 'node:util'
 import { chromium } from '../web/node_modules/@playwright/test/index.mjs'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const output = join(root, 'web/public/brand/v2')
+const publicBrand = join(root, 'web/public/brand/v2')
+const archivedBrand = join(root, 'design-system/herdrx/brand/exported')
+const publicNames = new Set([
+  'apple-touch-icon.png', 'icon-32.png', 'icon-64.png', 'icon-128.png', 'icon-192.png', 'icon-512.png',
+  'icon-maskable-192.png', 'icon-maskable-512.png', 'wordmark.png',
+])
 const { values } = parseArgs({ options: { 'wordmark-source': { type: 'string', default: 'design-system/herdrx/brand/wordmark-source.png' } } })
 const sourcePaths = {
   icon: join(root, 'design-system/herdrx/brand/icon-source.png'),
@@ -68,6 +73,7 @@ try {
     // central 40%-radius safe circle; the decorative tile may extend beyond it.
     // https://www.w3.org/TR/appmanifest/#icon-masks
     exportPNG('icon-maskable-512.png', icon, 512, 512, undefined, 64, '#193747')
+    exportPNG('icon-maskable-192.png', icon, 192, 192, undefined, 24, '#193747')
     // The full logo may have an intentional solid background. Preserve it and
     // its native resolution instead of treating the background as text content.
     exportPNG('logo.png', logo, logo.width, logo.height)
@@ -77,8 +83,11 @@ try {
     exportPNG('wordmark.png', wordmark, wordmarkWidth, Math.round(wordmarkWidth * crop[3] / crop[2]), crop)
     return { assets: results, dimensions: { icon: [icon.width, icon.height], logo: [logo.width, logo.height], wordmarkSource: [wordmark.width, wordmark.height], wordmarkCrop: crop } }
   }, sources)
-  await mkdir(output, { recursive: true })
-  for (const [name, data] of Object.entries(assets)) await writeFile(join(output, name), Buffer.from(data, 'base64'))
+  await mkdir(publicBrand, { recursive: true })
+  await mkdir(archivedBrand, { recursive: true })
+  for (const [name, data] of Object.entries(assets)) {
+    await writeFile(join(publicNames.has(name) ? publicBrand : archivedBrand, name), Buffer.from(data, 'base64'))
+  }
   const sizes = [16, 32, 48, 64, 128, 256]
   const header = Buffer.alloc(6 + sizes.length * 16)
   header.writeUInt16LE(1, 2); header.writeUInt16LE(sizes.length, 4)
@@ -93,8 +102,13 @@ try {
     offset += frames[i].length
   }
   const favicon = Buffer.concat([header, ...frames])
-  await writeFile(join(output, 'favicon.ico'), favicon)
-  // Keep the conventional root URL available for clients that request it directly.
+  // Browsers request /favicon.ico directly; keep a single copy at the site root.
   await writeFile(join(root, 'web/public/favicon.ico'), favicon)
-  console.log(JSON.stringify({ output: 'web/public/brand/v2', pngAssets: Object.keys(assets).length, faviconSizes: sizes, sourceDimensions: dimensions }, null, 2))
+  console.log(JSON.stringify({
+    public: 'web/public/brand/v2',
+    archived: 'design-system/herdrx/brand/exported',
+    pngAssets: Object.keys(assets).length,
+    faviconSizes: sizes,
+    sourceDimensions: dimensions,
+  }, null, 2))
 } finally { await browser.close() }
