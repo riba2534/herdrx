@@ -3,7 +3,7 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { Bell, Columns2, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Server, Settings, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
@@ -12,6 +12,7 @@ import { Composer } from '../components/Composer'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
+import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
 import { composerSubmitParams } from '../lib/composerDrafts'
 import { navigate } from '../lib/navigation'
@@ -38,7 +39,7 @@ type PromptState = {
 export function WorkbenchPage({ hostID }: { hostID: string }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(hostID)
   const client = useMemo(() => new WorkbenchClient(hostID), [hostID])
-  const { mobile, height: viewportHeight } = useWorkbenchViewport()
+  const { mobile, height: viewportHeight, offsetTop: viewportOffsetTop } = useWorkbenchViewport()
   const { display, update: updateDisplay, reset: resetDisplay } = useTerminalDisplay(mobile)
   const [actualFontSize, setActualFontSize] = useState(display.fontSize)
   const [host, setHost] = useState<Host | null>(null)
@@ -55,6 +56,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('herdrx.sidebar-open') !== 'false')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
+  const workbenchRef = useRef<HTMLDivElement>(null)
+  const dockRef = useRef<HTMLDivElement>(null)
   const [mobileToolsOpen, setMobileToolsOpen] = useState(false)
   const mobileToolsTrigger = useRef<HTMLButtonElement>(null)
   const [inputFocusRequest, setInputFocusRequest] = useState(0)
@@ -76,6 +79,9 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [enhancedContrast, setEnhancedContrast] = useState(() => localStorage.getItem('herdrx.enhanced-contrast') !== 'false')
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => 'Notification' in window ? Notification.permission : 'denied')
   const [actionError, setActionError] = useState('')
+  const iosWithoutNotification = needsHomeScreenForNotifications()
+  const notificationHint = iosWithoutNotification ? '请先添加到主屏幕后再开启通知' : notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'
+  const notificationButtonLabel = iosWithoutNotification ? '请先添加到主屏幕后再开启通知' : notificationPermission === 'granted' ? '已启用' : '启用'
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; target: ContextTarget } | null>(null)
   const [prompt, setPrompt] = useState<PromptState | null>(null)
   const [promptBusy, setPromptBusy] = useState(false)
@@ -110,6 +116,23 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
 
   useEffect(() => { localStorage.setItem('herdrx.sidebar-open', String(sidebarOpen)) }, [sidebarOpen])
+  useEffect(() => {
+    if (!actionError) return
+    const timer = window.setTimeout(() => setActionError(''), 5000)
+    return () => window.clearTimeout(timer)
+  }, [actionError])
+  const shortWorkbench = mobile && viewportHeight < 500
+  useLayoutEffect(() => {
+    const workbench = workbenchRef.current
+    const dock = dockRef.current
+    if (!workbench) return
+    const apply = () => workbench.style.setProperty('--dock-height', `${dock?.getBoundingClientRect().height || 0}px`)
+    apply()
+    if (!dock || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(apply)
+    observer.observe(dock)
+    return () => observer.disconnect()
+  }, [composerOpen, auxiliaryKeysOpen, mobile, viewportHeight])
 
 
 
@@ -450,12 +473,17 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const visiblePanes = mobile ? panes?.filter((pane) => pane.pane_id === paneID) : panes
   const hostEntries = availableHosts.some((item) => item.id === hostID) ? availableHosts : [{ id: hostID, name: host?.name || '加载主机…' }, ...availableHosts]
 
-  return <div className={`workbench ${mobile ? 'workbench-compact' : ''} ${mobile && viewportHeight < 500 ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
+  return <div ref={workbenchRef} className={`workbench ${mobile ? 'workbench-compact' : ''} ${shortWorkbench ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--workbench-offset-top': `${viewportOffsetTop}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
     {mobile ? <header className="mobile-topbar" aria-label="工作台导航">
       <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
         <Menu size={18}/><span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
       </button>
-      <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((value) => !value)}><Keyboard size={18}/></Button>
+      <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => {
+        const next = !open
+        if (shortWorkbench && next) patchInput({ composerOpen: false })
+        else if (shortWorkbench && !next) patchInput({ composerOpen: true })
+        return next
+      })}><Keyboard size={18}/></Button>
       <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
       <Button className="tool-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={18}/></Button>
     </header> : <header className="hostbar" aria-label="主机导航">
@@ -502,7 +530,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
       {prefix && <div className="mode-bar"><strong>PREFIX</strong><span>esc cancel</span><span>v split right</span><span>− split down</span><span>hjkl focus</span><span>z zoom</span><span>x close</span><span>w switch</span></div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
-      {(composerOpen || mobile) && <div className="workbench-dock">
+      {(composerOpen || mobile) && <div className="workbench-dock" ref={dockRef}>
       <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
       {mobile && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
         ['Enter', '\r'], ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
@@ -520,7 +548,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SwitcherGroup title="操作">{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
-    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>满足可读性要求，但会轻微修正主题中的低对比色。</small></span></label><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationPermission === 'granted' ? '页面关闭后仍可接收 blocked / done 推送' : '需要浏览器授权'}</small></span><Button className="button-secondary" disabled={notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationPermission === 'granted' ? '已启用' : '启用'}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
+    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>仅影响工作台导航；网站页面单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>满足可读性要求，但会轻微修正主题中的低对比色。</small></span></label><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={`${contextMenu.target.kind} 右键菜单`} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
     {confirmationDialog}
