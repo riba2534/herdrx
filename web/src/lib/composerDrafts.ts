@@ -42,8 +42,8 @@ function ensureAuthListener() {
 
 function eachStorageKey(visit: (key: string) => void) {
   try {
-    for (let index = sessionStorage.length - 1; index >= 0; index--) {
-      const key = sessionStorage.key(index)
+    for (let index = localStorage.length - 1; index >= 0; index--) {
+      const key = localStorage.key(index)
       if (key?.startsWith(STORAGE_PREFIX)) visit(key)
     }
   } catch {
@@ -55,8 +55,8 @@ function persistDraft(key: string, sessionID: string, hostID: string, paneID: st
   drafts.set(key, record)
   try {
     const stored = storageKey(sessionID, hostID, paneID)
-    if (record.text) sessionStorage.setItem(stored, record.text)
-    else sessionStorage.removeItem(stored)
+    if (record.text) localStorage.setItem(stored, record.text)
+    else localStorage.removeItem(stored)
   } catch {
     // Private storage may be unavailable; in-memory draft still lasts this visit.
   }
@@ -76,7 +76,7 @@ export function readComposerDraft(hostID: string, paneID: string) {
   if (cached) return cached.text
   const sessionID = currentSessionID()
   try {
-    const text = sessionStorage.getItem(storageKey(sessionID, hostID, paneID)) || ''
+    const text = localStorage.getItem(storageKey(sessionID, hostID, paneID)) || ''
     drafts.set(key, { text, revision: 0 })
     return text
   } catch {
@@ -134,7 +134,7 @@ export function retainComposerDrafts(sessionID: string) {
   }
   eachStorageKey((key) => {
     if (!key.startsWith(prefix)) {
-      try { sessionStorage.removeItem(key) } catch { /* ignore */ }
+      try { localStorage.removeItem(key) } catch { /* ignore */ }
     }
   })
   notify()
@@ -145,7 +145,7 @@ export function clearComposerDrafts() {
   sends.clear()
   inflight.clear()
   eachStorageKey((key) => {
-    try { sessionStorage.removeItem(key) } catch { /* ignore */ }
+    try { localStorage.removeItem(key) } catch { /* ignore */ }
   })
   notify()
 }

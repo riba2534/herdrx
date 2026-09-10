@@ -12,6 +12,7 @@ async function login(sessionID: string) {
 beforeEach(async () => {
   invalidateAuthentication()
   clearComposerDrafts()
+  localStorage.clear()
   sessionStorage.clear()
   await login('sess-a')
 })
@@ -33,7 +34,7 @@ describe('composer drafts', () => {
 
   it('does not write drafts without a login session and forgets them after logout', async () => {
     writeComposerDraft('host-1', 'pane-1', 'secret prompt')
-    expect(sessionStorage.getItem(`herdrx.composer.v1.${encodeURIComponent('sess-a')}/${encodeURIComponent('host-1')}/${encodeURIComponent('pane-1')}`)).toBe('secret prompt')
+    expect(localStorage.getItem(`herdrx.composer.v1.${encodeURIComponent('sess-a')}/${encodeURIComponent('host-1')}/${encodeURIComponent('pane-1')}`)).toBe('secret prompt')
     invalidateAuthentication()
     expect(readComposerDraft('host-1', 'pane-1')).toBe('')
     await login('sess-b')
@@ -41,7 +42,7 @@ describe('composer drafts', () => {
     writeComposerDraft('host-1', 'pane-1', 'other user')
     expect(readComposerDraft('host-1', 'pane-1')).toBe('other user')
     retainComposerDrafts('sess-b')
-    expect([...Array(sessionStorage.length)].map((_, i) => sessionStorage.key(i)).filter((key) => key?.includes('sess-a'))).toEqual([])
+    expect([...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key) => key?.includes('sess-a'))).toEqual([])
   })
 
   it('does not persist a draft without a pane id', () => {

@@ -12,9 +12,11 @@ export type ContextMenuItem = {
 
 export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: number; label: string; items: ContextMenuItem[]; onClose: () => void }) {
   const menuRef = useRef<HTMLDivElement>(null)
+  const previousFocus = useRef<HTMLElement | null>(null)
   const [position, setPosition] = useState({ left: x, top: y })
 
   useLayoutEffect(() => {
+    if (!previousFocus.current) previousFocus.current = document.activeElement as HTMLElement | null
     const menu = menuRef.current
     if (!menu) return
     const rect = menu.getBoundingClientRect()
@@ -25,6 +27,13 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
     })
     menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [x, y, items])
+
+  useEffect(() => {
+    return () => {
+      const opener = previousFocus.current
+      requestAnimationFrame(() => { if (opener?.isConnected) opener.focus() })
+    }
+  }, [])
 
   useEffect(() => {
     const pointerDown = (event: PointerEvent) => {

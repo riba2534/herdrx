@@ -19,6 +19,7 @@
 .button-danger { background: var(--ui-danger-bg); border-color: var(--ui-danger); color: var(--ui-danger); }
 .button-danger:hover { background: color-mix(in srgb, var(--ui-danger-bg) 85%, var(--ui-danger)); }
 .ui-tooltip { position: fixed; z-index: 200; padding: 7px 10px; border: 1px solid var(--ui-control-border); border-radius: 5px; background: var(--ui-raised); color: var(--ui-text); font: 12px/1.6 var(--ui-font); white-space: pre-line; overflow-wrap: anywhere; pointer-events: none; box-shadow: 0 3px 12px #081b2926; }
+.tooltip-shortcut { white-space: nowrap; }
 input[aria-invalid="true"], textarea[aria-invalid="true"], .select-trigger[aria-invalid="true"] { border-color: var(--ui-danger); }
 input[type="checkbox"] { appearance: none; width: 18px; height: 18px; flex: 0 0 18px; border: 1px solid var(--ui-control-border); border-radius: 3px; background: var(--ui-input); cursor: pointer; display: inline-grid; place-content: center; }
 input[type="checkbox"]:checked { background: var(--ui-accent); border-color: var(--ui-accent); }
