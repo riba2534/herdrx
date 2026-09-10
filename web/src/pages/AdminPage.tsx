@@ -4,9 +4,9 @@ import { Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
 import { useEffect, useState, type FormEvent } from 'react'
-import { ArrowLeft, Copy, RefreshCw, X } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Copy, Mail, RefreshCw, Users, X } from 'lucide-react'
 import { useAuth } from '../auth'
-import { Button, Field } from '../components/ui'
+import { Button, EmptyState, Field } from '../components/ui'
 import { AppearanceToggle } from '../components/AppearanceToggle'
 import { api, authenticationGeneration, invalidateAuthentication } from '../lib/api'
 import { navigate } from '../lib/navigation'
@@ -117,9 +117,14 @@ export function AdminPage() {
       user.id === auth.user?.id && (!session || session.id === auth.sessionID))
   }
   const createInvite = () => void mutate('create-invite', async () => { const result = await api.createInvite(); setCode(result.code); setCopied(false) })
-  const toggleRegistration = () => {
+  const toggleRegistration = async () => {
     if (!settings || pending || settingsLoading) return
     const registration = settings.registration === 'closed' ? 'invite' : 'closed'
+    const closing = registration === 'closed'
+    if (!await confirm(closing
+      ? '关闭注册后，尚未使用的邀请码将无法再用于注册。已有账号仍可登录。确定关闭注册？'
+      : '开启邀请注册后，新用户需要一次性邀请码才能创建账号。确定开启注册？',
+    { title: closing ? '关闭注册' : '开启注册', confirmLabel: closing ? '关闭注册' : '开启注册', danger: closing })) return
     void mutate('registration', async () => {
       const result = await api.setRegistration(registration, settings.revision)
       setSettings(result.settings)
@@ -140,7 +145,7 @@ export function AdminPage() {
       <div className="page-heading"><div><h1>访问管理</h1><p>管理注册、用户与登录访问。</p></div><Button className="button-secondary" pending={loading || settingsLoading} disabled={Boolean(pending)} onClick={() => setRevision((value) => value + 1)}><RefreshCw size={16}/>刷新</Button></div>
       <section className="admin-registration" aria-label="注册设置">
         <div><h2>用户注册</h2><p>{settingsLoading ? '正在读取注册状态…' : settings?.registration === 'invite' ? '已开启邀请注册：新用户需要管理员提供的一次性邀请码，注册后为普通用户。' : '已关闭注册：新用户无法创建账号，已有用户可正常登录。'}</p><small>本机 Herdr 仅管理员可用。注册设置会保留到下次修改。</small>{settingsError && <p role="alert" className="notice notice-error">{settingsError}</p>}</div>
-        <Button className={settings?.registration === 'invite' ? 'button-secondary' : 'button-primary'} pending={pending === 'registration'} disabled={Boolean(pending) || settingsLoading || Boolean(settingsError) || !settings} onClick={toggleRegistration}>{settings?.registration === 'invite' ? '关闭注册' : '开启注册'}</Button>
+        <Button className={settings?.registration === 'invite' ? 'button-secondary' : 'button-primary'} pending={pending === 'registration'} disabled={Boolean(pending) || settingsLoading || Boolean(settingsError) || !settings} onClick={() => void toggleRegistration()}>{settings?.registration === 'invite' ? '关闭注册' : '开启注册'}</Button>
       </section>
       <nav className="admin-tabs" aria-label="管理栏目">{([['users', '用户'], ['invites', '邀请'], ['audit', '审计记录']] as const).map(([value, label]) => <Button key={value} className={tab === value ? 'button-primary' : 'button-ghost'} aria-current={tab === value ? 'page' : undefined} onClick={() => changeTab(value)}>{label}</Button>)}</nav>
       {error && <div className="notice notice-error" role="alert">{error}</div>}
@@ -160,15 +165,13 @@ export function AdminPage() {
       {tab === 'invites' && <div className="admin-invite-controls"><p>{settings?.registration !== 'invite' ? '当前已关闭注册，先在上方开启注册后再创建邀请。' : '邀请码 7 天有效，成功注册后失效。'}</p><Button className="button-primary" pending={pending === 'create-invite'} disabled={Boolean(pending) || settingsLoading || Boolean(settingsError) || settings?.registration !== 'invite'} onClick={createInvite}>创建邀请</Button></div>}
       {tab === 'invites' && code && <section className="admin-code" aria-label="新邀请码"><div className="modal-header"><h2>请保存这份邀请码</h2><Button className="icon-button" aria-label="隐藏邀请码" onClick={() => setCode('')}><X size={18}/></Button></div><p>原文只显示这一次，离开此栏目后无法再次查看。</p><pre className="key-block">{code}</pre><Button className="button-secondary" onClick={async () => { try { await navigator.clipboard.writeText(code); setCopied(true) } catch { setError('无法自动复制，请手动选中邀请码复制') } }}><Copy size={16}/>{copied ? '已复制' : '复制邀请码'}</Button></section>}
       {loading ? <p role="status">正在读取…</p> : !error && <>
-        <div className="admin-list">
-          {tab === 'users' && (users.length ? users.map((user) => <article className="admin-row admin-user-row" key={user.id}>
+        {tab === 'users' && (users.length ? <div className="admin-list">{users.map((user) => <article className="admin-row admin-user-row" key={user.id}>
             <div className="admin-row-main"><h2>{user.display_name} {user.id === auth.user?.id && <small>当前账号</small>}</h2><p>{user.email}</p><details className="admin-user-details"><summary>账号详情</summary><small className="admin-id">{user.id}</small><p>创建于 {date(user.created_at)}</p></details></div>
             <div className="admin-user-state"><span className="role-badge">{user.role === 'admin' ? '管理员' : '普通用户'}</span><span className={`account-state ${user.disabled ? 'account-disabled' : ''}`}>{user.disabled ? '已禁用' : '可登录'}</span><p>{user.active_sessions} 条有效登录</p></div>
             <div className="admin-row-actions"><Button className="button-secondary" onClick={() => { setSelected(user); setSessionOffset(0) }}>查看登录</Button><Button className={user.disabled ? 'button-secondary' : 'button-ghost danger-button'} disabled={Boolean(pending) || user.id === auth.user?.id} data-tooltip={user.id === auth.user?.id ? '不能禁用当前管理员' : undefined} pending={pending === user.id} onClick={() => disable(user)}>{user.disabled ? '启用账号' : '禁用账号'}</Button></div>
-          </article>) : <p className="admin-empty">没有用户记录。</p>)}
-          {tab === 'invites' && (invites.length ? invites.map((invite) => <article className="admin-row" key={invite.id}><div className="admin-row-main"><h2>{statusLabel[invite.status]}</h2><small className="admin-id">{invite.id}</small><p>创建于 {date(invite.created_at)} · 到期 {date(invite.expires_at)}</p><p>创建人：{invite.created_by}</p>{invite.used_by && <p>使用人：{invite.used_by} · {date(invite.used_at)}</p>}{invite.revoked_by && <p>撤销人：{invite.revoked_by} · {date(invite.revoked_at)}</p>}</div><Button className="button-ghost danger-button" disabled={Boolean(pending) || invite.status !== 'active'} pending={pending === invite.id} onClick={async () => { if (await confirm('撤销这个尚未使用的邀请码？', { title: '撤销邀请', confirmLabel: '撤销邀请' })) void mutate(invite.id, () => api.revokeInvite(invite.id)) }}>撤销邀请</Button></article>) : <p className="admin-empty">还没有邀请。</p>)}
-          {tab === 'audit' && (events.length ? events.map((event) => <article className="admin-row" key={event.id}><div className="admin-row-main"><h2>{actionLabel[event.action] || event.action}</h2><p>{date(event.created_at)} · 来源 {event.remote_ip || '—'}</p><p>操作人：{event.user_id || '未登录'} · 目标：{event.target_type} {event.target_id || '—'}</p><details><summary>查看记录详情</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></div></article>) : <p className="admin-empty">没有符合条件的审计记录。</p>)}
-        </div>
+          </article>)}</div> : <EmptyState icon={<Users size={32}/>} title="没有用户记录" detail="没有符合当前筛选条件的用户。" />)}
+        {tab === 'invites' && (invites.length ? <div className="admin-list">{invites.map((invite) => <article className="admin-row" key={invite.id}><div className="admin-row-main"><h2>{statusLabel[invite.status]}</h2><small className="admin-id">{invite.id}</small><p>创建于 {date(invite.created_at)} · 到期 {date(invite.expires_at)}</p><p>创建人：{invite.created_by}</p>{invite.used_by && <p>使用人：{invite.used_by} · {date(invite.used_at)}</p>}{invite.revoked_by && <p>撤销人：{invite.revoked_by} · {date(invite.revoked_at)}</p>}</div><Button className="button-ghost danger-button" disabled={Boolean(pending) || invite.status !== 'active'} pending={pending === invite.id} onClick={async () => { if (await confirm('撤销这个尚未使用的邀请码？', { title: '撤销邀请', confirmLabel: '撤销邀请' })) void mutate(invite.id, () => api.revokeInvite(invite.id)) }}>撤销邀请</Button></article>)}</div> : <EmptyState icon={<Mail size={32}/>} title="还没有邀请" detail="开启邀请注册后，可在这里创建一次性邀请码。" />)}
+        {tab === 'audit' && (events.length ? <div className="admin-list">{events.map((event) => <article className="admin-row" key={event.id}><div className="admin-row-main"><h2>{actionLabel[event.action] || event.action}</h2><p>{date(event.created_at)} · 来源 {event.remote_ip || '—'}</p><p>操作人：{event.user_id || '未登录'} · 目标：{event.target_type} {event.target_id || '—'}</p><details><summary>查看记录详情</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></div></article>)}</div> : <EmptyState icon={<ClipboardList size={32}/>} title="没有符合条件的审计记录" detail="调整筛选条件后再试。" />)}
         <Pager page={page} busy={Boolean(pending)} change={setOffset}/>
       </>}
       {tab === 'users' && selected && <section className="admin-session-panel" aria-label={`${selected.display_name}的登录会话`}>
