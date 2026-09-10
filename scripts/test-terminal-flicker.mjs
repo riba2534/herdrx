@@ -147,7 +147,7 @@ try {
         if (mobile) await page.getByRole('button', { name: '终端工具', exact: true }).click()
         else {
           await page.locator('.terminal-pane').hover()
-          await page.getByRole('button', { name: '分屏工具', exact: true }).click()
+          await page.getByRole('button', { name: '终端工具', exact: true }).click()
         }
         await page.evaluate(() => { window.flickerPhase = 'history-entry' })
         await page.getByRole('button', { name: '查看终端历史', exact: true }).click()

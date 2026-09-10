@@ -838,7 +838,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     onContextMenu?.(event)
   }}>
     {!compact && <span className="pane-status-chip" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
-    {!compact && <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="分屏工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 分屏工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>}
+    {!compact && <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="终端工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 终端工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>}
     {!compact && onContextMenu && pane.right_click_passthrough && <Button className="tool-button pane-menu-button pane-menu-standalone" aria-label="终端操作" data-tooltip="终端操作 · Shift+右键" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
     <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
       <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={paneDisplayName(pane)}>{paneDisplayName(pane)}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>

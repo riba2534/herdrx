@@ -229,7 +229,7 @@ async function openPaneTools(page, index = 0) {
   const pane = page.locator('.terminal-pane').nth(index)
   if (!(await pane.locator('.terminal-titlebar').isVisible())) {
     await pane.hover()
-    await pane.getByRole('button', { name: '分屏工具', exact: true }).click()
+    await pane.getByRole('button', { name: '终端工具', exact: true }).click()
   }
   await expect(pane.locator('.terminal-titlebar')).toBeVisible()
 }

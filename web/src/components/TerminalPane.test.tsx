@@ -199,7 +199,7 @@ describe('TerminalPane paste interception', () => {
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(2))
     expect(input.mock.calls).toEqual([[7, 'sent once']])
     expect(call).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
@@ -248,7 +248,7 @@ describe('TerminalPane paste interception', () => {
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
     act(() => terminalHarness.writeCallbacks.shift()!())
 
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(terminalHarness.writes).toHaveLength(2))
     expect(read).toHaveBeenCalledExactlyOnceWith('pane.read', { pane_id: 'p1', source: 'recent', format: 'ansi', lines: 10000 })
@@ -283,7 +283,7 @@ describe('TerminalPane paste interception', () => {
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: live }))
     act(() => terminalHarness.writeCallbacks.shift()!())
 
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(terminalHarness.writes).toHaveLength(2))
     fireEvent.click(screen.getByRole('button', { name: '返回实时' }))
@@ -394,7 +394,7 @@ describe('TerminalPane paste interception', () => {
     terminalHarness.deferWrites = true
     terminalHarness.writes = []
     act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: true, cols: 80, rows: 24, ansi: encode('pending') }))
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     fireEvent.click(screen.getByRole('button', { name: '查看终端历史' }))
     await waitFor(() => expect(read).toHaveBeenCalled())
     expect(terminalHarness.writes.map(visible)).toEqual(['pending'])
@@ -937,7 +937,7 @@ describe('TerminalPane paste interception', () => {
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     const toggle = screen.getByRole('button', { name: '选择文本' })
     fireEvent.click(toggle)
     expect(toggle).toHaveAttribute('aria-pressed', 'true')
@@ -954,7 +954,7 @@ describe('TerminalPane paste interception', () => {
     vi.stubGlobal('isSecureContext', true)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     fireEvent.click(screen.getByRole('button', { name: '复制屏幕' }))
     await waitFor(() => expect(read).toHaveBeenCalledWith('pane.read', { pane_id: 'p1', source: 'visible', format: 'text' }))
     expect(writeText).toHaveBeenCalledWith('visible screen')
@@ -969,7 +969,7 @@ describe('TerminalPane paste interception', () => {
     vi.stubGlobal('isSecureContext', false)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined })
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
-    fireEvent.click(screen.getByRole('button', { name: '分屏工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
     fireEvent.click(screen.getByRole('button', { name: '复制屏幕' }))
     expect(await screen.findByRole('dialog', { name: '复制屏幕文本' })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '屏幕文本' })).toHaveValue('manual copy')
@@ -988,7 +988,7 @@ describe('TerminalPane status chip and crop badge', () => {
     expect(chip?.querySelector('.status-working')).toBeTruthy()
     expect(chip?.closest('.terminal-titlebar')).toBeNull()
     expect(chip).toBeVisible()
-    expect(screen.getByRole('button', { name: '分屏工具' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '终端工具' })).toBeInTheDocument()
   })
 
   it('shows a crop badge in fixed mode when the remote grid is larger than the viewport', async () => {
