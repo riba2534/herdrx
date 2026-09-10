@@ -109,6 +109,7 @@ Never communicate agent state by color alone. Pair color with text and a dot/sym
 - 布局同时适配浏览器标签页与 standalone 窗口，在没有浏览器导航栏时保留应用内必要的返回、主机切换与设置入口。
 - 验证程序坞/主屏幕启动、窗口调整、软键盘、安全区域和再次打开工作台；真实设备安装状态以发版清单为准。
 - PWA 安装确认由浏览器/操作系统提供，应用内引导仍使用项目组件。
+- `manifest.webmanifest` 的 `theme_color` 保持网站默认浅色 `#f7f8fa`；工作台深色由 `boot.js` 与 `appearance.ts` 在运行时改写 `theme-color` meta，不把 manifest 做成动态文件。
 
 ## Pre-delivery viewport checks
 
