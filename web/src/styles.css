@@ -259,6 +259,11 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .connection-degraded > span:first-child { background: #e08a3c; }
 .connection-offline > span:first-child { background: var(--blocked); }
 .terminal-surface { min-height: 0; position: relative; margin: 0; overflow: hidden; background: var(--terminal); }
+.split-resize-handle { position: absolute; z-index: 8; padding: 0; border: 0; background: transparent; touch-action: none; }
+.split-resize-handle-right { cursor: col-resize; transform: translateX(-50%); }
+.split-resize-handle-down { cursor: row-resize; transform: translateY(-50%); }
+.split-resize-handle-active { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+@media (pointer: coarse) { .split-resize-handle { display: none; } }
 .pane-position { position: absolute; padding: 0; }
 .terminal-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: grid; grid-template-rows: minmax(0, 1fr); container: terminal-pane / inline-size; overflow: hidden; background: var(--terminal); border: 0; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
 .terminal-pane-active { border-color: var(--accent); }
@@ -548,6 +553,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .display-zoom, .display-fit, .terminal-title small, .terminal-titlebar .terminal-title { display: none; }
   .terminal-titlebar { height: auto; min-height: var(--pane-bar-height); }
   .terminal-tools { flex: 1; flex-shrink: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
+  .pane-status-chip { display: inline-flex; max-width: calc(100% - 40px); }
 }
 @container terminal-pane (max-width: 280px) {
   .display-toolbar { display: none; }

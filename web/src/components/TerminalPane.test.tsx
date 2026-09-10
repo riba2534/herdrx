@@ -986,6 +986,8 @@ describe('TerminalPane status chip and crop badge', () => {
     const chip = document.querySelector('.pane-status-chip')
     expect(chip).toHaveTextContent('Claude 前端')
     expect(chip?.querySelector('.status-working')).toBeTruthy()
+    expect(chip?.closest('.terminal-titlebar')).toBeNull()
+    expect(chip).toBeVisible()
     expect(screen.getByRole('button', { name: '分屏工具' })).toBeInTheDocument()
   })
 

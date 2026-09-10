@@ -341,3 +341,53 @@ describe('compact short workbench', () => {
     expect(screen.getByRole('toolbar', { name: '终端辅助键' })).toBeInTheDocument()
   })
 })
+
+describe('workbench split resize', () => {
+  function press(key: string, init: KeyboardEventInit = {}) {
+    fireEvent.keyDown(window, { key, ctrlKey: false, altKey: false, metaKey: false, ...init })
+  }
+
+  beforeEach(() => {
+    HTMLElement.prototype.setPointerCapture = vi.fn()
+    HTMLElement.prototype.releasePointerCapture = vi.fn()
+    snapshot.layouts = [{
+      workspace_id: 'w1', tab_id: 'w1:t1', focused_pane_id: 'w1:p1', zoomed: false,
+      area: { x: 0, y: 0, width: 100, height: 40 },
+      panes: [
+        { pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 50, height: 40 } },
+        { pane_id: 'w1:p2', focused: false, rect: { x: 50, y: 0, width: 50, height: 40 } },
+      ],
+      splits: [{ id: 'split_0_root', direction: 'right', ratio: 0.5, rect: { x: 0, y: 0, width: 100, height: 40 } }],
+    }]
+  })
+
+  it('enters RESIZE mode from prefix+r and resizes the current pane with hjkl', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    press('b', { ctrlKey: true })
+    press('r')
+    expect(screen.getByText('RESIZE')).toBeInTheDocument()
+    press('l')
+    expect(call).toHaveBeenCalledWith('pane.resize', { pane_id: 'w1:p1', direction: 'right', amount: 0.05 })
+    press('Escape')
+    expect(screen.queryByText('RESIZE')).not.toBeInTheDocument()
+  })
+
+  it('commits a desktop split drag with layout.set_split_ratio', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    const handle = await screen.findByRole('separator', { name: '左右调整分屏' })
+    const surface = document.querySelector('.terminal-surface') as HTMLElement
+    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 200, bottom: 80, width: 200, height: 80, toJSON() { return {} } })
+    fireEvent.pointerDown(handle, { pointerType: 'mouse', pointerId: 1, clientX: 100, clientY: 20 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 140, clientY: 20, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 140, clientY: 20, bubbles: true }))
+    expect(call).toHaveBeenCalledWith('layout.set_split_ratio', { tab_id: 'w1:t1', path: [], ratio: 0.7 })
+  })
+
+  it('does not render split handles on a compact workbench', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: '切换工作区或终端' })
+    expect(screen.queryByRole('separator', { name: '左右调整分屏' })).not.toBeInTheDocument()
+  })
+})

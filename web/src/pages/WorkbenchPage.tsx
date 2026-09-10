@@ -3,12 +3,13 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Bell, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Search, Server, Settings, Square, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
 import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems } from '../lib/keymap'
+import { ratioFromPointer, resizeModeBarItems, RESIZE_DIRECTIONS, splitHandleStyle, splitPathFromId, type LayoutSplit } from '../lib/layoutSplit'
 import { Composer } from '../components/Composer'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
@@ -68,6 +69,10 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const mobileToolsTrigger = useRef<HTMLButtonElement>(null)
   const [inputFocusRequest, setInputFocusRequest] = useState(0)
   const [prefix, setPrefix] = useState(false)
+  const [resizeMode, setResizeMode] = useState(false)
+  const surfaceRef = useRef<HTMLElement>(null)
+  const splitDragRef = useRef<{ split: LayoutSplit; path: boolean[]; ratio: number; area: Layout['area'] } | null>(null)
+  const [splitDrag, setSplitDrag] = useState<{ id: string; ratio: number } | null>(null)
   const [terminalInput, setTerminalInput] = useState<((data: string) => void) | null>(null)
   const [desktopInput, setDesktopInput] = useState({ composerOpen: false, directInput: true })
   const [mobileInput, setMobileInput] = useState({ composerOpen: true, directInput: false })
@@ -285,6 +290,31 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     const keydown = (event: KeyboardEvent) => {
       if (isLocalInputTarget(event.target)) return
       if (isModifierKey(event)) return
+      if (resizeMode) {
+        if (isPrefixChord(event)) {
+          if (event.repeat) return
+          event.preventDefault()
+          event.stopPropagation()
+          setResizeMode(false)
+          setPrefix(true)
+          return
+        }
+        if (event.key === 'Escape' || event.key === 'Enter') {
+          event.preventDefault()
+          event.stopPropagation()
+          setResizeMode(false)
+          return
+        }
+        const direction = RESIZE_DIRECTIONS[event.key]
+        if (direction && paneID) {
+          event.preventDefault()
+          event.stopPropagation()
+          void client.call('pane.resize', { pane_id: paneID, direction, amount: 0.05 }).catch((reason) => {
+            setActionError(reason instanceof Error ? reason.message : 'Herdr 操作失败')
+          })
+        }
+        return
+      }
       if (isPrefixChord(event)) {
         if (event.repeat) return
         event.preventDefault()
@@ -306,7 +336,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     }
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
-  }, [prefix, paneID, tabID, workspaceID, snapshot, terminalInput, directInput])
+  }, [prefix, resizeMode, paneID, tabID, workspaceID, snapshot, terminalInput, directInput, client])
 
   const runPrefixAction = async (eventOrKey: KeyboardEvent | string) => {
     try {
@@ -371,6 +401,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       }
       else if (action === 'help') setHelpOpen(true)
       else if (action === 'settings') setSettingsOpen(true)
+      else if (action === 'resize-mode') setResizeMode(true)
       setActionError('')
     } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Herdr 操作失败') }
   }
@@ -631,6 +662,37 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const showBanner = connection === 'degraded' || (connection === 'connecting' && Boolean(snapshot))
   const showOverlay = connection === 'offline' || (connection === 'connecting' && !snapshot && Boolean(message))
   const otherPaneBlocked = (snapshot?.panes || []).some((pane) => pane.pane_id !== paneID && pane.agent_status === 'blocked')
+  const beginSplitDrag = (event: ReactPointerEvent<HTMLElement>, split: LayoutSplit) => {
+    if (mobile || event.pointerType === 'touch' || !layout) return
+    event.preventDefault()
+    event.stopPropagation()
+    const session = { split, path: splitPathFromId(split.id), ratio: split.ratio, area: layout.area }
+    splitDragRef.current = session
+    setSplitDrag({ id: split.id, ratio: split.ratio })
+    const onMove = (moveEvent: PointerEvent) => {
+      const current = splitDragRef.current
+      const surface = surfaceRef.current?.getBoundingClientRect()
+      if (!current || !surface) return
+      const ratio = ratioFromPointer(current.split, current.area, surface, moveEvent.clientX, moveEvent.clientY)
+      current.ratio = ratio
+      setSplitDrag({ id: current.split.id, ratio })
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      const current = splitDragRef.current
+      splitDragRef.current = null
+      setSplitDrag(null)
+      if (!current || !tabID) return
+      void client.call('layout.set_split_ratio', { tab_id: tabID, path: current.path, ratio: current.ratio }).catch((reason) => {
+        setActionError(reason instanceof Error ? reason.message : 'Herdr 操作失败')
+      })
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
 
   return <div ref={workbenchRef} className={`workbench ${mobile ? 'workbench-compact' : ''} ${shortWorkbench ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--workbench-offset-top': `${viewportOffsetTop}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
     <h1 className="workbench-title">{host?.name || '工作台'}</h1>
@@ -680,7 +742,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
       </header>}
 
-      <section className="terminal-surface" aria-label="终端工作区">
+      <section className="terminal-surface" aria-label="终端工作区" ref={surfaceRef}>
         {showBanner && <div className="connection-banner" role="status"><span>{connectionLabel(connection)}{message ? ` · ${message}` : ''}{retrySeconds ? ` · ${retrySeconds} 秒后重试` : ''}</span><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>}
         {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div></div>}
         {visiblePanes?.map((pane) => {
@@ -691,9 +753,11 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
+        {!mobile && !layout?.zoomed && layout?.splits.map((split) => <div key={split.id} role="separator" aria-orientation={split.direction === 'right' ? 'vertical' : 'horizontal'} aria-label={split.direction === 'right' ? '左右调整分屏' : '上下调整分屏'} className={`split-resize-handle split-resize-handle-${split.direction}${splitDrag?.id === split.id ? ' split-resize-handle-active' : ''}`} style={splitHandleStyle(layout, split, splitDrag?.id === split.id ? splitDrag.ratio : undefined)} onPointerDown={(event) => beginSplitDrag(event, split)}/>)}
       </section>
 
-      {prefix && <div className="mode-bar"><strong>PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
+      {resizeMode && <div className="mode-bar"><strong>RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
+      {prefix && !resizeMode && <div className="mode-bar"><strong>PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {(composerOpen || mobile) && <div className="workbench-dock" ref={dockRef}>
       <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>

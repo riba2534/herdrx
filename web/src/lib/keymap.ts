@@ -73,7 +73,7 @@ export const PREFIX_BINDINGS: PrefixBinding[] = [
   { action: 'swap-up', key: 'shift+k', group: 'pane', label: '与上方 Pane 互换', chord: 'Ctrl+B Shift+K', implemented: true },
   { action: 'swap-right', key: 'shift+l', group: 'pane', label: '与右侧 Pane 互换', chord: 'Ctrl+B Shift+L', implemented: true },
   { action: 'rename-pane', key: 'shift+p', group: 'pane', label: '重命名当前 Pane', chord: 'Ctrl+B Shift+P', implemented: true },
-  { action: 'resize-mode', key: 'r', group: 'pane', label: '调整分屏比例（未实现）', chord: 'Ctrl+B R', implemented: false },
+  { action: 'resize-mode', key: 'r', group: 'pane', label: '调整分屏比例', chord: 'Ctrl+B R', implemented: true, modeBar: 'r 比例' },
 ]
 
 const GROUP_TITLES: Record<KeymapGroup, string> = {

@@ -47,11 +47,13 @@ describe('prefix keymap', () => {
     expect(isLocalInputTarget(terminal)).toBe(false)
   })
 
-  it('lists help groups and keeps resize-mode reserved', () => {
+  it('lists help groups and marks resize-mode as implemented', () => {
     const groups = keymapHelpGroups()
     expect(groups.map((group) => group.title)).toEqual(['全局', '导航', '标签', 'Pane'])
-    expect(groups.find((group) => group.id === 'pane')?.entries.some((entry) => entry.label.includes('未实现'))).toBe(true)
+    const resize = groups.find((group) => group.id === 'pane')?.entries.find((entry) => entry.chord === 'Ctrl+B R')
+    expect(resize).toEqual({ chord: 'Ctrl+B R', label: '调整分屏比例', implemented: true })
     expect(prefixModeBarItems()).toContain('? 帮助')
+    expect(prefixModeBarItems()).toContain('r 比例')
     expect(prefixModeBarItems()[0]).toBe('esc 取消')
   })
 
