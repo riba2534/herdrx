@@ -64,24 +64,42 @@ export const COMPACT_WORKBENCH_QUERY = '(max-width: 767px), (pointer: coarse) an
 export function useWorkbenchViewport() {
   const [mobile, setMobile] = useState(() => window.matchMedia(COMPACT_WORKBENCH_QUERY).matches)
   const [height, setHeight] = useState(() => window.innerHeight)
+  const [offsetTop, setOffsetTop] = useState(0)
   useEffect(() => {
     const media = window.matchMedia(COMPACT_WORKBENCH_QUERY)
+    const apply = (nextHeight: number, nextOffset: number) => {
+      document.documentElement.style.setProperty('--workbench-height', `${nextHeight}px`)
+      setHeight(nextHeight)
+      setOffsetTop(nextOffset)
+    }
     const update = () => {
       setMobile(media.matches)
       const viewport = window.visualViewport
       // A software keyboard reduces visualViewport without resizing the page.
       // Native pinch zoom must remain a browser operation without reflow.
-      setHeight(viewport && viewport.scale === 1 ? viewport.height : window.innerHeight)
+      if (!viewport) {
+        apply(window.innerHeight, 0)
+        return
+      }
+      if (viewport.scale !== 1) {
+        apply(window.innerHeight, 0)
+        return
+      }
+      window.scrollTo(0, 0)
+      apply(viewport.height, viewport.offsetTop || 0)
     }
     update()
     media.addEventListener('change', update)
     window.addEventListener('resize', update)
     window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
     return () => {
       media.removeEventListener('change', update)
       window.removeEventListener('resize', update)
       window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
+      document.documentElement.style.removeProperty('--workbench-height')
     }
   }, [])
-  return { mobile, height }
+  return { mobile, height, offsetTop }
 }
