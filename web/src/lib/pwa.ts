@@ -11,9 +11,22 @@ const snapshot = () => state
 function update(next: Partial<PWAState>) { state = { ...state, ...next }; listeners.forEach((listener) => listener()) }
 export function usePWA() { return useSyncExternalStore(subscribe, snapshot) }
 
+export function isStandalone() {
+  const nav = navigator as Navigator & { standalone?: boolean }
+  return window.matchMedia('(display-mode: standalone)').matches || nav.standalone === true
+}
+
+export function needsHomeScreenForNotifications() {
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  return !('Notification' in window) && ios
+}
+
 export function startPWA() {
   if (started) return
   started = true
+  const syncStandalone = () => document.documentElement.classList.toggle('pwa-standalone', isStandalone())
+  syncStandalone()
+  window.matchMedia('(display-mode: standalone)').addEventListener('change', syncStandalone)
   window.addEventListener('offline', () => update({ online: false }))
   window.addEventListener('online', () => { update({ online: true }); void checkForUpdate() })
   const syncOnline = () => { if (state.online !== navigator.onLine) update({ online: navigator.onLine }) }
