@@ -5,7 +5,7 @@ import { Button, Field, StatusDot } from './ui'
 describe('UI primitives', () => {
   it('exposes status text to assistive technology', () => {
     render(<StatusDot status="blocked" />)
-    expect(screen.getByRole('img', { name: 'blocked' })).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '等待确认' })).toBeInTheDocument()
   })
 
   it('disables a pending action', () => {

@@ -1,6 +1,7 @@
 import { Input } from './Form'
 import { useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
+import { agentStatusLabel } from '../lib/labels'
 
 export function Button({ className = '', pending, children, title, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { pending?: boolean }) {
   return <button className={`button ${className}`} data-tooltip={title} {...props} disabled={pending || props.disabled}>
@@ -25,5 +26,5 @@ export function EmptyState({ icon, title, detail, action }: { icon: ReactNode; t
 
 export function StatusDot({ status }: { status: string }) {
   const symbol = status === 'blocked' ? '×' : status === 'working' ? '◐' : status === 'done' ? '✓' : status === 'idle' ? '○' : '·'
-  return <span className={`status-dot status-${status}`} role="img" aria-label={status}>{symbol}</span>
+  return <span className={`status-dot status-${status}`} role="img" aria-label={agentStatusLabel(status)}>{symbol}</span>
 }
