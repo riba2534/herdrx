@@ -45,7 +45,7 @@ export function AuthPage({ bootstrap }: { bootstrap: boolean }) {
       {auth.notice && <p className="notice" role="status">{auth.notice}</p>}
       <Form onSubmit={submit} className="form-stack">
         {(bootstrap || registering) && <Field name="display_name" label="显示名称" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />}
-        <Field name="email" label="邮箱" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
+        <Field name="email" label="邮箱" type="email" autoComplete="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
         <Field name="password" label="密码" type="password" autoComplete={bootstrap || registering ? 'new-password' : 'current-password'} minLength={bootstrap || registering ? 12 : undefined} value={password} onChange={(event) => setPassword(event.target.value)} hint={bootstrap || registering ? '至少 12 个字符' : undefined} required />
         {(bootstrap || registering) && <Field name="token" label={bootstrap ? '初始化令牌' : '邀请码'} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)} required />}
         {error && <div className="notice notice-error" role="alert">{error}</div>}
