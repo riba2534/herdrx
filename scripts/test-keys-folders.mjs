@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chooseOption, acceptConfirmation } from './browser-controls.mjs'
+import { chooseOption, acceptConfirmation, openSiteNav } from './browser-controls.mjs'
 // Real UI/API/database flow in a disposable website. Never contacts a real SSH host.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -57,7 +57,7 @@ try {
       await page.getByLabel('邮箱', { exact: true }).fill('keys@example.test')
       await page.getByLabel('密码', { exact: true }).fill(password)
       await page.getByRole('button', { name: '登录', exact: true }).click()
-      await page.getByRole('button', { name: '密钥', exact: true }).click()
+      await openSiteNav(page, '密钥')
       await page.getByRole('button', { name: '添加密钥', exact: true }).click()
       const keyDialog = page.getByRole('dialog', { name: '添加密钥', exact: true })
       await expect(keyDialog.getByLabel('密钥名称')).toBeFocused()
@@ -104,7 +104,7 @@ try {
       }
       await expect(page.locator('.host-card')).toHaveCount(2)
       if (name === 'chromium') { await stop(); child = start(); await ready(); await page.reload(); await expect(page.locator('.host-card')).toHaveCount(2) }
-      await page.getByRole('button', { name: '密钥', exact: true }).click()
+      await openSiteNav(page, '密钥')
       await expect(page.locator('.key-card')).toContainText('2 台主机')
       await page.getByRole('button', { name: '删除 共享开发密钥', exact: true }).click()
       await expect(page.getByRole('dialog').getByRole('button', { name: '删除密钥', exact: true })).toBeDisabled()
@@ -168,7 +168,7 @@ try {
       await page.getByRole('dialog').getByRole('button', { name: '删除文件夹', exact: true }).click()
       await expect(page.getByRole('dialog')).toHaveCount(0)
       for (const label of ['数据库主机', '应用主机']) { await page.getByRole('button', { name: `删除 ${label}`, exact: true }).click(); await acceptConfirmation(page); await expect(page.getByRole('heading', { name: label, exact: true })).toHaveCount(0) }
-      await page.getByRole('button', { name: '密钥', exact: true }).click()
+      await openSiteNav(page, '密钥')
       await expect(page.locator('.key-card')).toContainText('0 台主机')
       await page.getByRole('button', { name: '删除 共享开发密钥', exact: true }).click()
       await page.getByRole('dialog').getByRole('button', { name: '删除密钥', exact: true }).click()

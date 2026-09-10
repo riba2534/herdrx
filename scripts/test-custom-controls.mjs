@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
 import ts from '../web/node_modules/typescript/lib/typescript.js'
-import { chooseOption, acceptConfirmation } from './browser-controls.mjs'
+import { chooseOption, acceptConfirmation, openSiteNav } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 // Prevent newly added app widgets from silently restoring browser-native UI.
@@ -126,7 +126,7 @@ try {
         await remove.click(); await screenshot(page, `${engine}-custom-confirm-${width}`); await acceptConfirmation(page)
         await expect(page.getByRole('heading', { name: '开发主机', exact: true })).toHaveCount(0)
         assert.equal(calls.filter(call => call.scope === scope && call.method === 'DELETE').length, 1)
-        await page.getByRole('button', { name: '管理', exact: true }).click()
+        await openSiteNav(page, '管理')
         await chooseOption(page.getByRole('combobox', { name: '角色', exact: true }), 'user')
         await chooseOption(page.getByRole('combobox', { name: '账号状态', exact: true }), 'disabled')
         await page.getByRole('button', { name: '筛选用户', exact: true }).click()

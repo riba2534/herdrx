@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chooseOption, acceptConfirmation } from './browser-controls.mjs'
+import { chooseOption, acceptConfirmation, openSiteNav } from './browser-controls.mjs'
 // Real-browser authentication checks against an isolated website process.
 // Usage: node scripts/test-browser-auth.mjs /absolute/path/to/herdrx-server
 import assert from 'node:assert/strict'
@@ -63,7 +63,7 @@ try {
   await guest.goto(base)
   await expect(guest.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
   await expect(guest.getByRole('button', { name: '有邀请码？创建账号' })).toHaveCount(0)
-  await admin.getByRole('button', { name: '管理', exact: true }).click()
+  await openSiteNav(admin, '管理')
   await expect(admin.getByRole('heading', { name: '访问管理' })).toBeVisible()
   await expect(admin.getByRole('button', { name: '禁用账号' })).toBeDisabled()
   await expect(admin.getByRole('button', { name: '开启注册', exact: true })).toBeEnabled()
@@ -116,11 +116,12 @@ try {
   const otherTab = await context.newPage()
   await otherTab.goto(base)
   await admin.getByRole('button', { name: '返回主机' }).click()
-  await admin.getByRole('button', { name: '退出', exact: true }).click()
+  await openSiteNav(admin, '退出')
+  await acceptConfirmation(admin, '退出登录')
   await expect(otherTab.getByRole('heading', { name: '欢迎回来' })).toBeVisible()
   await login(admin, 'admin@example.test')
   await expect(otherTab.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
-  await admin.getByRole('button', { name: '管理', exact: true }).click()
+  await openSiteNav(admin, '管理')
   await admin.getByLabel('搜索用户').fill('member')
   await chooseOption(admin.getByLabel('角色'), 'user')
   await chooseOption(admin.getByLabel('账号状态'), 'enabled')

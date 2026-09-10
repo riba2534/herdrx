@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chooseOption, acceptConfirmation } from './browser-controls.mjs'
+import { chooseOption, acceptConfirmation, openSiteNav } from './browser-controls.mjs'
 // Exercise the built UI with isolated account/host fixtures; no Herdr connection.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -89,16 +89,6 @@ async function compactHeader(page) {
     previousRight = control.right
   }
 }
-async function openSiteNav(page, name) {
-  const direct = page.getByRole('button', { name, exact: true })
-  if (await direct.isVisible().catch(() => false)) {
-    await direct.click()
-    return
-  }
-  await page.getByRole('button', { name: '更多', exact: true }).click()
-  await page.getByRole('menuitem', { name, exact: true }).click()
-}
-
 async function capture(page, name) {
   if (!process.env.HERDRX_UI_SCREENSHOTS) return
   await mkdir(process.env.HERDRX_UI_SCREENSHOTS, { recursive: true })

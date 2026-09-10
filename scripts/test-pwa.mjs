@@ -75,8 +75,9 @@ try {
       await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')))
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       await expect(page.getByRole('complementary', { name: '应用更新' })).toHaveCount(0)
-      // Installation belongs to the browser; do not suppress its native prompt.
-      assert.equal(await page.evaluate(() => window.dispatchEvent(new Event('beforeinstallprompt', { cancelable: true }))), true)
+      // Capture beforeinstallprompt so the page can show a CTA; the actual install confirmation is still the browser prompt().
+      assert.equal(await page.evaluate(() => window.dispatchEvent(new Event('beforeinstallprompt', { cancelable: true }))), false)
+      await expect(page.getByRole('complementary', { name: '添加到主屏幕' })).toBeVisible()
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
       // API results are never available through CacheStorage, even after login.
       const cachedPaths = await page.evaluate(async () => {
