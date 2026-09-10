@@ -9,7 +9,7 @@ const repository = 'https://github.com/riba2534/herdrx'
 const steps = ['安装 CLI', '后台运行', '绑定主机']
 
 
-export function TailcatSetupGuide({ children, pending, resuming, onClose }: { children: ReactNode; pending: boolean; resuming: boolean; onClose: () => void }) {
+export function TailcatSetupGuide({ children, pending, resuming, onClose, onDefer }: { children: ReactNode; pending: boolean; resuming: boolean; onClose: () => void; onDefer?: () => void }) {
   const [step, setStep] = useState(resuming ? 2 : 0)
   const [release, setRelease] = useState<CLIRelease | null>(null)
   const [checking, setChecking] = useState(true)
@@ -24,7 +24,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
   }, [retry])
   const go = (next: number) => { setStep(next); queueMicrotask(() => {
     heading.current?.focus({ preventScroll: true })
-    heading.current?.closest('form')?.scrollTo({ top: 0 })
+    heading.current?.closest('form')?.scrollTo?.({ top: 0 })
   }) }
   const version = release?.status === 'available' && /^v\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(release.version || '') ? release.version : null
   const download = `${repository}/releases/download/${version}`
@@ -45,7 +45,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
       <p className="field-hint">Herdr 需要已安装并独立运行。herdrx 会检查兼容性，然后安装并启动用户级 systemd 服务。</p>
       <a className="inline-link" href="https://herdr.dev/docs/install/" target="_blank" rel="noopener noreferrer">Herdr 官方安装说明 <ExternalLink size={13}/></a>
       <Command title="启动后台服务" value="~/.local/bin/herdrx setup && ~/.local/bin/herdrx status"/>
-      <p className="field-hint">看到 herdrx daemon「运行中」和 Herdr 状态「ok」后继续。setup 可重复执行，会保留已有身份与绑定。</p>
+      <p className="field-hint">看到 herdrx daemon“运行中”和 Herdr 状态“ok”后继续。setup 可重复执行，会保留已有身份与绑定。</p>
       <Command title="检查开机与登出保活" value={'loginctl show-user "$(id -un)" --property=Linger'}/>
       <p className="field-hint">结果需为 <code>Linger=yes</code>。若为 no，请执行下面命令；需要管理员权限时再加 sudo，然后重新检查。</p>
       <Command title="启用用户后台保活" value={'loginctl enable-linger "$(id -un)"'}/>
@@ -59,7 +59,7 @@ export function TailcatSetupGuide({ children, pending, resuming, onClose }: { ch
     </div>}
     <div className="setup-footer"><div className="setup-lifecycle">关闭浏览器或退出工作台后，远程主机上的 Herdr 与任务继续运行。</div>
     <div className="modal-actions setup-actions">
-      <Button type="button" className="button-secondary" disabled={pending} onClick={() => step === 0 ? onClose() : go(step - 1)}>{step === 0 ? '取消' : <><ArrowLeft size={15}/>上一步</>}</Button>
+      <Button type="button" className="button-secondary" disabled={pending && !onDefer} onClick={() => pending && onDefer ? onDefer() : step === 0 ? onClose() : go(step - 1)}>{pending && onDefer ? '稍后再看' : step === 0 ? '取消' : <><ArrowLeft size={15}/>上一步</>}</Button>
       {step < 2 ? <Button key="next" type="button" className="button-primary" onClick={(event) => { event.preventDefault(); go(step + 1) }}>{step === 0 ? '已安装，下一步' : '服务已就绪，下一步'}<ArrowRight size={15}/></Button> : <Button key="bind" type="submit" className="button-primary" pending={pending}>绑定并打开主机</Button>}
     </div></div>
   </div>
