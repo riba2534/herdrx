@@ -28,6 +28,14 @@ export class APIError extends Error {
   }
 }
 
+const chineseText = /[\u4e00-\u9fff]/
+export function apiErrorMessage(payload: { error?: unknown; code?: unknown }, fallback = '请求失败，请检查网络后重试') {
+  const raw = typeof payload.error === 'string' ? payload.error.trim() : ''
+  if (chineseText.test(raw)) return raw
+  if (!raw) return fallback
+  return `${raw}。${fallback}`
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const epoch = generation
   const headers = new Headers(init.headers)
@@ -38,7 +46,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const publicAuth = ['/api/login', '/api/register', '/api/bootstrap', '/api/bootstrap/status', '/api/logout'].includes(path)
   if (!response.ok) {
     if (response.status === 401 && !publicAuth) invalidateAuthentication(epoch)
-    throw new APIError(response.status, payload.code || 'request_failed', payload.error || '请求失败', payload)
+    throw new APIError(response.status, payload.code || 'request_failed', apiErrorMessage(payload), payload)
   }
   if (payload.csrf_token) {
     if (epoch !== generation) throw new APIError(409, 'auth_changed', '登录状态已变化，请重试')

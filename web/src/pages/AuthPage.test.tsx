@@ -13,6 +13,7 @@ it('shows login without registration or bootstrap fields by default', () => {
   expect(screen.queryByLabelText('初始化令牌')).not.toBeInTheDocument()
   expect(screen.getByText('当前注册已关闭，如需账号请联系管理员。')).toBeInTheDocument()
   expect(screen.getByLabelText('密码')).not.toHaveAttribute('minlength')
+  expect(screen.getByRole('button', { name: '显示密码' })).toHaveAttribute('aria-pressed', 'false')
 })
 
 it('leaves registration when the administrator closes it during a pending form', () => {

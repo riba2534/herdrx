@@ -17,6 +17,29 @@ export function folderOptions(folders: HostFolder[]) {
   }).sort((a, b) => a.path.localeCompare(b.path, 'zh-CN'))
 }
 
+export function folderSubtreeIDs(folderId: string, folders: HostFolder[]) {
+  const ids = new Set<string>()
+  for (const folder of folderOptions(folders)) {
+    if (folder.id === folderId || folder.ancestors.has(folderId)) ids.add(folder.id)
+  }
+  return ids
+}
+
+export function folderHostCount(folderId: string, folders: HostFolder[], hosts: Host[]) {
+  const ids = folderSubtreeIDs(folderId, folders)
+  return hosts.filter((host) => host.folder_id && ids.has(host.folder_id)).length
+}
+
+export function hostInFolder(host: Host, selected: string, folders: HostFolder[]) {
+  if (selected === '*') return true
+  if (selected === '') return !host.folder_id
+  return Boolean(host.folder_id && folderSubtreeIDs(selected, folders).has(host.folder_id))
+}
+
+export function hostSearchText(host: Host, folderPath = '') {
+  return `${host.name} ${host.hostname || ''} ${host.username || ''} ${host.transport} ${folderPath}`
+}
+
 export function HostFolders({ folders, hosts, selected, onSelect, onRefresh }: { folders: HostFolder[]; hosts: Host[]; selected: string; onSelect: (id: string) => void; onRefresh: () => Promise<void> }) {
   const [editing, setEditing] = useState<HostFolder | null>(null)
   const [open, setOpen] = useState(false)
@@ -50,7 +73,7 @@ export function HostFolders({ folders, hosts, selected, onSelect, onRefresh }: {
       <button className="folder-select" aria-current={selected === '*' ? 'page' : undefined} onClick={() => onSelect('*')}><Layers size={17}/><span>全部主机</span><small>{hosts.length}</small></button>
       <button className="folder-select" aria-current={selected === '' ? 'page' : undefined} onClick={() => onSelect('')}><FolderOpen size={17}/><span>未分组</span><small>{hosts.filter((host) => !host.folder_id).length}</small></button>
       {options.map((folder) => <div className="folder-row" key={folder.id} style={{ paddingLeft: Math.min(folder.depth, 5) * 12 }}>
-        <button className="folder-select" aria-current={selected === folder.id ? 'page' : undefined} data-tooltip={folder.path} onClick={() => onSelect(folder.id)}><Folder size={16}/><span>{folder.name}</span><small>{hosts.filter((host) => host.folder_id === folder.id).length}</small></button>
+        <button className="folder-select" aria-current={selected === folder.id ? 'page' : undefined} data-tooltip={folder.path} onClick={() => onSelect(folder.id)}><Folder size={16}/><span>{folder.name}</span><small>{folderHostCount(folder.id, folders, hosts)}</small></button>
         <Button className="icon-button folder-action" data-tooltip="编辑文件夹" aria-label={`编辑文件夹 ${folder.name}`} onClick={() => edit(folder)}><Pencil size={13}/></Button>
         <Button className="icon-button folder-action" data-tooltip="删除文件夹" aria-label={`删除文件夹 ${folder.name}`} onClick={() => { setDeleting(folder); setError('') }}><Trash2 size={13}/></Button>
       </div>)}

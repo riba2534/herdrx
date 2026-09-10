@@ -1,6 +1,6 @@
 import { Input } from './Form'
-import { useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
-import { LoaderCircle } from 'lucide-react'
+import { useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { Eye, EyeOff, LoaderCircle } from 'lucide-react'
 
 export function Button({ className = '', pending, children, title, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { pending?: boolean }) {
   return <button className={`button ${className}`} data-tooltip={title} {...props} disabled={pending || props.disabled}>
@@ -8,13 +8,16 @@ export function Button({ className = '', pending, children, title, ...props }: B
   </button>
 }
 
-export function Field({ label, hint, error, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string; error?: string }) {
+export function Field({ label, hint, error, type, ...props }: InputHTMLAttributes<HTMLInputElement> & { label: string; hint?: string; error?: string }) {
   const generatedID = useId()
   const id = props.id || props.name || generatedID
   const descriptionID = `${id}-description`
+  const [visible, setVisible] = useState(false)
+  const password = type === 'password'
+  const input = <Input id={id} className={error ? 'input input-error' : 'input'} aria-invalid={Boolean(error)} aria-describedby={error || hint ? descriptionID : undefined} {...props} type={password && visible ? 'text' : type} />
   return <div className="field">
     <label className="field-label" htmlFor={id}>{label}</label>
-    <Input id={id} className={error ? 'input input-error' : 'input'} aria-invalid={Boolean(error)} aria-describedby={error || hint ? descriptionID : undefined} {...props} />
+    {password ? <div className="field-password">{input}<Button type="button" className="icon-button field-password-toggle" aria-label={visible ? '隐藏密码' : '显示密码'} aria-pressed={visible} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={16} aria-hidden="true"/> : <Eye size={16} aria-hidden="true"/>}</Button></div> : input}
     {error ? <span id={descriptionID} className="field-error" role="alert">{error}</span> : hint ? <span id={descriptionID} className="field-hint">{hint}</span> : null}
   </div>
 }

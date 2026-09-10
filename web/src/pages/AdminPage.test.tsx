@@ -58,6 +58,7 @@ it('requires a loaded setting, saves its revision, and refreshes public registra
   expect(screen.getByRole('button', { name: '开启注册' })).toBeDisabled()
   await waitFor(() => expect(screen.getByRole('button', { name: '开启注册' })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: '开启注册' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '开启注册' }))
   await waitFor(() => expect(screen.getByRole('button', { name: '关闭注册' })).toBeEnabled())
   expect(api.setRegistration).toHaveBeenCalledWith('invite', 7)
   expect(auth.refresh).toHaveBeenCalledOnce()
@@ -68,9 +69,20 @@ it('keeps the confirmed state when a stale settings update fails', async () => {
   render(<AdminPage/>)
   await waitFor(() => expect(screen.getByRole('button', { name: '关闭注册' })).toBeEnabled())
   fireEvent.click(screen.getByRole('button', { name: '关闭注册' }))
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '关闭注册' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('设置已变更')
   expect(screen.getByRole('button', { name: '关闭注册' })).toBeEnabled()
   expect(auth.refresh).not.toHaveBeenCalled()
+})
+
+it('asks before changing registration and can cancel without a write', async () => {
+  render(<AdminPage/>)
+  await waitFor(() => expect(screen.getByRole('button', { name: '关闭注册' })).toBeEnabled())
+  fireEvent.click(screen.getByRole('button', { name: '关闭注册' }))
+  expect(screen.getByRole('alertdialog')).toHaveTextContent('尚未使用的邀请码')
+  fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '取消' }))
+  expect(api.setRegistration).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: '关闭注册' })).toBeEnabled()
 })
 
 it('blocks registration controls when settings cannot be read', async () => {

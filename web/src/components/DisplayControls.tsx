@@ -26,7 +26,7 @@ export function DisplaySettings({ display, mobile, onChange, onReset }: {
 }) {
   return <fieldset className="display-settings">
     <legend>字号与缩放</legend>
-    <p className="field-hint">自动保存在此浏览器，电脑和手机布局分别记忆。电脑默认固定 14px，超出可滚动；点「适应窗口」可一次看全。</p>
+    <p className="field-hint">自动保存在此浏览器，电脑和手机布局分别记忆。电脑默认固定 14px，超出可滚动；点“适应窗口”可一次看全。</p>
     <label className="field"><span className="field-label">显示方式</span><Select aria-label="显示方式" className="input" value={display.mode} onChange={(event) => onChange({ mode: event.target.value as TerminalDisplay['mode'], zoom: 100 })}><SelectOption value="responsive">自适应 · 内容随窗口换行</SelectOption><SelectOption value="fit">适应窗口 · 查看完整终端</SelectOption><SelectOption value="fixed">固定字号 · 滑动查看内容</SelectOption></Select></label>
     <label className="field"><span className="range-label"><span className="field-label">终端字号</span><output>{display.fontSize} px</output></span><Input type="range" min={10} max={28} step={1} value={display.fontSize} aria-label="终端字号" onChange={(event) => onChange({ fontSize: Number(event.target.value), mode: display.mode === 'responsive' ? 'responsive' : 'fixed' })}/></label>
     <label className="field"><span className="range-label"><span className="field-label">终端缩放</span><output>{display.zoom}%</output></span><Input type="range" min={50} max={200} step={10} value={display.zoom} aria-label="终端缩放" onChange={(event) => onChange({ zoom: Number(event.target.value) })}/></label>
