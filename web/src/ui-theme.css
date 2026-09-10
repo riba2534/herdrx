@@ -95,7 +95,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .field-password-toggle { grid-area: 1 / 1; justify-self: end; align-self: start; width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
 .site-toast { margin: 0 0 16px; padding: 10px 14px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-selected); color: var(--ui-text); }
 .skeleton-status { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: var(--ui-muted); }
-.notice { border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-panel); }
+.notice { border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-text); background: var(--ui-panel); }
 .notice-error { color: var(--ui-danger); border-color: var(--ui-danger); background: var(--ui-danger-bg); }
 .notice-info { color: var(--ui-text); background: var(--ui-selected); border-color: var(--ui-border); }
 .appearance-toggle { flex: 0 0 auto; white-space: nowrap; }
@@ -307,7 +307,6 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .key-import-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
 .key-advanced .field { margin-top: 14px; }
 .inline-link { color: var(--ui-accent); font-size: 13px; }
-.button-danger { background: var(--ui-danger); color: var(--ui-panel); border: 1px solid var(--ui-danger); }
 @media (max-width: 767px) {
   .hosts-layout { grid-template-columns: minmax(0,1fr); gap: 20px; }
   .host-folders { border-right: 0; border-bottom: 1px solid var(--ui-border); padding: 0 0 12px; }
