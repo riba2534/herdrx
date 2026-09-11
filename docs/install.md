@@ -30,7 +30,7 @@ docker compose up -d --wait
 
 已有自定义 unit / plist 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收，详见 [当前验收](release-validation-2026-09-07.md)。
 
-macOS 受控端使用 per-user LaunchAgent（`~/Library/LaunchAgents/com.riba2534.herdrx.plist`，标签 `com.riba2534.herdrx`），由 `launchctl` 在 `gui/<uid>` 域中管理，服务日志写入 `~/Library/Logs/herdrx.log`，`herdrx logs` 直接读取该文件（macOS 没有 journald）。Herdr 自身的 socket 按 Herdr 的实际位置解析（`${XDG_CONFIG_HOME:-~/.config}/herdr`），不使用 macOS 惯例的 `~/Library/Application Support`。macOS 的服务生命周期尚未纳入 CI，由人工在 Apple Silicon 上验证；Intel Mac 的附件按同一流程构建但未实机运行。
+macOS 受控端为**预览**：Apple Silicon 已实机验证，Intel Mac 按同一流程构建但未实机运行，launchd 服务生命周期尚未纳入 CI。它使用 per-user LaunchAgent（`~/Library/LaunchAgents/com.riba2534.herdrx.plist`，标签 `com.riba2534.herdrx`），由 `launchctl` 在 `gui/<uid>` 域中管理，服务日志写入 `~/Library/Logs/herdrx.log`，`herdrx logs` 直接读取该文件（macOS 没有 journald）。Herdr 自身的 socket 按 Herdr 的实际位置解析（`${XDG_CONFIG_HOME:-~/.config}/herdr`），不使用 macOS 惯例的 `~/Library/Application Support`。macOS 的服务生命周期尚未纳入 CI，由人工在 Apple Silicon 上验证；Intel Mac 的附件按同一流程构建但未实机运行。
 
 ## 工作台自带中继
 

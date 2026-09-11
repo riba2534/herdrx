@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主机工作台、xterm 终端及 Agent 状态查看。目标用户是可信管理员管理的个人或小团队，首发为单实例、Linux amd64/arm64。网站不负责下载、升级或停止用户的 Herdr。
+herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主机工作台、xterm 终端及 Agent 状态查看。目标用户是可信管理员管理的个人或小团队，首发为单实例；工作台主机为 Linux amd64/arm64，远程主机受控端支持 Linux amd64/arm64，macOS amd64/arm64 为预览（Apple Silicon 已实机验证，Intel 未验证，launchd 生命周期未进 CI）。网站不负责下载、升级或停止用户的 Herdr。
 
 统一称呼：**工作台主机**是部署 herdrx 网站/API/数据库的机器；**远程主机**是用户通过工作台接入、独立运行 Herdr 和任务的其他机器；**浏览器**是访问工作台的客户端。避免单独使用“服务器”混指前两者。Herdr 服务端运行于远程主机，herdrx Web 服务端运行于工作台主机。
 

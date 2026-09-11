@@ -2,7 +2,7 @@
 
 在浏览器中选择「添加主机 → Tailcat 内网穿透」，按「安装 CLI → 后台运行 → 绑定主机」完成接入。`herdrx` 是用 Go 编写的远程主机 CLI，负责后台访问服务和生成一次性绑定凭据。网站运行在工作台主机，以下命令全部在**远程主机**上、以运行 Herdr 的同一用户执行。
 
-支持 Linux 与 macOS 的 x86_64（amd64）和 ARM64（arm64）。Linux 推荐使用提供 systemd 用户会话的常规发行版；macOS 使用 per-user LaunchAgent，需要该用户能登录桌面（见下文「后台运行」）。Herdr 需要自行安装并独立运行，参考 [Herdr 官方安装说明](https://herdr.dev/docs/install/)。herdrx 安装器不安装、升级或启动 Herdr。
+支持 Linux 与 macOS 的 x86_64（amd64）和 ARM64（arm64）；macOS 受控端为预览（Apple Silicon 已实机验证，Intel 未验证）。Linux 推荐使用提供 systemd 用户会话的常规发行版；macOS 使用 per-user LaunchAgent，需要该用户能登录桌面（见下文「后台运行」）。Herdr 需要自行安装并独立运行，参考 [Herdr 官方安装说明](https://herdr.dev/docs/install/)。herdrx 安装器不安装、升级或启动 Herdr。
 
 ## 1. 下载并安装 CLI
 
