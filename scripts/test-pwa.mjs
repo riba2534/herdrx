@@ -134,7 +134,15 @@ try {
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
       failAsset = false; revision = 'two'; denyAPI = true
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
-      await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible({ timeout: 12000 })
+      // WebKit gets no online event here and may keep reusing the sockets the
+      // fixture destroyed, so the 5 s auto-retry can fail several times on a slow
+      // runner. Trigger the manual reconnect when the error page is still up and
+      // allow the same settle window as the failure path.
+      if (engine === 'webkit') {
+        const reconnect = page.getByRole('button', { name: '重新连接', exact: true })
+        if (await reconnect.isVisible()) await reconnect.click()
+      }
+      await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible({ timeout: engine === 'webkit' ? offlineTimeout : 12000 })
       assert.ok(await page.evaluate(async () => Boolean(await (await caches.open('unrelated-app')).match('/unrelated-marker'))))
       assert.ok(!calls.some(call => call.method !== 'GET'), 'offline and update paths must never replay mutations')
       assert.deepEqual(errors, [])
