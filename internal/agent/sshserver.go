@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/riba2534/herdrx/internal/herdrpaths"
 	"github.com/riba2534/herdrx/internal/secure"
 	"golang.org/x/crypto/ssh"
 )
@@ -272,7 +273,7 @@ func sendExitStatus(channel ssh.Channel, status uint32) {
 }
 
 func stagingDir() (string, error) {
-	cacheDir, err := os.UserCacheDir()
+	cacheDir, err := herdrpaths.CacheRoot()
 	if err != nil || cacheDir == "" {
 		cacheDir = filepath.Join(os.TempDir(), "herdrx-staging")
 	} else {

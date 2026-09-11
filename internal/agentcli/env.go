@@ -78,7 +78,12 @@ func RunBoundedCommand(ctx context.Context, timeout time.Duration, maxBytes int6
 // DefaultEnv 返回当前运行时的真实环境依赖，默认命令执行器接入 3s 超时与 1MB 流式上限
 func DefaultEnv() Environment {
 	home, _ := os.UserHomeDir()
-	configRoot, _ := os.UserConfigDir()
+	// XDG_CONFIG_HOME 必须优先于平台惯例：os.UserConfigDir() 在 macOS 上直接
+	// 忽略它，会让 --config 之外的路径覆盖失效，也让隔离测试落到真实用户目录。
+	configRoot := xdgDirectory("XDG_CONFIG_HOME", "")
+	if configRoot == "" {
+		configRoot, _ = os.UserConfigDir()
+	}
 	if configRoot == "" {
 		configRoot = filepath.Join(home, ".config")
 	}

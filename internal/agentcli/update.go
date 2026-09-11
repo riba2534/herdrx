@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -296,7 +297,7 @@ func restartAndWait(env Environment, expected Readiness, configPath string, time
 	if runner == nil {
 		runner = NewRealServiceRunner()
 	}
-	if err := runner.Restart("herdrx.service"); err != nil {
+	if err := runner.Restart(ServiceLabel(env)); err != nil {
 		return err
 	}
 	return waitForReadiness(env, expected, configPath, timeout)
@@ -337,15 +338,16 @@ func waitForReadiness(env Environment, expected Readiness, configPath string, ti
 func prepareUpdateService(env Environment, stable, configPath string) error {
 	// Only repair the generated unit, preserving the chosen identity path. A
 	// custom unit must be reviewed by its owner instead of silently overwritten.
-	path := serviceUnitPath(env)
+	layout := layoutFor(runtime.GOOS, env)
+	path := layout.UnitPath
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read herdrx.service; first run herdrx setup: %w", err)
+		return fmt.Errorf("read %s; first run herdrx setup: %w", layout.Label, err)
 	}
-	if !strings.Contains(string(raw), "Description=herdrx remote access agent") || !strings.Contains(string(raw), " --config "+systemdArgument(configPath)) {
-		return errors.New("service is custom or uses another config; use the matching --config and generated herdrx.service")
+	if !strings.Contains(string(raw), layout.Marker) || !strings.Contains(string(raw), layout.ConfigReference(configPath)) {
+		return fmt.Errorf("service is custom or uses another config; use the matching --config and generated %s", layout.Label)
 	}
-	desired := GenerateSystemdUnit(stable, configPath, env.RuntimeDir)
+	desired := layout.Content(stable, configPath, env.RuntimeDir)
 	if string(raw) == desired {
 		return nil
 	}

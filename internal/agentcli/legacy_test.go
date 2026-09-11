@@ -22,7 +22,7 @@ import (
 // 真实 SSH 客户端拨号发送 confirm-pair -> IPC status 实时变为 paired ->
 // IPC unpair 撤销 -> 验证连接断开与状态更新
 func TestLegacy_FullWorkflowThroughIPCAndSSH(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir := shortTempDir(t)
 	env := Environment{
 		ConfigDir:  tempDir,
 		RuntimeDir: tempDir,

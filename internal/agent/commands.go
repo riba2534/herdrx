@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/riba2534/herdrx/internal/herdrpaths"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/terminalgeometry"
 )
@@ -114,11 +115,10 @@ func configPathOutput() string {
 }
 
 func allowedSocket(path string) bool {
-	configDir, err := os.UserConfigDir()
+	root, err := herdrpaths.HerdrDir()
 	if err != nil {
 		return false
 	}
-	root := filepath.Join(configDir, "herdr")
 	clean := filepath.Clean(path)
 	relative, err := filepath.Rel(root, clean)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {

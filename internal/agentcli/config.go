@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -286,7 +287,7 @@ func MigrateFromLegacy(env Environment, targetConfigPath string) (Config, bool, 
 }
 
 func disableInactiveLegacyService(env Environment, configPath string) error {
-	unitPath := filepath.Join(filepath.Dir(filepath.Dir(configPath)), "systemd", "user", "herdrx-agent.service")
+	unitPath, label, markers := legacyServiceLayout(runtime.GOOS, env, configPath)
 	raw, err := os.ReadFile(unitPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -294,7 +295,14 @@ func disableInactiveLegacyService(env Environment, configPath string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(string(raw), "Description=herdrx tailcat agent") && !strings.Contains(string(raw), "Description=herdrx remote access agent") {
+	generated := false
+	for _, marker := range markers {
+		if strings.Contains(string(raw), marker) {
+			generated = true
+			break
+		}
+	}
+	if !generated {
 		return errors.New("legacy service is customized; disable it explicitly before migrating")
 	}
 	runner := env.ServiceRunner
@@ -305,15 +313,35 @@ func disableInactiveLegacyService(env Environment, configPath string) error {
 	if !ok {
 		return errors.New("service manager cannot verify the legacy service state")
 	}
-	active, err := inspector.IsActive("herdrx-agent.service")
+	active, err := inspector.IsActive(label)
 	if err != nil {
 		return err
 	}
 	if active {
-		return errors.New("legacy service is still running; run systemctl --user stop herdrx-agent.service before migrating")
+		return fmt.Errorf("legacy service is still running; run %s before migrating", legacyStopHint(runtime.GOOS, label))
 	}
-	if err := runner.DisableAndStop("herdrx-agent.service"); err != nil {
+	if err := runner.DisableAndStop(label); err != nil {
 		return fmt.Errorf("disable legacy autostart before migration: %w", err)
 	}
 	return nil
+}
+
+// legacyServiceLayout 给出旧版受控端在该平台的单元位置、标识与生成物判据。
+// 旧版在 Linux 用 systemd user unit，在 macOS 用 LaunchAgent。
+func legacyServiceLayout(goos string, env Environment, configPath string) (unitPath, label string, markers []string) {
+	if goos == "darwin" {
+		label = "com.riba2534.herdrx-agent"
+		return filepath.Join(env.HomeDir, "Library", "LaunchAgents", label+".plist"), label,
+			[]string{"<string>" + label + "</string>"}
+	}
+	return filepath.Join(filepath.Dir(filepath.Dir(configPath)), "systemd", "user", "herdrx-agent.service"),
+		"herdrx-agent.service",
+		[]string{"Description=herdrx tailcat agent", "Description=herdrx remote access agent"}
+}
+
+func legacyStopHint(goos, label string) string {
+	if goos == "darwin" {
+		return fmt.Sprintf("launchctl bootout gui/$(id -u)/%s", label)
+	}
+	return "systemctl --user stop " + label
 }

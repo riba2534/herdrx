@@ -2,7 +2,7 @@
 
 在浏览器中选择「添加主机 → Tailcat 内网穿透」，按「安装 CLI → 后台运行 → 绑定主机」完成接入。`herdrx` 是用 Go 编写的远程主机 CLI，负责后台访问服务和生成一次性绑定凭据。网站运行在工作台主机，以下命令全部在**远程主机**上、以运行 Herdr 的同一用户执行。
 
-支持 Linux x86_64（amd64）和 ARM64（arm64）；推荐使用提供 systemd 用户会话的常规 Linux 发行版。Herdr 需要自行安装并独立运行，参考 [Herdr 官方安装说明](https://herdr.dev/docs/install/)。herdrx 安装器不安装、升级或启动 Herdr。
+支持 Linux 与 macOS 的 x86_64（amd64）和 ARM64（arm64）。Linux 推荐使用提供 systemd 用户会话的常规发行版；macOS 使用 per-user LaunchAgent，需要该用户能登录桌面（见下文「后台运行」）。Herdr 需要自行安装并独立运行，参考 [Herdr 官方安装说明](https://herdr.dev/docs/install/)。herdrx 安装器不安装、升级或启动 Herdr。
 
 ## 1. 下载并安装 CLI
 
@@ -14,7 +14,9 @@
 |---|---|
 | `herdrx-linux-amd64.tar.gz` | Linux x86_64 |
 | `herdrx-linux-arm64.tar.gz` | Linux ARM64 |
-| `install-herdrx.sh` | 自动选择架构、校验并安装 CLI |
+| `herdrx-darwin-arm64.tar.gz` | macOS Apple Silicon |
+| `herdrx-darwin-amd64.tar.gz` | macOS Intel |
+| `install-herdrx.sh` | 自动选择系统与架构、校验并安装 CLI |
 | `SHA256SUMS` | 附件 SHA-256 校验值 |
 | `README-CLI.md` | 本教程的离线副本 |
 | `release.json` | 版本、源码提交及构建信息 |
@@ -59,9 +61,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ~/.local/bin/herdrx setup && ~/.local/bin/herdrx status
 ```
 
-`setup` 检查 Herdr 路径、API 能力和已有守护进程，保存受控端身份，安装 `herdrx.service` 用户服务并等待它就绪。重复执行会保留已有身份与绑定。`status` 应显示 herdrx daemon「运行中」、Herdr 状态「ok」。Herdr 不在 PATH 中时用 `~/.local/bin/herdrx setup --herdr-bin /path/to/herdr` 指定实际路径。
+`setup` 检查 Herdr 路径、API 能力和已有守护进程，保存受控端身份，安装用户级后台服务（Linux 为 `herdrx.service`，macOS 为 LaunchAgent `com.riba2534.herdrx`）并等待它就绪。重复执行会保留已有身份与绑定。`status` 应显示 herdrx daemon「运行中」、Herdr 状态「ok」。Herdr 不在 PATH 中时用 `~/.local/bin/herdrx setup --herdr-bin /path/to/herdr` 指定实际路径。
 
-检查关闭 SSH 及开机后的保活设置：
+检查关闭 SSH 及开机后的保活设置。**Linux：**
 
 ```sh
 loginctl show-user "$(id -un)" --property=Linger
@@ -71,6 +73,12 @@ loginctl show-user "$(id -un)" --property=Linger
 
 ```sh
 loginctl enable-linger "$(id -un)"
+```
+
+**macOS：** LaunchAgent 依附图形登录会话，没有 linger 这一概念。只通过 SSH 登录、从未登录过桌面的 Mac 没有 Aqua 会话，`launchctl` 的 `gui/<uid>` 域不可用，`setup` 会明确告警而不是假装成功。在该机登录一次桌面后重新执行 `setup` 即可。确认服务已加载：
+
+```sh
+launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 ```
 
 服务管理与排查：
@@ -83,7 +91,9 @@ loginctl enable-linger "$(id -un)"
 ~/.local/bin/herdrx service restart
 ```
 
-没有 systemd 用户会话时，执行 `~/.local/bin/herdrx setup --skip-service`，再用你自己的进程管理器运行 `~/.local/bin/herdrx serve`。直接在前台执行 serve 后关闭终端，会中断 Tailcat 访问。无法配置保活时也可以使用网站的 SSH 接入。
+`herdrx logs` 在 Linux 读取 journald，在 macOS 读取 LaunchAgent 的输出文件 `~/Library/Logs/herdrx.log`。
+
+没有 systemd 用户会话（或 macOS 上无法使用 `gui` 域）时，执行 `~/.local/bin/herdrx setup --skip-service`，再用你自己的进程管理器运行 `~/.local/bin/herdrx serve`。直接在前台执行 serve 后关闭终端，会中断 Tailcat 访问。无法配置保活时也可以使用网站的 SSH 接入。
 
 ## 3. 绑定主机
 

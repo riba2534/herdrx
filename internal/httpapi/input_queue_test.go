@@ -15,10 +15,11 @@ import (
 	"github.com/riba2534/herdrx/internal/hostruntime"
 	"github.com/riba2534/herdrx/internal/store"
 	"github.com/riba2534/herdrx/internal/terminalwire"
+	"github.com/riba2534/herdrx/internal/testpaths"
 )
 
 func TestSlowInputDoesNotBlockWebSocketAndFailureStopsPendingInput(t *testing.T) {
-	dir := t.TempDir()
+	dir := testpaths.ShortTempDir(t)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	if err := os.MkdirAll(filepath.Join(dir, "herdr"), 0700); err != nil {
 		t.Fatal(err)

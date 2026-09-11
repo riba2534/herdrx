@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/herdrpaths"
 )
 
 var publicID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$`)
@@ -26,16 +28,16 @@ type LocalEndpoint struct {
 }
 
 func NewLocalEndpoint(binary, sessionName string) (*LocalEndpoint, error) {
-	configDir, err := os.UserConfigDir()
+	herdrDir, err := herdrpaths.HerdrDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve user config directory: %w", err)
+		return nil, fmt.Errorf("resolve herdr config directory: %w", err)
 	}
-	socket := filepath.Join(configDir, "herdr", "herdr.sock")
+	socket := filepath.Join(herdrDir, "herdr.sock")
 	if sessionName != "" {
 		if !publicID.MatchString(sessionName) {
 			return nil, fmt.Errorf("invalid herdr session name")
 		}
-		socket = filepath.Join(configDir, "herdr", "sessions", sessionName, "herdr.sock")
+		socket = filepath.Join(herdrDir, "sessions", sessionName, "herdr.sock")
 	}
 	return &LocalEndpoint{Binary: binary, SocketPath: socket, SessionName: sessionName}, nil
 }
@@ -122,7 +124,7 @@ func (e *LocalEndpoint) OpenTerminal(ctx context.Context, open TerminalOpen) (Te
 }
 
 func (e *LocalEndpoint) StageImage(ctx context.Context, ext string, r io.Reader) (string, error) {
-	cacheDir, err := os.UserCacheDir()
+	cacheDir, err := herdrpaths.CacheRoot()
 	if err != nil || cacheDir == "" {
 		cacheDir = filepath.Join(os.TempDir(), "herdrx-staging")
 	} else {

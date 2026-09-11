@@ -22,13 +22,15 @@ docker compose up -d --wait
 
 先安装并独立运行 Herdr，以运行 Herdr 的同一用户操作。网站「添加主机 → Tailcat 内网穿透」提供完整的三步引导：
 
-1. 复制页面的一行安装命令，从 [GitHub Releases](https://github.com/riba2534/herdrx/releases) 安装 `herdrx`；自动识别 Linux x86_64 / ARM64 并做 SHA-256 校验。
-2. 执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，确认用户后台服务就绪，再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`。未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。
+1. 复制页面的一行安装命令，从 [GitHub Releases](https://github.com/riba2534/herdrx/releases) 安装 `herdrx`；自动识别 Linux / macOS 的 x86_64 / ARM64 并做 SHA-256 校验。
+2. 执行 `~/.local/bin/herdrx setup && ~/.local/bin/herdrx status`，确认用户后台服务就绪。Linux 再检查 `loginctl show-user "$(id -un)" --property=Linger`；需为 `Linger=yes`，未启用时执行 `loginctl enable-linger "$(id -un)"`，权限不足再加 sudo。macOS 的 LaunchAgent 依附图形登录会话：纯 SSH 登录的 Mac 没有 Aqua 会话，`launchctl` 无法加载 `gui` 域，需先在该机登录一次桌面；`setup` 会在这种情况下明确告警。
 3. 执行 `~/.local/bin/herdrx connect --plain`，在页面最后一步填写一次性绑定凭据并打开主机。
 
 所有复制命令、手动安装、PATH 设置、无 systemd 环境、升级及排障见 [Tailcat 接入教程](tailcat-quickstart.md)。网页的一行命令直接使用 GitHub Release 安装脚本，并将下载与安装固定到同一版本，只有预发布时也可直接安装。安装过程不依赖工作台或个人域名；后续命令直接使用安装路径，无需设置 PATH。
 
-已有自定义 unit 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收；macOS 受控端完整服务支持不在首发范围。详见 [当前验收](release-validation-2026-09-07.md)。
+已有自定义 unit / plist 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收，详见 [当前验收](release-validation-2026-09-07.md)。
+
+macOS 受控端使用 per-user LaunchAgent（`~/Library/LaunchAgents/com.riba2534.herdrx.plist`，标签 `com.riba2534.herdrx`），由 `launchctl` 在 `gui/<uid>` 域中管理，服务日志写入 `~/Library/Logs/herdrx.log`，`herdrx logs` 直接读取该文件（macOS 没有 journald）。Herdr 自身的 socket 按 Herdr 的实际位置解析（`${XDG_CONFIG_HOME:-~/.config}/herdr`），不使用 macOS 惯例的 `~/Library/Application Support`。macOS 的服务生命周期尚未纳入 CI，由人工在 Apple Silicon 上验证；Intel Mac 的附件按同一流程构建但未实机运行。
 
 ## 工作台自带中继
 

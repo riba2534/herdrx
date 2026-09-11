@@ -4,7 +4,7 @@
 
 ## 构建本地候选包
 
-使用项目声明的 Go 版本，构建 Linux amd64/arm64 的静态 CLI。输出目录必须为空：
+使用项目声明的 Go 版本，构建 Linux 与 macOS amd64/arm64 的静态 CLI。输出目录必须为空：
 
 ```sh
 python3 scripts/test-cli-installer.py
@@ -12,9 +12,9 @@ python3 scripts/build-cli-release.py --version v0.1.0-rc.1 --signing-key /secure
 python3 scripts/verify-cli-release.py artifacts/cli-v0.1.0-rc.1
 ```
 
-打包脚本仅编译 `cmd/herdrx`，不需要前端构建。压缩包固定包含 `herdrx`、`VERSION`、离线 README、MIT LICENSE 和第三方依赖声明，归档时间固定；清单使用当前 UTC 时间，重复构建需传入相同的 `--created-at YYYY-MM-DDTHH:MM:SSZ`；附件还包含安装脚本、SHA256SUMS、README-CLI.md、release.json、两种架构的 `.manifest.json` 、RELEASE-PUBLIC-KEY、LICENSE、第三方声明及 CycloneDX SBOM。release.json 记录源码提交和工作区是否有未提交内容。
+打包脚本仅编译 `cmd/herdrx`，不需要前端构建。压缩包固定包含 `herdrx`、`VERSION`、离线 README、MIT LICENSE 和第三方依赖声明，归档时间固定；清单使用当前 UTC 时间，重复构建需传入相同的 `--created-at YYYY-MM-DDTHH:MM:SSZ`；附件还包含安装脚本、SHA256SUMS、README-CLI.md、release.json、四个平台组合（linux/darwin × amd64/arm64）的 `.manifest.json`、RELEASE-PUBLIC-KEY、LICENSE、第三方声明及 CycloneDX SBOM。清单的 `goos` 字段区分平台，`internal/updater` 按 `runtime.GOOS`/`GOARCH` 精确匹配后才接受更新。release.json 记录源码提交和工作区是否有未提交内容。
 
-验证脚本先用源码固定公钥核验清单签名，再检查每个附件的校验和、压缩包成员、ELF 架构和二进制摘要，并在当前 Linux CPU 上运行 version/help/offline status。ARM64 ELF 检查不能代替在 ARM64 主机实际运行。
+验证脚本先用源码固定公钥核验清单签名，再检查每个附件的校验和、压缩包成员、二进制格式（Linux 校验 ELF 魔数与机器类型，macOS 校验 64 位小端 Mach-O 魔数与 CPU 类型）和二进制摘要，并在当前 OS/CPU 上运行 version/help/offline status。没有任何附件匹配当前 runner 时脚本报错而不是静默跳过——「没跑」和「跑过且通过」不能同形。格式检查不能代替在对应架构的主机上实际运行：ARM64 与 Intel Mac 的附件都需要各自实机验证。
 
 ## 发布流程
 
@@ -24,7 +24,7 @@ python3 scripts/verify-cli-release.py artifacts/cli-v0.1.0-rc.1
 
 1. 验证 Go modules、vet、全量测试、race 和安装器故障场景。
 2. 从 `cli-release` Environment Secret 读取发行私钥，校验其公钥与源码固定信任根一致，构建并签名两种架构的同一版本附件，保存 Actions artifact。
-3. 在 Linux x86_64 和 ARM64 runner 上分别验证附件并实际运行对应 CLI。
+3. 在 Linux x86_64 和 ARM64 runner 上分别验证附件并实际运行对应 CLI。macOS 附件目前只做格式与签名校验，未在 macOS runner 上实机运行；纳入 CI 需要增加 `macos-14`（ARM64）与 `macos-13`（x86_64）两个 runner。
 4. 检查版本标签与候选包记录的提交一致、源码干净、提交已进入 `main`，且同一提交的完整主分支 CI 已成功，再上传 GitHub Release 草稿。
 5. 下载全部草稿附件，与本次构建逐字节摘要核对，通过后才公开 Release。失败会保留草稿，用户安装页不会把草稿视为可用版本。
 

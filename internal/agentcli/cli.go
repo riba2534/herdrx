@@ -271,7 +271,7 @@ func runSetup(args []string, stdout, stderr io.Writer, env Environment, defaultC
 		if instRes.LingerWarning != "" {
 			fmt.Fprintf(stdout, "注意: %s\n", instRes.LingerWarning)
 		} else {
-			fmt.Fprintln(stdout, "开机与登出保活: 已启用 (loginctl linger ok)")
+			fmt.Fprintln(stdout, layoutFor(runtime.GOOS, env).KeepAliveOK)
 		}
 	}
 
@@ -368,7 +368,7 @@ func runConnect(args []string, stdout, stderr io.Writer, env Environment, defaul
 
 	fmt.Fprintf(stdout, "主机：%s\n", hName)
 	fmt.Fprintln(stdout, "Herdr：可用")
-	fmt.Fprintln(stdout, "herdrx 进程：运行中；开机与登出保活请按安装引导检查 loginctl linger")
+	fmt.Fprintf(stdout, "herdrx 进程：运行中；%s\n", layoutFor(runtime.GOOS, env).KeepAliveCheck)
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "请在网站中选择：添加主机 → Tailcat 内网穿透 → 绑定主机")
 	fmt.Fprintln(stdout, "粘贴以下连接字符串（10 分钟内有效，只能绑定一次）：")
@@ -609,24 +609,25 @@ func runService(args []string, stdout, stderr io.Writer, env Environment, defaul
 	if runner == nil {
 		runner = NewRealServiceRunner()
 	}
+	label := ServiceLabel(env)
 
 	switch args[0] {
 	case "start":
-		if err := runner.EnableAndStart("herdrx.service"); err != nil {
+		if err := runner.EnableAndStart(label); err != nil {
 			fmt.Fprintf(stderr, "service start: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "herdrx service started")
 		return 0
 	case "stop":
-		if err := runner.Stop("herdrx.service"); err != nil {
+		if err := runner.Stop(label); err != nil {
 			fmt.Fprintf(stderr, "service stop: %v\n", err)
 			return 1
 		}
 		fmt.Fprintln(stdout, "herdrx service stopped")
 		return 0
 	case "restart":
-		if err := runner.Restart("herdrx.service"); err != nil {
+		if err := runner.Restart(label); err != nil {
 			fmt.Fprintf(stderr, "service restart: %v\n", err)
 			return 1
 		}
@@ -912,6 +913,11 @@ func runLogs(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	// macOS 的 LaunchAgent 把 stdout/stderr 写入 ~/Library/Logs/herdrx.log，
+	// 没有 journald，改用 tail 读同一个文件。
+	if runtime.GOOS == "darwin" {
+		return runLaunchdLogs(*follow, *lines, stdout, stderr)
+	}
 	cmdArgs := []string{"--user", "-u", "herdrx.service", "-n", fmt.Sprintf("%d", *lines), "--no-pager"}
 	if *follow {
 		cmdArgs = append(cmdArgs, "-f")
@@ -921,6 +927,26 @@ func runLogs(args []string, stdout, stderr io.Writer) int {
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(stderr, "logs failed: %v\nuse: journalctl --user -u herdrx.service\nthis command does not stop Herdr\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runLaunchdLogs(follow bool, lines int, stdout, stderr io.Writer) int {
+	path := launchdLogPath()
+	if _, err := os.Stat(path); err != nil {
+		fmt.Fprintf(stderr, "logs failed: %v\nthe service writes to %s after herdrx setup\nthis command does not stop Herdr\n", err, path)
+		return 1
+	}
+	cmdArgs := []string{"-n", fmt.Sprintf("%d", lines)}
+	if follow {
+		cmdArgs = append(cmdArgs, "-f")
+	}
+	cmd := exec.Command("tail", append(cmdArgs, path)...)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(stderr, "logs failed: %v\nuse: tail -f %s\nthis command does not stop Herdr\n", err, path)
 		return 1
 	}
 	return 0

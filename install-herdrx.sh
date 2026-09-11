@@ -19,8 +19,9 @@ if [ "$herdrx_version" != latest ] && ! valid_version "$herdrx_version"; then
   echo 'Version must be latest or a release tag such as v0.1.0' >&2; exit 2
 fi
 case "$(uname -s)" in
-  Linux) ;;
-  *) echo 'This installer supports Linux. Use SSH access on other remote-host systems.' >&2; exit 1 ;;
+  Linux) herdrx_os=linux ;;
+  Darwin) herdrx_os=darwin ;;
+  *) echo 'This installer supports Linux and macOS. Use SSH access on other remote-host systems.' >&2; exit 1 ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) herdrx_arch=amd64 ;;
@@ -54,7 +55,7 @@ if [ "$herdrx_version" = latest ]; then
 else
   herdrx_download="$herdrx_repo/releases/download/$herdrx_version"
 fi
-herdrx_archive="herdrx-linux-$herdrx_arch.tar.gz"
+herdrx_archive="herdrx-$herdrx_os-$herdrx_arch.tar.gz"
 download() {
   curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 180 "$herdrx_download/$1" -o "$herdrx_tmp/$1"
 }
