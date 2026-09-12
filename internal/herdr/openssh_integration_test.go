@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -34,11 +35,7 @@ func TestOpenSSHIsolatedLifecycle(t *testing.T) {
 	}
 	// Short paths also fit macOS's Unix socket limit. Everything on the fake
 	// remote host, including its identity and Herdr sockets, lives here.
-	dir, err := os.MkdirTemp("", "hx-live-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := testpaths.ShortTempDir(t)
 	home := filepath.Join(dir, "home")
 	herdrDir := filepath.Join(home, ".config", "herdr")
 	if err := os.MkdirAll(herdrDir, 0700); err != nil {
@@ -212,7 +209,7 @@ func fixtureSSHKey() (ed25519.PrivateKey, error) {
 
 func fixtureUnixSocket(t *testing.T, path string, serve func(net.Conn)) {
 	t.Helper()
-	listener, err := net.Listen("unix", path)
+	listener, err := net.Listen("unix", testpaths.RequireSocketPath(t, path))
 	if err != nil {
 		t.Fatal(err)
 	}
