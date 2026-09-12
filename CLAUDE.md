@@ -89,6 +89,7 @@ HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-keys-folders.mjs /
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-app-appearance.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-custom-controls.mjs
 node scripts/test-terminal-rendering.mjs
+HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
 ```
 
