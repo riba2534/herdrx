@@ -180,7 +180,7 @@ docker start herdrx                                # 启动网站
 
 **关闭网站会停止任务吗？** 远程 Herdr 与任务继续运行；网站恢复后重新连接原会话。网站与 Herdr 同机运行时，共享整机故障边界。
 
-**SSH 支持跳板机和 SSH alias 吗？** 当前使用直接填写的地址、端口、用户名与密码/密钥，不支持 SSH alias、ProxyJump、FIDO、GSSAPI 或 ssh-agent 转发。
+**SSH 支持跳板机、alias 和 Kerberos 吗？** 默认密码/密钥路径保持直接 SSH。管理员可显式启用 System OpenSSH，复用工作台服务账号的 SSH alias、ProxyJump/ProxyCommand 和 Kerberos/GSSAPI；不会使用网站保存的密码或密钥，不转发 ssh-agent。Docker 不会自动继承 Mac 宿主机 ticket，详见 [System OpenSSH 安装说明](docs/install.md#system-opensshkerberos)。
 
 **可以共享主机或部署多个网站副本吗？** 当前每台接入记录归属一个账号，使用单实例部署。请在可信环境中使用：实例管理员能够接触终端内容和解密后的连接凭据。
 

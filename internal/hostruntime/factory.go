@@ -76,6 +76,20 @@ func (f *Factory) Open(ctx context.Context, host store.Host) (herdr.Endpoint, er
 func (f *Factory) openUncached(ctx context.Context, host store.Host) (herdr.Endpoint, error) {
 	switch host.Transport {
 	case "ssh":
+		if host.AuthMethod == "system_ssh" {
+			user, err := f.Store.UserByID(ctx, host.OwnerID)
+			if err != nil {
+				return nil, err
+			}
+			if user.Role != "admin" || user.Disabled {
+				return nil, store.ErrAdminRequired
+			}
+			endpoint, err := herdr.DialOpenSSHEndpoint(ctx, f.Config.SSHBinary, herdr.SSHOptions{Host: host, Timeout: f.Config.HostDialTimeout})
+			if err != nil {
+				return nil, err
+			}
+			return endpoint, nil
+		}
 		credential, err := f.Store.CredentialByID(ctx, host.OwnerID, host.CredentialID)
 		if err != nil {
 			return nil, fmt.Errorf("load host credential: %w", err)

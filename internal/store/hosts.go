@@ -44,7 +44,7 @@ func (s *Store) SaveHost(ctx context.Context, host Host, credential *Credential,
 		return err
 	}
 	defer tx.Rollback()
-	if host.Transport == "local" {
+	if host.Transport == "local" || host.AuthMethod == "system_ssh" {
 		var allowed bool
 		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin' AND disabled=0)`, host.OwnerID).Scan(&allowed); err != nil {
 			return err
@@ -118,7 +118,7 @@ func deleteUnusedCredential(ctx context.Context, tx *sql.Tx, owner, id string) e
 // This also filters legacy records owned by users who are no longer admins.
 const hostColumns = `id,owner_id,name,transport,hostname,port,username,session_name,auth_method,COALESCE(credential_id,''),host_key,pending_host_key,tailcat_addr,COALESCE(root_ssh_fp,''),created_at,updated_at,COALESCE(folder_id,''),COALESCE((SELECT id FROM ssh_keys WHERE id=hosts.credential_id AND owner_id=hosts.owner_id),'')`
 
-const allowedHost = `(transport<>'local' OR EXISTS (SELECT 1 FROM users WHERE users.id=hosts.owner_id AND users.role='admin' AND users.disabled=0))`
+const allowedHost = `((transport<>'local' AND auth_method<>'system_ssh') OR EXISTS (SELECT 1 FROM users WHERE users.id=hosts.owner_id AND users.role='admin' AND users.disabled=0))`
 
 func (s *Store) ListHosts(ctx context.Context, ownerID string) ([]Host, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+hostColumns+` FROM hosts WHERE owner_id=? AND `+allowedHost+` ORDER BY created_at`, ownerID)
