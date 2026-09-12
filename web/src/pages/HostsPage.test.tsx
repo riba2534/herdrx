@@ -106,6 +106,42 @@ it('keeps an empty SSH port instead of coercing it to 0', async () => {
   expect(port).toHaveValue(null)
 })
 
+describe('System OpenSSH connection settings', () => {
+  it.each([0, 2222])('preserves port %s when saving an existing system host', async (port) => {
+    auth.user.role = 'admin'
+    const systemHost = { ...host, port, username: '', auth_method: 'system_ssh' }
+    vi.mocked(api.hosts).mockResolvedValue({ hosts: [systemHost] })
+    vi.mocked(api.updateSSHHost).mockResolvedValue({ host: systemHost })
+    render(<HostsPage/>)
+    fireEvent.click(await screen.findByRole('button', { name: '连接设置 Old host' }))
+    expect(screen.getByLabelText('端口')).toHaveValue(port)
+    expect(screen.getByLabelText('SSH 用户')).not.toBeRequired()
+    expect(screen.queryByLabelText('跳板机 ProxyJump（可选）')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存主机' }))
+    await waitFor(() => expect(api.updateSSHHost).toHaveBeenCalledWith(host.id, expect.objectContaining({
+      auth_method: 'system_ssh', port, username: '', keep_secret: false,
+    })))
+    expect(await screen.findByRole('status')).toHaveTextContent('已保存 Old host，打开主机连接')
+  })
+
+  it('clears website credentials and ProxyJump when switching to the system identity', async () => {
+    auth.user.role = 'admin'
+    const keyHost = { ...host, auth_method: 'saved_key', ssh_key_id: 'key-1', proxy_jump: 'jump@example.test:2200' }
+    vi.mocked(api.hosts).mockResolvedValue({ hosts: [keyHost] })
+    vi.mocked(api.updateSSHHost).mockResolvedValue({ host: { ...host, auth_method: 'system_ssh', port: 0 } })
+    render(<HostsPage/>)
+    fireEvent.click(await screen.findByRole('button', { name: '连接设置 Old host' }))
+    fireEvent.keyDown(screen.getByRole('combobox', { name: '认证', exact: true }), { key: 'ArrowDown' })
+    fireEvent.click(within(document.querySelector('[role="listbox"]') as HTMLElement).getByText('System OpenSSH（Kerberos / SSH 配置）'))
+    expect(screen.getByLabelText('端口')).toHaveValue(0)
+    expect(screen.queryByLabelText('跳板机 ProxyJump（可选）')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存主机' }))
+    await waitFor(() => expect(api.updateSSHHost).toHaveBeenCalledWith(host.id, expect.objectContaining({
+      auth_method: 'system_ssh', port: 0, proxy_jump: '', secret: '', passphrase: '', ssh_key_id: '', keep_secret: false,
+    })))
+  })
+})
+
 it('matches host search against username and folder path', async () => {
   vi.mocked(api.hostFolders).mockResolvedValue({ folders: [{ id: 'f-work', name: '公司', created_at: '', updated_at: '' }, { id: 'f-sub', name: '测试环境', parent_id: 'f-work', created_at: '', updated_at: '' }] })
   vi.mocked(api.hosts).mockResolvedValue({

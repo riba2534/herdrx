@@ -313,7 +313,8 @@ export function HostsPage() {
       const body = { ...draft, port: Number(draft.port), keep_secret: Boolean(editingHost && draft.auth_method === editingHost.auth_method && draft.auth_method !== 'saved_key' && draft.auth_method !== 'system_ssh' && !draft.secret && !draft.passphrase) }
       const result = editingHost ? await api.updateSSHHost(editingHost.id, body) : await api.createHost(body)
       setPublicKey(result.public_key || '')
-      setNotice(editingHost ? `已保存 ${result.host.name}，打开主机确认指纹` : `已添加 ${result.host.name}，打开主机确认指纹`)
+      const nextStep = draft.auth_method === 'system_ssh' ? '打开主机连接' : '打开主机确认指纹'
+      setNotice(`${editingHost ? '已保存' : '已添加'} ${result.host.name}，${nextStep}`)
       closeAdd()
       await load()
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '无法保存主机') }
