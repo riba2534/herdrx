@@ -131,7 +131,7 @@ describe('System OpenSSH connection settings', () => {
     vi.mocked(api.updateSSHHost).mockResolvedValue({ host: { ...host, auth_method: 'system_ssh', port: 0 } })
     render(<HostsPage/>)
     fireEvent.click(await screen.findByRole('button', { name: '连接设置 Old host' }))
-    fireEvent.keyDown(screen.getByRole('combobox', { name: '认证', exact: true }), { key: 'ArrowDown' })
+    fireEvent.keyDown(screen.getByRole('combobox', { name: '认证' }), { key: 'ArrowDown' })
     fireEvent.click(within(document.querySelector('[role="listbox"]') as HTMLElement).getByText('System OpenSSH（Kerberos / SSH 配置）'))
     expect(screen.getByLabelText('端口')).toHaveValue(0)
     expect(screen.queryByLabelText('跳板机 ProxyJump（可选）')).not.toBeInTheDocument()
