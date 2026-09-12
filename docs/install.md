@@ -73,6 +73,26 @@ CLI v0.1.0-rc.2 起，网页连接命令可携带 20 分钟有效的中继授权
 
 HTTPS 由部署者自己的反向代理提供，应用配置见 [运维](operations.md)。从旧版升级前备份整个数据目录，并阅读 [访问管理迁移规则](update-and-recovery.md#访问管理迁移与旧版回退)。
 
+## System OpenSSH（Kerberos）
+
+管理员可设置 `HERDRX_SSH_BIN=/usr/bin/ssh`，在「添加主机 → SSH → 认证」选择「System OpenSSH」。主机名可填 SSH alias，用户名留空、端口填 `0` 时使用服务账号的 SSH 配置；显式值覆盖配置。该模式不读取网站保存的密码或私钥，不允许普通用户使用工作台的系统身份。
+
+先以**运行网站的同一操作系统账号、同一环境**执行 `klist -s` 与 `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes devbox true`；没有 ticket 时由管理员运行 `kinit`。首次连接先通过可信渠道核对远端指纹并配置该账号的 `known_hosts`。网站严格检查 host key，不在网页接受系统 SSH 指纹，也不弹出密码提示。SSH 配置示例：
+
+```sshconfig
+Host devbox
+    HostName devbox.example.com
+    User developer
+    GSSAPIAuthentication yes
+    # 如需跳板，可设置 ProxyJump jump.example.com
+```
+
+已有主机不会自动切换认证：请在原主机卡片「连接设置」中选择 System OpenSSH，并将地址改为已验证的 SSH alias；保存后重新打开，原 Herdr 会话保持。使用 launchd/systemd 托管网站时，应在服务环境中显式配置与成功测试一致的 `KRB5CCNAME`（若使用文件缓存）及所需 Kerberos 环境；后台服务不会自动继承终端的环境变量。
+
+OpenSSH 原生读取 SSH 配置与 `KRB5CCNAME` 等运行环境，因此支持系统 GSSAPI 及跳板配置。远程仍需已独立运行 Herdr，允许 API/client Unix socket 转发；观察、控制、图片和滚动沿用现有 Herdr 协议。配置文件中的命令（例如 ProxyCommand）属于管理员可信配置，不接受浏览器传入任意 SSH 参数或可执行文件。
+
+默认 distroless 镜像**没有 OpenSSH 或 Kerberos 运行库**。仅设置变量或挂载 Mac 的 SSH 文件不能让 Linux 容器使用 macOS 的系统 ticket。Mac 上优先让网站以持有 ticket 的用户原生运行；需要 Docker 时应自行提供含 OpenSSH/GSSAPI 的 Linux 运行环境、该 Linux 用户可访问的票据缓存、SSH 配置及 known_hosts，并先在容器内用相同用户验证上述命令。不要挂载整个宿主机 home、把 keytab/ticket 放进镜像，或将通用远程命令执行服务暴露给容器。
+
 ## SSH 密钥与分组
 
 Herdr 必须已由该用户独立安装并运行。终端观察命令先使用非交互 SSH 的 `PATH`，再查找 `~/.local/bin` 和 `/usr/local/bin`，不依赖交互式 Shell 的初始化文件。安装在其他目录时，请配置远程非交互 SSH 的 `PATH`。终端观察进程退出会显示原因；修复远程环境后点击「重连终端」，不会重新创建 pane 或重放关闭期间的输入。

@@ -180,7 +180,7 @@ docker start herdrx                                # 启动网站
 
 **关闭网站会停止任务吗？** 远程 Herdr 与任务继续运行；网站恢复后重新连接原会话。网站与 Herdr 同机运行时，共享整机故障边界。
 
-**SSH 支持跳板机和 SSH alias 吗？** 支持单跳 ProxyJump（可选字段 `proxy_jump`，格式如 `user@jump-host:22`）。跳板与目标共用同一套已保存密钥或密码；等价于经跳板 `direct-tcpip`/`ssh -W` 转发，不是任意 ProxyCommand 脚本。仍不支持 SSH alias、多跳、FIDO、GSSAPI、ssh-agent 转发，以及跳板机主机密钥固定（v1 仅固定目标主机密钥）。
+**SSH 支持跳板机、alias 和 Kerberos 吗？** 密码/密钥连接支持单跳 ProxyJump（如 `user@jump-host:22`），跳板与目标共用网站保存的凭据，仅固定目标主机密钥。管理员也可显式启用 System OpenSSH，复用工作台服务账号的 SSH alias、ProxyJump/ProxyCommand 和 Kerberos/GSSAPI；该模式不使用网站凭据、不转发 ssh-agent，跳板配置由服务账号的 SSH 配置提供。Docker 不会自动继承宿主机 ticket，详见 [System OpenSSH 安装说明](docs/install.md#system-opensshkerberos)。
 
 **可以共享主机或部署多个网站副本吗？** 当前每台接入记录归属一个账号，使用单实例部署。请在可信环境中使用：实例管理员能够接触终端内容和解密后的连接凭据。
 
