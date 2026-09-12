@@ -3,6 +3,7 @@ package herdr
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -107,11 +108,76 @@ func TestOpenSSHSessionCloseReapsProcess(t *testing.T) {
 func TestOpenSSHSessionCloseBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	session := &openSSHSession{cmd: exec.CommandContext(ctx, "/bin/sh"), cancel: cancel}
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Check both ends: descriptors held for a child that never starts must
+	// also be released, rather than relying on os/exec's Start/Wait cleanup.
+	pipes := []io.Closer{stdin, stdout.(io.Closer), stderr.(io.Closer), session.cmd.Stdin.(io.Closer), session.cmd.Stdout.(io.Closer), session.cmd.Stderr.(io.Closer)}
 	if err := session.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.Start("unused"); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("closed session started: %v", err)
+	}
+	for _, pipe := range pipes {
+		if err := pipe.Close(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("unstarted session retained a pipe: %v", err)
+		}
+	}
+	if _, err := session.StdinPipe(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("closed session accepted a new pipe: %v", err)
+	}
+}
+
+func TestOpenSSHSessionStreams(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	session := &openSSHSession{cmd: openSSHCommand(ctx, "/bin/sh", "-c", "cat; printf diagnostic >&2"), cancel: cancel}
+	defer session.Close()
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := session.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := session.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Start("unused"); err != nil {
+		t.Fatal(err)
+	}
+	const input = "terminal input\n中文\x00binary"
+	if _, err := io.WriteString(stdin, input); err != nil {
+		t.Fatal(err)
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stdout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostic, err := io.ReadAll(stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if string(output) != input || string(diagnostic) != "diagnostic" {
+		t.Fatalf("session streams changed: stdout=%q stderr=%q", output, diagnostic)
 	}
 }
 

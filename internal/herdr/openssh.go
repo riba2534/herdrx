@@ -100,7 +100,7 @@ func DialOpenSSHEndpoint(ctx context.Context, binary string, options SSHOptions)
 		os.RemoveAll(dir)
 		return nil, err
 	}
-	t.master = exec.CommandContext(life, binary, args...)
+	t.master = openSSHCommand(life, binary, args...)
 	t.master.Stderr = &t.stderr
 	if err = t.master.Start(); err != nil {
 		cancel()
@@ -142,7 +142,16 @@ func DialOpenSSHEndpoint(ctx context.Context, binary string, options SSHOptions)
 func (t *openSSHTransport) command(ctx context.Context, args ...string) *exec.Cmd {
 	// A dead master must fail, never silently reauthenticate or replay an operation.
 	base := []string{"-F", "/dev/null", "-T", "-S", t.control, "-o", "BatchMode=yes", "-o", "ProxyCommand=false"}
-	return exec.CommandContext(ctx, t.binary, append(base, args...)...)
+	return openSSHCommand(ctx, t.binary, append(base, args...)...)
+}
+
+func openSSHCommand(ctx context.Context, binary string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, binary, args...)
+	configureOpenSSHProcess(cmd)
+	// A proxy that detaches from the process group can still inherit stderr.
+	// Bound os/exec's pipe drain even when that process outlives the SSH client.
+	cmd.WaitDelay = time.Second
+	return cmd
 }
 
 func (t *openSSHTransport) NewSession() (sshSession, error) {
@@ -191,12 +200,61 @@ type openSSHSession struct {
 	done   chan struct{}
 	err    error
 	closed bool
+	pipes  []io.Closer
 }
 
-func (s *openSSHSession) StdinPipe() (io.WriteCloser, error) { return s.cmd.StdinPipe() }
-func (s *openSSHSession) StdoutPipe() (io.Reader, error)     { return s.cmd.StdoutPipe() }
-func (s *openSSHSession) StderrPipe() (io.Reader, error)     { return s.cmd.StderrPipe() }
-func (s *openSSHSession) setStderr(w io.Writer)              { s.cmd.Stderr = w }
+func (s *openSSHSession) StdinPipe() (io.WriteCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, net.ErrClosed
+	}
+	pipe, err := s.cmd.StdinPipe()
+	if err == nil {
+		s.pipes = append(s.pipes, pipe, s.cmd.Stdin.(io.Closer))
+	}
+	return pipe, err
+}
+func (s *openSSHSession) StdoutPipe() (io.Reader, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, net.ErrClosed
+	}
+	pipe, err := s.cmd.StdoutPipe()
+	if err == nil {
+		s.pipes = append(s.pipes, pipe, s.cmd.Stdout.(io.Closer))
+	}
+	return pipe, err
+}
+func (s *openSSHSession) StderrPipe() (io.Reader, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, net.ErrClosed
+	}
+	pipe, err := s.cmd.StderrPipe()
+	if err == nil {
+		s.pipes = append(s.pipes, pipe, s.cmd.Stderr.(io.Closer))
+	}
+	return pipe, err
+}
+func (s *openSSHSession) setStderr(w io.Writer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed && s.done == nil {
+		s.cmd.Stderr = w
+	}
+}
+
+// os/exec closes these descriptors after Start/Wait, but not when a session is
+// cancelled before Start. Keep both ends so every cancellation path releases them.
+func (s *openSSHSession) closePipesLocked() {
+	for _, pipe := range s.pipes {
+		_ = pipe.Close()
+	}
+	s.pipes = nil
+}
 func (s *openSSHSession) Start(command string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -208,6 +266,9 @@ func (s *openSSHSession) Start(command string) error {
 	}
 	s.cmd.Args = append(s.cmd.Args, "--", "herdrx-mux", command)
 	if err := s.cmd.Start(); err != nil {
+		s.closed = true
+		s.closePipesLocked()
+		s.cancel()
 		return err
 	}
 	s.done = make(chan struct{})
@@ -215,7 +276,17 @@ func (s *openSSHSession) Start(command string) error {
 }
 func (s *openSSHSession) Output(command string) ([]byte, error) {
 	var output bytes.Buffer
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	if s.done != nil || s.cmd.Stdout != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("OpenSSH session output already configured or started")
+	}
 	s.cmd.Stdout = &output
+	s.mu.Unlock()
 	if err := s.Start(command); err != nil {
 		return nil, err
 	}
@@ -235,6 +306,8 @@ func (s *openSSHSession) Wait() error {
 		err := s.cmd.Wait()
 		s.mu.Lock()
 		s.err = err
+		s.closePipesLocked()
+		s.cancel()
 		close(done)
 	}
 	s.mu.Unlock()
@@ -247,6 +320,7 @@ func (s *openSSHSession) Close() error {
 	started := s.done != nil
 	if !started {
 		s.closed = true
+		s.closePipesLocked()
 	}
 	s.mu.Unlock()
 	if started {
