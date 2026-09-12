@@ -70,8 +70,8 @@ html[data-appearance-scope="workbench"][data-appearance="solarized-light"] {
   --ui-input: #fdf6e3;
   --ui-border: #d3cbb7;
   --ui-control-border: #8c897b;
-  --ui-text: #586e75;
-  --ui-muted: #657b83;
+  --ui-text: #40575f;
+  --ui-muted: #4d6269;
   --ui-accent: #a4471c;
   --ui-accent-ink: #fdf6e3;
   --ui-accent-hover: #873b18;
