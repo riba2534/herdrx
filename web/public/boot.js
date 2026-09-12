@@ -3,20 +3,21 @@ const workbench = /^\/h\/[^/]+$/.test(location.pathname) && !location.hash.start
 let choice = workbench ? 'dark' : 'light'
 try {
   const saved = localStorage.getItem(workbench ? 'herdrx.workbench-appearance.v1' : 'herdrx.site-appearance.v1')
-  if (saved === 'dark' || saved === 'light') choice = saved
+  if (saved === 'dark' || saved === 'light' || (workbench && saved === 'solarized-light')) choice = saved
 } catch { /* Use the section's default when storage is unavailable. */ }
 const dark = choice === 'dark'
 document.documentElement.dataset.appearanceScope = workbench ? 'workbench' : 'site'
-document.documentElement.dataset.appearance = dark ? 'dark' : 'light'
+document.documentElement.dataset.appearance = choice
 document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-document.documentElement.style.backgroundColor = dark ? '#142c3c' : '#f7f8fa'
-document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#142c3c' : '#f7f8fa')
+const background = dark ? '#142c3c' : choice === 'solarized-light' ? '#fdf6e3' : '#f7f8fa'
+document.documentElement.style.backgroundColor = background
+document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background)
 
 window.setTimeout(() => {
   const root = document.getElementById('root')
   if (!root || root.childElementCount > 0) return
   const main = document.createElement('main')
-  const dark = document.documentElement.dataset.appearance !== 'light'
+  const dark = document.documentElement.dataset.appearance === 'dark'
   main.style.cssText = `min-height:100dvh;display:grid;place-items:center;padding:24px;font-family:system-ui;color:${dark ? '#e2ecf0' : '#1f2937'};background:${dark ? '#142c3c' : '#f7f8fa'}`
   const card = document.createElement('section')
   card.style.cssText = 'max-width:420px;text-align:center'

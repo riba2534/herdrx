@@ -6,6 +6,11 @@ export const terminalThemes: Record<string, ITheme> = {
     black: '#000000', red: '#FF2600', green: '#3DDF2B', yellow: '#F4D300', blue: '#1478DB', magenta: '#FF2C70', cyan: '#00C5C7', white: '#C7C7C7',
     brightBlack: '#686868', brightRed: '#F92A1C', brightGreen: '#43D426', brightYellow: '#F1D000', brightBlue: '#6871FF', brightMagenta: '#FF77FF', brightCyan: '#79E8FB', brightWhite: '#FFFFFF',
   },
+  'Catppuccin Latte': {
+    background: '#eff1f5', foreground: '#4c4f69', cursor: '#dc8a78', cursorAccent: '#eff1f5', selectionBackground: '#acb0be', selectionForeground: '#4c4f69',
+    black: '#5c5f77', red: '#d20f39', green: '#40a02b', yellow: '#df8e1d', blue: '#1e66f5', magenta: '#ea76cb', cyan: '#179299', white: '#acb0be',
+    brightBlack: '#6c6f85', brightRed: '#d20f39', brightGreen: '#40a02b', brightYellow: '#df8e1d', brightBlue: '#1e66f5', brightMagenta: '#ea76cb', brightCyan: '#179299', brightWhite: '#bcc0cc',
+  },
   'Catppuccin Mocha': {
     background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#45475a',
     black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af', blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
@@ -25,6 +30,11 @@ export const terminalThemes: Record<string, ITheme> = {
     background: '#1a1b26', foreground: '#c0caf5', cursor: '#c0caf5', selectionBackground: '#33467c',
     black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68', blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
     brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a', brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7', brightCyan: '#7dcfff', brightWhite: '#c0caf5',
+  },
+  'Solarized Light': {
+    background: '#fdf6e3', foreground: '#657b83', cursor: '#586e75', cursorAccent: '#fdf6e3', selectionBackground: '#eee8d5', selectionForeground: '#586e75',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900', blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75', brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4', brightCyan: '#93a1a1', brightWhite: '#fdf6e3',
   },
   'Solarized Dark': {
     background: '#002b36', foreground: '#839496', cursor: '#93a1a1', selectionBackground: '#073642',

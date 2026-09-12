@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-export type Appearance = 'dark' | 'light'
+export type Appearance = 'dark' | 'light' | 'solarized-light'
 export type AppearanceScope = 'site' | 'workbench'
 const keys: Record<AppearanceScope, string> = { site: 'herdrx.site-appearance.v1', workbench: 'herdrx.workbench-appearance.v1' }
 const changed = 'herdrx:appearance'
@@ -11,17 +11,19 @@ let activeScope: AppearanceScope = 'site'
 export function readAppearance(scope: AppearanceScope = activeScope): Appearance {
   try {
     const value = localStorage.getItem(keys[scope])
-    return value === 'light' || value === 'dark' ? value : fallback[scope]
+    return value === 'light' || value === 'dark' || (scope === 'workbench' && value === 'solarized-light') ? value : fallback[scope]
   } catch { return fallback[scope] }
 }
 
 function applyAppearance() {
-  const dark = readAppearance() === 'dark'
+  const appearance = readAppearance()
+  const dark = appearance === 'dark'
+  const background = dark ? '#142c3c' : appearance === 'solarized-light' ? '#fdf6e3' : '#f7f8fa'
   document.documentElement.dataset.appearanceScope = activeScope
-  document.documentElement.dataset.appearance = dark ? 'dark' : 'light'
+  document.documentElement.dataset.appearance = appearance
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-  document.documentElement.style.backgroundColor = dark ? '#142c3c' : '#f7f8fa'
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#142c3c' : '#f7f8fa')
+  document.documentElement.style.backgroundColor = background
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background)
 }
 
 export function setAppearance(value: Appearance, scope: AppearanceScope = activeScope) {

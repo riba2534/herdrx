@@ -63,6 +63,27 @@
   --ui-overlay: #162a3f78;
   color-scheme: light;
 }
+html[data-appearance-scope="workbench"][data-appearance="solarized-light"] {
+  --ui-background: #fdf6e3;
+  --ui-panel: #eee8d5;
+  --ui-raised: #e5decb;
+  --ui-input: #fdf6e3;
+  --ui-border: #d3cbb7;
+  --ui-control-border: #8c897b;
+  --ui-text: #586e75;
+  --ui-muted: #657b83;
+  --ui-accent: #a4471c;
+  --ui-accent-ink: #fdf6e3;
+  --ui-accent-hover: #873b18;
+  --ui-selected: #e6dcc4;
+  --ui-danger: #b52b2b;
+  --ui-danger-bg: #f7e0d2;
+  --ui-working: #806000;
+  --ui-done: #216b92;
+  --ui-idle: #526b20;
+  --ui-overlay: #36362966;
+  color-scheme: light;
+}
 body { background: var(--ui-background); font-family: var(--ui-font); }
 button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 ::selection { color: var(--ui-text); background: var(--ui-selected); }
@@ -92,6 +113,8 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .notice { border: 1px solid var(--ui-border); color: var(--ui-text); background: var(--ui-panel); }
 .notice-error { color: var(--ui-danger); border-color: var(--ui-danger); background: var(--ui-danger-bg); }
 .notice-info { color: var(--ui-text); background: var(--ui-selected); border-color: var(--ui-border); }
+.appearance-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.appearance-controls > .input { width: auto; max-width: 100%; }
 .appearance-toggle { flex: 0 0 auto; white-space: nowrap; }
 .appearance-toggle > svg { flex-shrink: 0; }
 .topbar { min-height: 44px; height: auto; padding-block: 4px; gap: 12px; flex-wrap: nowrap; background: var(--ui-panel); }
@@ -259,6 +282,8 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .workbench-compact .terminal-titlebar { font-size: 13px; }
   .workbench-compact .terminal-title > span:not(.status-dot) { max-width: none; }
   .workbench-compact .display-settings .button { min-height: 44px; }
+  .settings-modal .setting-row:has(.appearance-controls) { flex-direction: column; align-items: stretch; }
+  .settings-modal .appearance-controls { justify-content: flex-start; }
 }
 @media (max-width: 400px) {
   .page-hosts .page-heading { align-items: start; }
