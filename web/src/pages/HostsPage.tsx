@@ -26,7 +26,7 @@ type HostDraft = {
   username: string
   session_name: string
   proxy_jump: string
-  auth_method: 'generated' | 'private_key' | 'private_key_bundle' | 'password' | 'saved_key'
+  auth_method: 'generated' | 'private_key' | 'private_key_bundle' | 'password' | 'saved_key' | 'system_ssh'
   secret: string
   passphrase: string
   ssh_key_id: string
@@ -304,16 +304,17 @@ export function HostsPage() {
       }
       if (draft.transport === 'ssh') {
         const port = Number(draft.port)
-        if (!Number.isInteger(port) || port < 1 || port > 65535) {
-          setFormError('端口须为 1–65535 的整数')
+        if (!draft.port.trim() || !Number.isInteger(port) || port < (draft.auth_method === 'system_ssh' ? 0 : 1) || port > 65535) {
+          setFormError(draft.auth_method === 'system_ssh' ? '端口须为 0–65535 的整数；0 表示沿用 SSH 配置' : '端口须为 1–65535 的整数')
           setPending(false)
           return
         }
       }
-      const body = { ...draft, port: Number(draft.port), keep_secret: Boolean(editingHost && draft.auth_method === editingHost.auth_method && draft.auth_method !== 'saved_key' && !draft.secret && !draft.passphrase) }
+      const body = { ...draft, port: Number(draft.port), keep_secret: Boolean(editingHost && draft.auth_method === editingHost.auth_method && draft.auth_method !== 'saved_key' && draft.auth_method !== 'system_ssh' && !draft.secret && !draft.passphrase) }
       const result = editingHost ? await api.updateSSHHost(editingHost.id, body) : await api.createHost(body)
       setPublicKey(result.public_key || '')
-      setNotice(editingHost ? `已保存 ${result.host.name}，打开主机确认指纹` : `已添加 ${result.host.name}，打开主机确认指纹`)
+      const nextStep = draft.auth_method === 'system_ssh' ? '打开主机连接' : '打开主机确认指纹'
+      setNotice(`${editingHost ? '已保存' : '已添加'} ${result.host.name}，${nextStep}`)
       closeAdd()
       await load()
     } catch (reason) { setFormError(reason instanceof Error ? reason.message : '无法保存主机') }
@@ -354,7 +355,7 @@ export function HostsPage() {
   }
   const editSSH = (host: Host, trigger: HTMLButtonElement) => {
     addTrigger.current = trigger; setEditingHost(host)
-    setDraft({ ...emptyDraft, name: host.name, transport: 'ssh', hostname: host.hostname || '', port: String(host.port || 22), username: host.username || '', session_name: host.session_name || '', proxy_jump: host.proxy_jump || '', auth_method: (host.auth_method || 'password') as HostDraft['auth_method'], ssh_key_id: host.ssh_key_id || '', folder_id: host.folder_id || '' })
+    setDraft({ ...emptyDraft, name: host.name, transport: 'ssh', hostname: host.hostname || '', port: String(host.auth_method === 'system_ssh' ? (host.port ?? 0) : (host.port || 22)), username: host.username || '', session_name: host.session_name || '', proxy_jump: host.proxy_jump || '', auth_method: (host.auth_method || 'password') as HostDraft['auth_method'], ssh_key_id: host.ssh_key_id || '', folder_id: host.folder_id || '' })
     setFormError(''); setShowAdd(true)
   }
   const move = async (event: FormEvent) => {
@@ -411,7 +412,7 @@ export function HostsPage() {
             {renameError && <span id="host-rename-error" className="field-error" role="alert">{renameError}</span>}
             <div className="host-rename-actions"><Button type="submit" className="button-primary" pending={renamePending}>保存名称</Button><Button type="button" className="button-ghost" disabled={renamePending} onClick={cancelRename}>取消</Button></div>
           </Form> : <h2 data-tooltip={host.name}>{host.name}</h2>}
-          <p className="host-address">{host.transport === 'local' ? '工作台主机 · 仅管理员可用' : host.transport === 'tailcat' ? 'Tailcat 加密连接' : `${host.username}@${host.hostname}:${host.port}`}{host.folder_id && <span className="host-folder-label">{options.find((folder) => folder.id === host.folder_id)?.path}</span>}</p>
+          <p className="host-address">{host.transport === 'local' ? '工作台主机 · 仅管理员可用' : host.transport === 'tailcat' ? 'Tailcat 加密连接' : host.auth_method === 'system_ssh' ? `${host.hostname} · System OpenSSH` : `${host.username}@${host.hostname}:${host.port}`}{host.folder_id && <span className="host-folder-label">{options.find((folder) => folder.id === host.folder_id)?.path}</span>}</p>
           {host.pending_host_key && <div className="host-warning"><ShieldAlert size={15}/><span>首次连接需要确认 SSH 指纹</span></div>}
           <div className="host-card-actions">
             {host.pending_host_key && <Button className="button-secondary" onClick={async () => { await api.trustHostKey(host.id); await load() }}>确认指纹</Button>}
@@ -440,11 +441,12 @@ export function HostsPage() {
             <label className="field"><span className="field-label">Herdr 命名会话（可选）</span><Input aria-label="Herdr 命名会话（可选）" className="input" value={draft.session_name} disabled={pending} onChange={(event) => setDraft({ ...draft, session_name: event.target.value })} placeholder="默认会话" /></label>
           </TailcatSetupGuide>}
           {draft.transport === 'ssh' && <>
-            <div className="field-row"><label className="field field-grow"><span className="field-label">主机名或 IP</span><Input aria-label="主机名或 IP" className="input" value={draft.hostname} onChange={(event) => setDraft({ ...draft, hostname: event.target.value })} required autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="url" /></label><label className="field field-port"><span className="field-label">端口</span><Input aria-label="端口" className="input" type="number" inputMode="numeric" min="1" max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} required /></label></div>
-            <label className="field"><span className="field-label">SSH 用户</span><Input aria-label="SSH 用户" className="input" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} required /></label>
-            <label className="field"><span className="field-label">跳板机 ProxyJump（可选）</span><Input aria-label="跳板机 ProxyJump（可选）" className="input" value={draft.proxy_jump} onChange={(event) => setDraft({ ...draft, proxy_jump: event.target.value })} placeholder="user@jump-host:22" disabled={pending} autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
-            <p className="field-hint">单跳跳板；跳板与目标共用上方认证（密钥/密码）。不支持多跳、ProxyCommand 脚本或 agent 转发。</p>
-            <label className="field"><span className="field-label">认证</span><Select aria-label="认证" className="input" value={draft.auth_method} disabled={pending} onChange={(event) => setDraft({ ...draft, auth_method: event.target.value as HostDraft['auth_method'], secret: '', passphrase: '' })}><SelectOption value="saved_key">选择已保存密钥（公钥认证）</SelectOption><SelectOption value="password">密码认证</SelectOption><SelectOption value="private_key">为此主机粘贴或导入私钥</SelectOption>{editingHost?.auth_method === 'private_key_bundle' && <SelectOption value="private_key_bundle">已保存的主机私钥</SelectOption>}<SelectOption value="generated">为此主机生成独立 Ed25519 密钥</SelectOption></Select></label>
+            <div className="field-row"><label className="field field-grow"><span className="field-label">主机名或 IP</span><Input aria-label="主机名或 IP" className="input" value={draft.hostname} onChange={(event) => setDraft({ ...draft, hostname: event.target.value })} required autoCapitalize="none" autoCorrect="off" spellCheck={false} inputMode="url" /></label><label className="field field-port"><span className="field-label">端口</span><Input aria-label="端口" className="input" type="number" inputMode="numeric" min={draft.auth_method === 'system_ssh' ? '0' : '1'} max="65535" value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value })} required /></label></div>
+            <label className="field"><span className="field-label">SSH 用户</span><Input aria-label="SSH 用户" className="input" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} required={draft.auth_method !== 'system_ssh'} /></label>
+            {draft.auth_method !== 'system_ssh' && <><label className="field"><span className="field-label">跳板机 ProxyJump（可选）</span><Input aria-label="跳板机 ProxyJump（可选）" className="input" value={draft.proxy_jump} onChange={(event) => setDraft({ ...draft, proxy_jump: event.target.value })} placeholder="user@jump-host:22" disabled={pending} autoCapitalize="none" autoCorrect="off" spellCheck={false} /></label>
+            <p className="field-hint">单跳跳板；跳板与目标共用上方认证（密钥/密码）。不支持多跳、ProxyCommand 脚本或 agent 转发。</p></>}
+            <label className="field"><span className="field-label">认证</span><Select aria-label="认证" className="input" value={draft.auth_method} disabled={pending} onChange={(event) => setDraft({ ...draft, auth_method: event.target.value as HostDraft['auth_method'], port: event.target.value === 'system_ssh' ? '0' : (draft.port === '0' ? '22' : draft.port), proxy_jump: event.target.value === 'system_ssh' ? '' : draft.proxy_jump, secret: '', passphrase: '', ssh_key_id: event.target.value === 'saved_key' ? keys[0]?.id || '' : '' })}><SelectOption value="saved_key">选择已保存密钥（公钥认证）</SelectOption><SelectOption value="password">密码认证</SelectOption><SelectOption value="private_key">为此主机粘贴或导入私钥</SelectOption>{editingHost?.auth_method === 'private_key_bundle' && <SelectOption value="private_key_bundle">已保存的主机私钥</SelectOption>}<SelectOption value="generated">为此主机生成独立 Ed25519 密钥</SelectOption>{auth.user?.role === 'admin' && <SelectOption value="system_ssh">System OpenSSH（Kerberos / SSH 配置）</SelectOption>}</Select></label>
+            {draft.auth_method === 'system_ssh' && <p className="field-hint">仅管理员可用，需在工作台配置 HERDRX_SSH_BIN。主机名可填 SSH alias；用户留空、端口填 0 时沿用 SSH 配置（含 ProxyJump）。使用工作台服务账号的 Kerberos ticket 和 known_hosts，不使用网站保存的密钥或密码。Docker 不会自动继承宿主机 ticket。</p>}
             {draft.auth_method === 'saved_key' && <><label className="field"><span className="field-label">认证密钥</span><Select aria-label="认证密钥" className="input" value={draft.ssh_key_id} onChange={(event) => setDraft({ ...draft, ssh_key_id: event.target.value })} required disabled={pending}><SelectOption value="">请选择密钥</SelectOption>{keys.map((key) => <SelectOption key={key.id} value={key.id}>{key.name} · {key.algorithm.replace('ssh-', '')}</SelectOption>)}</Select></label><p className="field-hint">{keys.find((key) => key.id === draft.ssh_key_id)?.fingerprint || '还没有密钥？先在密钥页面导入或生成。'}</p><a className="inline-link" href="/keys" target="_blank" rel="noopener noreferrer">管理密钥（新标签页）</a><Button type="button" className="button-ghost" onClick={async () => { try { setKeys((await api.sshKeys()).keys) } catch (reason) { setFormError(reason instanceof Error ? reason.message : '无法刷新密钥') } }}>刷新密钥列表</Button></>}
             {draft.auth_method === 'password' && <Field label="SSH 密码" type="password" autoComplete="new-password" value={draft.secret} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} required={editingHost?.auth_method !== 'password'} placeholder={editingHost?.auth_method === 'password' ? '留空保留已保存的密码' : ''} disabled={pending}/>}
             {(draft.auth_method === 'private_key' || draft.auth_method === 'private_key_bundle') && <><PrivateKeyInput value={draft.secret} onChange={(secret) => setDraft((current) => ({ ...current, secret }))} required={editingHost?.auth_method !== draft.auth_method} disabled={pending}/><Field label="私钥口令（可选）" type="password" autoComplete="new-password" value={draft.passphrase} onChange={(event) => setDraft({ ...draft, passphrase: event.target.value })} disabled={pending}/>{editingHost?.auth_method === draft.auth_method && <small className="field-hint">私钥与口令留空则保留原认证。</small>}</>}

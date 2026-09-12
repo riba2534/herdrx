@@ -36,9 +36,39 @@ type SSHOptions struct {
 	OnHostKey func(key, fingerprint string)
 }
 
+type sshSession interface {
+	Output(string) ([]byte, error)
+	Start(string) error
+	Wait() error
+	Close() error
+	StdinPipe() (io.WriteCloser, error)
+	StdoutPipe() (io.Reader, error)
+	StderrPipe() (io.Reader, error)
+	setStderr(io.Writer)
+}
+
+type sshTransport interface {
+	NewSession() (sshSession, error)
+	DialContext(context.Context, string, string) (net.Conn, error)
+	Close() error
+}
+
+type cryptoSSHClient struct{ *ssh.Client }
+type cryptoSSHSession struct{ *ssh.Session }
+
+func (c cryptoSSHClient) NewSession() (sshSession, error) {
+	session, err := c.Client.NewSession()
+	if err != nil {
+		return nil, err
+	}
+	return cryptoSSHSession{session}, nil
+}
+
+func (s cryptoSSHSession) setStderr(w io.Writer) { s.Stderr = w }
+
 type SSHEndpoint struct {
 	host       store.Host
-	client     *ssh.Client
+	client     sshTransport
 	socketPath string
 	extraClose io.Closer
 }
@@ -208,7 +238,7 @@ func DialSSHOnConn(ctx context.Context, networkConn net.Conn, target string, opt
 		return nil, fmt.Errorf("SSH handshake: %w", err)
 	}
 	client := ssh.NewClient(connection, channels, requests)
-	endpoint := &SSHEndpoint{host: options.Host, client: client, extraClose: extraClose}
+	endpoint := &SSHEndpoint{host: options.Host, client: cryptoSSHClient{client}, extraClose: extraClose}
 	endpoint.socketPath, err = endpoint.locateSocket(ctx)
 	if err != nil {
 		_ = endpoint.Close()
@@ -283,9 +313,9 @@ func fingerprintForEncoded(encoded string) string {
 
 // Cancel only this channel request. A late channel is closed without affecting
 // other users of the shared transport; its transport idle timeout bounds cleanup.
-func (e *SSHEndpoint) newSession(ctx context.Context) (*ssh.Session, error) {
+func (e *SSHEndpoint) newSession(ctx context.Context) (sshSession, error) {
 	type result struct {
-		session *ssh.Session
+		session sshSession
 		err     error
 	}
 	ready := make(chan result)
@@ -313,6 +343,8 @@ func (e *SSHEndpoint) locateSocket(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("open SSH session for socket discovery: %w", err)
 	}
 	defer session.Close()
+	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
+	defer stop()
 	output, err := session.Output(`sh -c 'printf "%s\n%s\n" "$HOME" "${XDG_CONFIG_HOME:-}"'`)
 	if err != nil {
 		return "", fmt.Errorf("discover remote config path: %w", err)
@@ -458,7 +490,7 @@ func (e *SSHEndpoint) StageImage(ctx context.Context, ext string, r io.Reader) (
 		return "", fmt.Errorf("open stdout pipe: %w", err)
 	}
 	var stderrBuf bytes.Buffer
-	session.Stderr = &stderrBuf
+	session.setStderr(&stderrBuf)
 
 	var remoteCmd string
 	if e.host.Transport == "tailcat" {
@@ -516,7 +548,7 @@ func (e *SSHEndpoint) Close() error {
 }
 
 type sshTerminal struct {
-	session   *ssh.Session
+	session   sshSession
 	stdin     io.WriteCloser
 	stdout    io.Reader
 	stderr    io.Reader

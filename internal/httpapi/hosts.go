@@ -148,7 +148,7 @@ func (a *API) buildHost(ctx context.Context, user store.User, input hostRequest,
 		return fail("无法创建主机，请重试")
 	}
 	host := store.Host{ID: "hst_" + id, OwnerID: user.ID, Name: input.Name, Transport: input.Transport, SessionName: strings.TrimSpace(input.SessionName), Port: input.Port, FolderID: input.FolderID}
-	if host.Port == 0 {
+	if host.Port == 0 && input.AuthMethod != "system_ssh" {
 		host.Port = 22
 	}
 	if host.Transport == "local" {
@@ -162,7 +162,11 @@ func (a *API) buildHost(ctx context.Context, user store.User, input hostRequest,
 	}
 	host.Hostname, host.Username, host.AuthMethod = strings.TrimSpace(input.Hostname), strings.TrimSpace(input.Username), input.AuthMethod
 	host.ProxyJump = strings.TrimSpace(input.ProxyJump)
-	if host.Hostname == "" || host.Username == "" || host.Port < 1 || host.Port > 65535 || strings.ContainsAny(host.Hostname, " /\\\t\r\n") || strings.ContainsFunc(host.Username, unicode.IsControl) {
+	systemSSH := host.AuthMethod == "system_ssh"
+	if systemSSH && (user.Role != "admin" || user.Disabled || a.config.SSHBinary == "") {
+		return fail("system OpenSSH 仅管理员可用，请先配置 HERDRX_SSH_BIN")
+	}
+	if host.Hostname == "" || (!systemSSH && (host.Username == "" || host.Port == 0)) || host.Port < 0 || host.Port > 65535 || strings.ContainsAny(host.Hostname, " /\\\t\r\n") || strings.ContainsFunc(host.Username, unicode.IsControl) {
 		return fail("请填写有效的主机地址、SSH 用户和 1–65535 之间的端口")
 	}
 	if ip := net.ParseIP(host.Hostname); ip != nil && !a.config.AllowPrivateHosts && isPrivateAddress(ip) {
@@ -191,6 +195,16 @@ func (a *API) buildHost(ctx context.Context, user store.User, input hostRequest,
 		if host.Hostname == previous.Hostname && host.Port == previous.Port {
 			host.HostKey, host.PendingHostKey = previous.HostKey, previous.PendingHostKey
 		}
+	}
+	if systemSSH {
+		if host.ProxyJump != "" {
+			return fail("system OpenSSH 的跳板机请在工作台服务账号的 SSH 配置中设置")
+		}
+		if input.Secret != "" || input.Passphrase != "" || input.SSHKeyID != "" || input.KeepSecret {
+			return fail("system OpenSSH 使用工作台服务账号的配置和 ticket，请勿填写网站凭据")
+		}
+		host.HostKey, host.PendingHostKey = "", ""
+		return host, nil, "", nil
 	}
 	if input.AuthMethod == "saved_key" {
 		key, err := a.store.SSHKeyByID(ctx, user.ID, input.SSHKeyID)

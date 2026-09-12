@@ -14,6 +14,14 @@ docker exec herdrx /app/herdrx-server healthcheck
 
 首次初始化 token 位于本地 `./data/bootstrap-token`，日志仅提示文件位置。管理员创建成功后文件删除，令牌原文不写入日志。
 
+## System OpenSSH 运维
+
+`HERDRX_SSH_BIN` 默认空（禁用）；启用后只有管理员能添加或访问 `system_ssh` 主机。每台活动主机使用独立、权限受限的 OpenSSH ControlMaster 和本地 Unix socket，不接管用户现有 SSH master；断开访问仅关闭此连接及观察进程，不停止远程 Herdr。网站密码/密钥连接及 Tailcat 不受影响。
+
+票据续期由部署者负责，网站不保存 Kerberos 密码、不自动运行 `kinit`。连接失败时先以网站服务账号检查 `klist -s`、严格 host-key 检查下的 `ssh`，再检查 SSH alias、ProxyJump/ProxyCommand、远程 Unix socket 转发权限。未知或变化的 host key 必须在工作台侧核对，不能通过禁用检查解决。票据过期可能不影响已有 SSH master，但新连接会失败；续期后重新打开主机，不重建远程任务。工作台重启后重新鉴权，不恢复或重放旧输入。
+
+Docker 必须有自己的可用 Linux OpenSSH/GSSAPI 环境；macOS 的 ticket 不会自动进入容器。环境准备与信任边界见 [安装说明](install.md#system-opensshkerberos)。
+
 ## HTTPS
 
 herdrx 默认只监听 HTTP，使用 IP 地址即可部署和测试，不附带 HTTPS 代理或证书管理。`HERDRX_PUBLIC_URL` 填实际访问地址，HTTP 使用 `HERDRX_COOKIE_SECURE=false`。

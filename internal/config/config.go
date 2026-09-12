@@ -18,6 +18,7 @@ type Config struct {
 	MasterKey           string
 	BootstrapToken      string
 	HerdrBinary         string
+	SSHBinary           string
 	CookieSecure        bool
 	SessionTTL          time.Duration
 	HostIdleTimeout     time.Duration
@@ -48,6 +49,7 @@ func Load() (Config, error) {
 		MasterKey:           os.Getenv("HERDRX_MASTER_KEY"),
 		BootstrapToken:      os.Getenv("HERDRX_BOOTSTRAP_TOKEN"),
 		HerdrBinary:         env("HERDRX_HERDR_BIN", "herdr"),
+		SSHBinary:           strings.TrimSpace(os.Getenv("HERDRX_SSH_BIN")),
 		CookieSecure:        envBool("HERDRX_COOKIE_SECURE", false),
 		SessionTTL:          30 * 24 * time.Hour,
 		HostIdleTimeout:     2 * time.Minute,

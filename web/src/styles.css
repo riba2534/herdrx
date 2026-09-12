@@ -289,7 +289,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   text-autospace: no-autospace;
 }
 .terminal-host .xterm-viewport { background: transparent !important; }
-.terminal-host .xterm-dim { color: color-mix(in srgb, var(--terminal-ink, currentColor) 58%, transparent) !important; opacity: 1 !important; }
+/* xterm generates dim foregrounds for each ANSI color and contrast setting. */
+.terminal-host .xterm-dim { opacity: 1 !important; }
 .image-paste-feedback { position: absolute; z-index: 6; top: 36px; right: 8px; max-width: calc(100% - 16px); display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 13px; }
 .image-paste-feedback span { overflow-wrap: anywhere; min-width: 0; }
 .image-paste-error { background: var(--danger-surface, var(--panel)); border-color: var(--blocked); color: var(--blocked); }

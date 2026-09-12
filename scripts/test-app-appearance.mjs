@@ -51,6 +51,41 @@ async function fit(page) {
   assert.deepEqual(overflow, [], 'UI content outside viewport')
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'horizontal page overflow')
 }
+// Check rendered colors against every navigation surface; small help text and
+// selected rows must stay legible even when the terminal contrast option is off.
+async function expectWorkbenchContrast(page) {
+  const colors = await page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement)
+    const probe = document.createElement('span')
+    document.body.append(probe)
+    const backgrounds = ['--ui-panel', '--ui-raised', '--ui-selected'].map((token) => {
+      probe.style.backgroundColor = root.getPropertyValue(token)
+      return { token, color: getComputedStyle(probe).backgroundColor }
+    })
+    probe.remove()
+    return {
+      backgrounds,
+      text: Array.from(document.querySelectorAll('.settings-modal .setting-row > span > strong, .settings-modal .setting-row > span > small')).map((element) => ({
+        label: element.textContent,
+        color: getComputedStyle(element).color,
+      })),
+    }
+  })
+  const luminance = (color) => {
+    const rgb = color.match(/[\d.]+/g)?.slice(0, 3).map(Number)
+    assert.equal(rgb?.length, 3, `unexpected computed color: ${color}`)
+    return rgb.map((channel) => channel / 255).map((channel) => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
+      .reduce((total, channel, index) => total + channel * [.2126, .7152, .0722][index], 0)
+  }
+  assert.ok(colors.text.length >= 2, 'missing rendered workbench settings text')
+  for (const text of colors.text) {
+    for (const background of colors.backgrounds) {
+      const values = [luminance(text.color), luminance(background.color)].sort((a, b) => b - a)
+      const ratio = (values[0] + .05) / (values[1] + .05)
+      assert.ok(ratio >= 4.5, `${text.label}: ${text.color} on ${background.token} has contrast ${ratio.toFixed(2)}`)
+    }
+  }
+}
 async function expectTheme(page, theme) {
   await expect(page.locator('html')).toHaveAttribute('data-appearance', theme)
   await expect(page.getByRole('button', { name: theme === 'light' ? '切换为深色' : '切换为浅色', exact: true })).toBeVisible()
@@ -195,6 +230,36 @@ try {
           await expect(page.locator('html')).toHaveAttribute('data-appearance', 'light')
           await changeTheme(other, 'light')
           await changeTheme(page, 'dark')
+          await chooseOption(page.getByRole('combobox', { name: '工作台配色', exact: true }), 'solarized-light')
+          await expect(page.locator('html')).toHaveAttribute('data-appearance', 'solarized-light')
+          await expect(page.locator('.workbench-sidebar')).toHaveCSS('background-color', 'rgb(238, 232, 213)')
+          await expect(page.getByRole('dialog')).toHaveCSS('background-color', 'rgb(238, 232, 213)')
+          await expect(page.locator('html')).toHaveCSS('color-scheme', 'light')
+          await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#fdf6e3')
+          await expectWorkbenchContrast(page)
+          await expect(other.locator('html')).toHaveAttribute('data-appearance', 'light')
+          await chooseOption(page.getByRole('combobox', { name: '终端主题', exact: true }), 'Solarized Light')
+          await page.getByRole('button', { name: '完成', exact: true }).click()
+          await expect(page.locator('.workbench')).toHaveCSS('background-color', 'rgb(253, 246, 227)')
+          await capture(page, `${name}-solarized-light-desktop`)
+          await page.reload()
+          await expect(page.locator('html')).toHaveAttribute('data-appearance', 'solarized-light')
+          await expect(page.locator('.workbench-sidebar')).toHaveCSS('background-color', 'rgb(238, 232, 213)')
+          await page.getByRole('button', { name: '工作台设置', exact: true }).click()
+          await expect(page.getByRole('combobox', { name: '工作台配色', exact: true })).toContainText('Solarized Light')
+          await expect(page.getByRole('combobox', { name: '终端主题', exact: true })).toContainText('Solarized Light')
+          await page.setViewportSize({ width: 390, height: 844 })
+          await fit(page)
+          await expectWorkbenchContrast(page)
+          await capture(page, `${name}-solarized-light-mobile-settings`)
+          await page.setViewportSize({ width: 1440, height: 900 })
+          await chooseOption(page.getByRole('combobox', { name: '终端主题', exact: true }), 'Catppuccin Latte')
+          await page.getByRole('button', { name: '完成', exact: true }).click()
+          await expect(page.locator('.workbench')).toHaveCSS('background-color', 'rgb(239, 241, 245)')
+          await page.getByRole('button', { name: '工作台设置', exact: true }).click()
+          await chooseOption(page.getByRole('combobox', { name: '工作台配色', exact: true }), 'dark')
+          await chooseOption(page.getByRole('combobox', { name: '终端主题', exact: true }), 'Cobalt2')
+          await expectTheme(page, 'dark')
           await page.getByRole('button', { name: '完成', exact: true }).click()
           await page.getByRole('button', { name: '返回主机列表', exact: true }).click()
           await expect(page.locator('.host-card')).toHaveCount(3)
