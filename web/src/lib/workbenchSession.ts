@@ -3,8 +3,10 @@ import { COMPACT_WORKBENCH_QUERY } from './displayPreferences'
 
 export const WORKBENCH_DEVICE_KEY = 'herdrx.device.v1'
 export const WORKBENCH_VISIT_KEY = 'herdrx.workbench-visit.v1'
+export const WORKBENCH_SIDEBAR_KEY = 'herdrx.sidebar-open'
 
 export type WorkbenchClientClass = 'desktop' | 'mobile'
+export type WorkbenchWindowForm = 'large' | 'compact'
 
 export type WorkbenchSession = {
   host_id: string
@@ -69,6 +71,24 @@ export function workbenchDeviceID(storage: Storage | undefined = localStorage) {
 
 export function workbenchClientClass(mobile = compactWorkbench()): WorkbenchClientClass {
   return mobile ? 'mobile' : 'desktop'
+}
+
+// Location comes from the last-writer snapshot. Window chrome follows the
+// client that is attaching now: desktop always gets the large shell, even
+// when the snapshot was written by a phone.
+export function workbenchWindowForm(clientClass: WorkbenchClientClass = workbenchClientClass()): WorkbenchWindowForm {
+  return clientClass === 'mobile' ? 'compact' : 'large'
+}
+
+export function applyAttachWindowForm(clientClass: WorkbenchClientClass = workbenchClientClass(), storage: Storage | undefined = localStorage) {
+  const form = workbenchWindowForm(clientClass)
+  try {
+    if (form === 'large') storage?.setItem(WORKBENCH_SIDEBAR_KEY, 'true')
+    else storage?.removeItem(WORKBENCH_SIDEBAR_KEY)
+  } catch {
+    // Private storage may be unavailable; this visit still uses the attach form.
+  }
+  return { form, compact: form === 'compact', sidebarOpen: form === 'large' }
 }
 
 export function compactWorkbench() {

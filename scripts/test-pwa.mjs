@@ -39,7 +39,8 @@ const server = createServer(async (req, res) => {
     else if (path === '/api/me') {
       if (denyAPI) { status = 401; body = { error: 'unauthorized' } }
       else body = { user: { id: 'pwa-user', email: 'pwa@example.test', display_name: 'PWA 验收', role: 'admin' }, csrf_token: 'test', session_id: 'pwa-session' }
-    } else if (path === '/api/hosts/') body = { hosts: [] }
+    } else if (path === '/api/me/workbench-session') body = { session: null }
+    else if (path === '/api/hosts/') body = { hosts: [] }
     else if (path === '/api/host-folders/') body = { folders: [] }
     else if (path === '/api/ssh-keys/') body = { keys: [] }
     else if (path === '/api/tailcat/enrollments') body = { tasks: [] }

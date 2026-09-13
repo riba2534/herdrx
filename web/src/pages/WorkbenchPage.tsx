@@ -21,7 +21,7 @@ import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneV
 import { navigate } from '../lib/navigation'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel } from '../lib/labels'
-import { cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchLocationFromSession, workbenchSessionPayload, type WorkbenchLocation } from '../lib/workbenchSession'
+import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchSessionPayload, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
 import { terminalThemes } from '../lib/themes'
 import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
 
@@ -67,7 +67,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     if (cached === undefined) return { phase: 'loading', location: null }
     return { phase: 'ready', location: workbenchLocationFromSession(cached, hostID) }
   })
-  const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('herdrx.sidebar-open') !== 'false')
+  const attachForm = workbenchWindowForm(workbenchClientClass(mobile))
+  const [sidebarOpen, setSidebarOpen] = useState(() => applyAttachWindowForm(workbenchClientClass(mobile)).sidebarOpen)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
   const workbenchRef = useRef<HTMLDivElement>(null)
@@ -166,7 +167,12 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     await pasteImages(files)
   }
 
-  useEffect(() => { localStorage.setItem('herdrx.sidebar-open', String(sidebarOpen)) }, [sidebarOpen])
+  useEffect(() => {
+    // A phone-written snapshot must not leave the next desktop attach in the
+    // compact/collapsed chrome stored by the previous client.
+    if (mobile) return
+    setSidebarOpen(applyAttachWindowForm('desktop').sidebarOpen)
+  }, [mobile])
   useEffect(() => {
     if (!actionError) return
     const timer = window.setTimeout(() => setActionError(''), 5000)
@@ -299,13 +305,19 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       }, mobile)).catch(() => {})
     }
     const timer = window.setTimeout(persist, 300)
-    const hide = () => { if (document.visibilityState === 'hidden') persist() }
-    window.addEventListener('pagehide', persist)
-    document.addEventListener('visibilitychange', hide)
+    let hiding = false
+    const hide = () => {
+      if (hiding) return
+      hiding = true
+      persist()
+    }
+    const onHidden = () => { if (document.visibilityState === 'hidden') hide() }
+    window.addEventListener('pagehide', hide)
+    document.addEventListener('visibilitychange', onHidden)
     return () => {
       window.clearTimeout(timer)
-      window.removeEventListener('pagehide', persist)
-      document.removeEventListener('visibilitychange', hide)
+      window.removeEventListener('pagehide', hide)
+      document.removeEventListener('visibilitychange', onHidden)
     }
   }, [restore, hostID, workspaceID, tabID, paneID, mobile])
 
@@ -786,7 +798,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     window.addEventListener('pointercancel', onUp)
   }
 
-  return <div ref={workbenchRef} className={`workbench ${mobile ? 'workbench-compact' : ''} ${shortWorkbench ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} style={{ '--workbench-height': `${viewportHeight}px`, '--workbench-offset-top': `${viewportOffsetTop}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
+  return <div ref={workbenchRef} className={`workbench ${mobile ? 'workbench-compact' : ''} ${shortWorkbench ? 'workbench-short' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} data-window-form={attachForm} style={{ '--workbench-height': `${viewportHeight}px`, '--workbench-offset-top': `${viewportOffsetTop}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
     <h1 className="workbench-title">{host?.name || '工作台'}</h1>
     {mobile ? <header className="mobile-topbar" aria-label="工作台导航">
       <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
