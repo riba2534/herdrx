@@ -40,20 +40,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const refreshSequence = useRef(0)
+  const inFlight = useRef(false)
   const channel = useRef<BroadcastChannel | null>(null)
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return
+    inFlight.current = true
     const sequence = ++refreshSequence.current
     const epoch = authenticationGeneration()
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      ? AbortSignal.timeout(AUTH_CHECK_TIMEOUT_MS)
+      : undefined
     try {
       await withTimeout((async () => {
-        const bootstrap = await api.bootstrapStatus()
+        const bootstrap = await api.bootstrapStatus(signal ? { signal } : undefined)
         if (sequence !== refreshSequence.current || epoch !== authenticationGeneration()) return
         setBootstrapRequired(bootstrap.required)
         setRegistration(bootstrap.registration === 'invite' ? 'invite' : 'closed')
         if (bootstrap.required) { if (currentSessionID()) invalidateAuthentication(); setUser(null); setSessionID(''); setError('') }
         else {
-          const result = await api.me()
+          const result = await api.me(signal ? { signal } : undefined)
           if (sequence !== refreshSequence.current || currentSessionID() !== result.session_id) return
           setUser(result.user)
           setSessionID(result.session_id)
@@ -63,8 +69,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (reason) {
       if (sequence !== refreshSequence.current) return
       if (reason instanceof APIError && reason.status === 401) { setUser(null); setSessionID(''); setError('') }
-      else if (!(reason instanceof APIError && reason.code === 'auth_changed')) setError(reason instanceof Error ? reason.message : '无法连接工作台，请重试')
+      else if (!(reason instanceof APIError && reason.code === 'auth_changed')) {
+        const aborted = reason instanceof DOMException && reason.name === 'AbortError'
+        setError(aborted || !(reason instanceof Error) ? '无法连接工作台，请重试' : reason.message)
+      }
     } finally {
+      inFlight.current = false
       if (sequence === refreshSequence.current) setLoading(false)
     }
   }, [])

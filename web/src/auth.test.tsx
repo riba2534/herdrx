@@ -80,6 +80,13 @@ describe('Web authentication lifecycle', () => {
       fetchMock.mockImplementation(() => new Promise(() => {}))
       render(<AuthProvider><Probe/></AuthProvider>)
       expect(screen.getByTestId('loading')).toHaveTextContent('yes')
+      const started = fetchMock.mock.calls.length
+      await act(async () => {
+        window.dispatchEvent(new Event('online'))
+        window.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(fetchMock.mock.calls.length).toBe(started)
       await act(async () => { await vi.advanceTimersByTimeAsync(AUTH_CHECK_TIMEOUT_MS) })
       expect(screen.getByTestId('loading')).toHaveTextContent('no')
       expect(screen.getByTestId('user')).toHaveTextContent('anonymous')
