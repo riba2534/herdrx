@@ -116,6 +116,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
   const creatingWorkspace = useRef(false)
   const pendingWorkspaceSelection = useRef<string | null>(null)
+  const userPickedLocation = useRef(false)
   const [promptError, setPromptError] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set())
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
@@ -250,6 +251,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     let cancelled = false
+    userPickedLocation.current = false
     setRestoreReady(false)
     setRestoreLocation(null)
     void api.workbenchSession().then(({ session }) => {
@@ -287,7 +289,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }, [restoreReady, hostID, workspaceID, tabID, paneID, mobile])
 
   useEffect(() => {
-    if (!snapshot || !restoreReady) return
+    if (!snapshot) return
     if (pendingWorkspaceSelection.current) {
       const created = snapshot.workspaces.find((item) => item.workspace_id === pendingWorkspaceSelection.current)
       if (!created) return // The RPC result can precede its snapshot.
@@ -310,7 +312,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return
       }
     }
-    if (restoreLocation) {
+    if (restoreLocation && !userPickedLocation.current) {
       const restored = matchWorkbenchLocation(snapshot, restoreLocation)
       setRestoreLocation(null)
       if (restored) {
@@ -335,7 +337,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.pane_id === layout?.focused_pane_id)
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
-  }, [snapshot, workspaceID, tabID, paneID, restoreLocation, restoreReady])
+  }, [snapshot, workspaceID, tabID, paneID, restoreLocation])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -698,14 +700,15 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   const selectWorkspace = (workspace: Workspace) => {
     const fromSwitcher = switcherOpen
+    userPickedLocation.current = true
     setMobileToolsOpen(false)
     setWorkspaceID(workspace.workspace_id)
     setTabID(workspace.active_tab_id)
     setSwitcherOpen(false)
     afterSelectLocation(fromSwitcher)
   }
-  const selectTab = (tab: Tab) => { const fromSwitcher = switcherOpen; setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
-  const selectAgent = (agent: Agent) => { const fromSwitcher = switcherOpen; setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
+  const selectTab = (tab: Tab) => { const fromSwitcher = switcherOpen; userPickedLocation.current = true; setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
+  const selectAgent = (agent: Agent) => { const fromSwitcher = switcherOpen; userPickedLocation.current = true; setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
 
   const workspaces = snapshot?.workspaces || []
   const visibleWorkspaces = workspaces.filter((workspace) => !workspace.worktree?.is_linked_worktree || !collapsedGroups.has(workspace.worktree.repo_key))
