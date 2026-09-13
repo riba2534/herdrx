@@ -23,6 +23,7 @@ import (
 	"github.com/riba2534/herdrx/internal/push"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/voicegateway"
 )
 
 const sessionCookie = "herdrx_session"
@@ -57,6 +58,7 @@ type API struct {
 	cliReleases        *cliReleaseCache
 	relay              *workbenchRelay
 	scriptHashes       string
+	voice              *voicegateway.Gateway
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {
@@ -72,6 +74,23 @@ func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets 
 		hashPassword:       secure.HashPassword, verifyPassword: secure.VerifyPassword,
 		enrollmentRunning: make(map[string]bool),
 		cliReleases:       newCLIReleaseCache(),
+	}
+	// Voice is off unless HERDRX_VOICE_ENABLED is set and both the upstream
+	// origin and the credential are configured. A half-configured deployment
+	// that asked for voice fails loudly here instead of silently disabling it,
+	// and LoadConfigFromEnv never logs or returns the credential.
+	voiceConfig, _, err := VoiceConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	api.voice, err = NewVoiceGateway(voiceConfig, api, logger)
+	if err != nil {
+		return nil, err
+	}
+	if voiceConfig.Available() {
+		// The upstream origin and credential stay out of the log on purpose:
+		// an operator log must not become the place where they leak.
+		logger.Info("voice capability enabled", "model", voiceConfig.Model, "audio_reply", voiceConfig.AudioReply)
 	}
 	count, err := dataStore.UserCount(context.Background())
 	if err != nil {
@@ -125,6 +144,11 @@ func (a *API) Close() {
 	if a.relay != nil && a.relay.server != nil {
 		a.relay.server.Close()
 	}
+	if a.voice != nil {
+		// Closes every open upstream session and rejects new tickets, so a
+		// restart never leaves a microphone streaming into an orphaned dial.
+		a.voice.Close()
+	}
 	a.access.close()
 	if a.stopBackground != nil {
 		a.stopBackground()
@@ -163,6 +187,13 @@ func (a *API) Handler() http.Handler {
 			router.Route("/tailcat", a.tailcatRoutes)
 			router.Route("/push", a.pushRoutes)
 			router.Route("/admin", a.adminRoutes)
+			// Voice lives inside the authenticated group, so the login
+			// boundary applies before RegisterVoiceRoutes' own guard runs.
+			// RegisterVoiceRoutes reuses the session already in context and
+			// adds the CSRF / Origin checks on top of it.
+			router.Route("/voice", func(router chi.Router) {
+				a.RegisterVoiceRoutes(router, a.voice)
+			})
 		})
 	})
 	router.Handle("/*", a.frontend())
@@ -176,7 +207,11 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 		}
 		writer.Header().Set("X-Content-Type-Options", "nosniff")
 		writer.Header().Set("Referrer-Policy", "no-referrer")
-		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		// microphone=(self) is required for the voice entry point: the empty
+		// allowlist (microphone=()) makes every getUserMedia call fail. The
+		// browser still prompts, and the microphone stays off unless the user
+		// clicks the button and grants it. camera stays fully denied.
+		writer.Header().Set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
 		scriptSrc := "script-src 'self'"
 		if a.scriptHashes != "" {
 			scriptSrc += " " + a.scriptHashes

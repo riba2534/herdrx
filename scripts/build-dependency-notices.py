@@ -28,6 +28,32 @@ def stream(raw):
         yield value
 
 
+# 锁文件里带 os / cpu / libc 约束的可选二进制包，例如 esbuild、rollup、oxlint、@napi-rs
+# 按平台分发的预编译产物。它们装不装完全取决于生成机器的架构，逐平台登记会让声明文件
+# 随机器变化（amd64 生成 @esbuild/linux-x64，arm64 生成 @esbuild/linux-arm64），
+# `--check` 就只能在一种架构上通过。这些二进制包与其父包共享同一份上游许可原文
+# （父包本身与平台无关，已登记），因此这里按**锁文件**排除它们：排除集合完全来自
+# `web/pnpm-lock.yaml`，与本机装了什么无关，amd64 与 arm64 生成的结果逐字节相同。
+def lockfile_npm_packages():
+    text = (ROOT / "web/pnpm-lock.yaml").read_text()
+    start = text.index("\npackages:\n")
+    end = text.index("\nsnapshots:\n", start)
+    entries = []
+    current = None
+    for line in text[start:end].split("\n"):
+        key = re.match(r"^  '?((?:@[^/' ]+/)?[^' ]+)@([^' ]+)'?:$", line)
+        if key:
+            current = {"name": key.group(1), "version": key.group(2), "platform": False}
+            entries.append(current)
+            continue
+        if current is not None and re.match(r"^    (os|cpu|libc):", line):
+            current["platform"] = True
+    assert entries, "no package entries parsed from web/pnpm-lock.yaml"
+    locked = {(entry["name"], entry["version"]) for entry in entries}
+    platform = sorted({entry["name"] for entry in entries if entry["platform"]})
+    return locked, set(platform), platform
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
@@ -83,20 +109,28 @@ def main():
                            "licenses": [{"expression": " AND ".join(sorted(module["licenses"]))}],
                            "properties": [{"name": "herdrx:inventory", "value": "Go Linux amd64/arm64 imported modules; CLI and website"}]})
     npm = json.loads(run("pnpm", "--dir", "web", "licenses", "list", "--json"))
+    locked_npm, platform_npm, platform_npm_list = lockfile_npm_packages()
     npm_entries = {entry["name"]: entry for entries in npm.values() for entry in entries}
     npm_seen = set()
+    npm_excluded = set()
     for license_id, entries in sorted(npm.items()):
         assert license_id not in ("Unknown", "UNLICENSED"), "unreviewed npm dependency license"
         for entry in entries:
+            if entry["name"] in platform_npm:
+                npm_excluded.add(entry["name"])
+                continue
             for version in entry["versions"]:
                 identity = (entry["name"], version)
                 if identity in npm_seen:
                     continue
+                # 成分表只登记锁文件里真实存在的包：本机 store / node_modules 被污染的
+                # 情况下也要在这里失败，而不是把来源不明的包写进声明文件。
+                assert identity in locked_npm, f"installed npm package missing from web/pnpm-lock.yaml: {entry['name']}@{version}"
                 npm_seen.add(identity)
                 ref = f"pkg:npm/{quote(entry['name'], safe='/')}@{version}"
                 components.append({"type": "library", "name": entry["name"], "version": version, "bom-ref": ref, "purl": ref,
                                    "licenses": [{"expression": "MIT AND BSD-3-Clause" if entry["name"] == "stackback" else license_id}],
-                                   "properties": [{"name": "herdrx:inventory", "value": "Installed frontend packages, including build/test tools"}]})
+                                   "properties": [{"name": "herdrx:inventory", "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"}]})
             found = False
             for folder in entry["paths"]:
                 root = Path(folder)
@@ -118,7 +152,6 @@ def main():
                 elif (entry["name"], tuple(entry["versions"]), license_id) in {
                     ("react-remove-scroll-bar", ("2.3.8",), "MIT"),
                     ("stackback", ("0.0.2",), "MIT"),
-                    ("@napi-rs/lzma-linux-x64-gnu", ("1.5.1",), "MIT"),
                 }:
                     # These npm archives declare MIT but omit a standalone
                     # license file. Preserve their actual declaration, without
@@ -138,9 +171,10 @@ def main():
     components.sort(key=lambda component: component["bom-ref"])
     bom = {"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
            "metadata": {"component": {"type": "application", "name": "herdrx", "version": "source", "licenses": [{"license": {"id": "MIT"}}]},
-                        "properties": [{"name": "herdrx:" + str(path) + ":sha256", "value": hashlib.sha256((ROOT / path).read_bytes()).hexdigest()} for path in (Path("go.mod"), Path("go.sum"), Path("web/pnpm-lock.yaml"))]},
+                        "properties": [{"name": "herdrx:" + str(path) + ":sha256", "value": hashlib.sha256((ROOT / path).read_bytes()).hexdigest()} for path in (Path("go.mod"), Path("go.sum"), Path("web/pnpm-lock.yaml"))]
+                                      + [{"name": "herdrx:npm:platform-packages-excluded", "value": ",".join(platform_npm_list)}]},
            "components": components}
-    text = "# 第三方依赖声明\n\n本文件由 `scripts/build-dependency-notices.py` 从固定依赖版本生成，保留上游随包附带的许可与声明原文。包含 Linux amd64/arm64 网站与 CLI 的 Go 导入模块，以及前端安装依赖（含构建和测试工具），不表示所有列出的代码都会进入最终二进制。主项目许可单独见 LICENSE。\n\n机器可读清单见 `sbom.cdx.json`。caniuse-lite 的兼容性数据采用 CC-BY-4.0，仅用于前端构建，署名及完整许可保留于下列原文。三个未附独立许可文件的 npm 包保留其真实 package.json 许可声明，具体边界见 `docs/dependency-review-2026-09-07.md`，未生成或冒充上游版权原文。\n"
+    text = "# 第三方依赖声明\n\n本文件由 `scripts/build-dependency-notices.py` 从固定依赖版本生成，保留上游随包附带的许可与声明原文。包含 Linux amd64/arm64 网站与 CLI 的 Go 导入模块，以及前端安装依赖（含构建和测试工具），不表示所有列出的代码都会进入最终二进制。主项目许可单独见 LICENSE。\n\n机器可读清单见 `sbom.cdx.json`。caniuse-lite 的兼容性数据采用 CC-BY-4.0，仅用于前端构建，署名及完整许可保留于下列原文。两个未附独立许可文件的 npm 包保留其真实 package.json 许可声明，具体边界见 `docs/dependency-review-2026-09-07.md`，未生成或冒充上游版权原文。\n\n按平台分发的 npm 可选二进制包（esbuild / rollup / oxlint 等，锁文件里带 `os`/`cpu`/`libc` 约束）不逐平台登记：它们的许可原文与各自父包相同，父包已完整登记；逐平台登记会让本文件随生成机器架构变化。排除集合由 `web/pnpm-lock.yaml` 决定，可在 `sbom.cdx.json` 的 `herdrx:npm:platform-packages-excluded` 属性中查看。\n"
     for digest, item in sorted(notices.items(), key=lambda pair: sorted(pair[1]["labels"])[0]):
         text += "\n## " + sorted(item["labels"])[0] + "\n\n"
         text += "\n".join("- " + label for label in sorted(item["labels"])) + "\n\n````text\n" + item["text"].rstrip() + "\n````\n"
@@ -149,7 +183,9 @@ def main():
             assert path.read_bytes() == content.encode(), f"stale dependency artifact: {path.name}"
         else:
             path.write_text(content)
-    print(f"Dependency inventory: {len(modules)} Go modules, {len(npm_seen)} npm versions, {len(notices)} distinct notice texts")
+    assert npm_excluded, "no platform-specific npm package was excluded: the lockfile rule is not matching"
+    assert npm_excluded <= platform_npm, "excluded npm package is not platform-constrained in web/pnpm-lock.yaml"
+    print(f"Dependency inventory: {len(modules)} Go modules, {len(npm_seen)} npm versions ({len(npm_excluded)} platform-specific npm packages excluded), {len(notices)} distinct notice texts")
 
 
 if __name__ == "__main__":

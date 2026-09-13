@@ -976,19 +976,29 @@ describe('TerminalPane paste interception', () => {
   })
 })
 
-describe('TerminalPane status chip and crop badge', () => {
+describe('TerminalPane header and crop badge', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('keeps a floating pane label next to the tools button', () => {
+  it('keeps the agent name in the pane layout flow as a separate truncatable label', () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
-    render(<TerminalPane client={client} pane={{ ...mockPane, label: 'Claude 前端', agent_status: 'working' }} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
-    const chip = document.querySelector('.pane-status-chip')
+    render(<TerminalPane client={client} pane={{ ...mockPane, label: 'Claude 前端', agent_status: 'working' }} connectionEpoch={1} active onFocus={() => {}} onViewModeChange={() => {}} theme={{}} enhancedContrast={false}/>)
+    const header = document.querySelector('.pane-header') as HTMLElement
+    expect(header).not.toBeNull()
+    const chip = header.querySelector('.pane-header-name')
     expect(chip).toHaveTextContent('Claude 前端')
     expect(chip?.querySelector('.status-working')).toBeTruthy()
     expect(chip?.closest('.terminal-titlebar')).toBeNull()
     expect(chip).toBeVisible()
-    expect(screen.getByRole('button', { name: '终端工具' })).toBeInTheDocument()
+    // Agent 名称是独立信息，不是开关标签：开关有独立的 role/label。
+    const toggle = within(header).getByRole('switch')
+    expect(toggle).not.toHaveTextContent('Claude 前端')
+    expect(chip?.contains(toggle)).toBe(false)
+    expect(within(header).getByRole('button', { name: '终端工具' })).toBeInTheDocument()
+    // header 与 body 都在布局流里，终端画面与对话覆盖层都只属于 body。
+    expect(document.querySelector('.pane-body')).not.toBeNull()
+    expect(document.querySelector('.pane-body > .terminal-viewport')).not.toBeNull()
+    expect(document.querySelector('.pane-header .terminal-viewport')).toBeNull()
   })
 
   it('shows a crop badge in fixed mode when the remote grid is larger than the viewport', async () => {
@@ -1010,5 +1020,132 @@ describe('TerminalPane status chip and crop badge', () => {
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }} sourceCols={80} sourceRows={40} layoutVersion={0}/>)
     expect(screen.queryByRole('button', { name: /已裁切/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('TerminalPane chat view', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('keeps xterm mounted, the stream open and acks flowing while a pane is in the chat view', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const close = vi.spyOn(client, 'closeTerminal').mockImplementation(() => {})
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const acknowledge = vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const call = vi.spyOn(client, 'call').mockResolvedValue({ read: { text: '真实终端文本' } })
+    const props = { client, hostID: 'hst_test', pane: mockPane, connectionEpoch: 1, active: true, connected: true, onFocus: () => {}, onViewModeChange: () => {}, theme: {}, enhancedContrast: false }
+    const { rerender } = render(<TerminalPane {...props} viewMode="terminal"/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const instances = terminalHarness.instances
+    const disposals = terminalHarness.disposals
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 1n, full: true, cols: 80, rows: 24, ansi: new TextEncoder().encode('live') }))
+
+    // 对话视图的记录只来自 owner 认证的结构化端点；这里给一份真实的逐轮 Q/A（含工具折叠）。
+    // 终端屏幕文本（pane.read）**不再**是对话数据源，这是本用例要锁住的行为。
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const body = url.includes('session=')
+        ? {
+          supported: true, agent: 'claude', session_id: 'aaaa1111bbbb', binding: 'selected', next_cursor: 'cur-1',
+          messages: [
+            { id: 'u1', role: 'user', blocks: [{ type: 'text', text: '把 header 高度改成 44' }] },
+            { id: 'a1', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'call-1', name: 'Edit', input: { file_path: 'ChatView.css' } }] },
+            { id: 't1', role: 'tool', blocks: [{ type: 'tool-result', call_id: 'call-1', output: 'updated', is_error: false }] },
+            { id: 'a2', role: 'assistant', blocks: [{ type: 'text', text: '已改成 44 并补了测试。' }] },
+          ],
+        }
+        : { supported: true, agent: 'claude', candidates: [{ id: 'cand-1', agent: 'claude', session_id: 'aaaa1111bbbb', updated_at: '2026-09-13T04:00:00Z' }], messages: [] }
+      return new Response(JSON.stringify(body), { status: 200 })
+    }))
+
+    rerender(<TerminalPane {...props} viewMode="chat"/>)
+    expect(screen.getByRole('region', { name: '对话视图' })).toBeInTheDocument()
+    // 覆盖层只盖住 header 下面的 body：header 在对话视图依然可见，开关仍可操作。
+    const header = document.querySelector('.pane-header') as HTMLElement
+    const chatRegion = screen.getByRole('region', { name: '对话视图' })
+    fireEvent.click(await within(chatRegion).findByRole('button', { name: /aaaa1111/ }))
+    expect(await within(chatRegion).findByText('把 header 高度改成 44')).toBeInTheDocument()
+    expect(within(chatRegion).getByText('已改成 44 并补了测试。')).toBeInTheDocument()
+    // 工具调用与工具结果以真实工具名 + call id 折叠呈现，且工具结果不会被当成用户问题。
+    expect(within(chatRegion).getAllByText('Edit')).toHaveLength(2)
+    expect(within(chatRegion).getAllByText('call-1')).toHaveLength(2)
+    expect(within(chatRegion).getByText('updated')).toBeInTheDocument()
+    // 旧行为（用 pane.read 的终端文本冒充对话）必须不存在：Chat 视图一次都没读过终端。
+    expect(call.mock.calls.filter(([method]) => method === 'pane.read')).toHaveLength(0)
+    expect(chatRegion).not.toHaveTextContent('真实终端文本')
+    expect(header).toBeVisible()
+    expect(header.contains(chatRegion)).toBe(false)
+    expect(chatRegion.closest('.pane-body')).not.toBeNull()
+    expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
+    // 切换只改变显示层：xterm 实例、终端流和输入通道都不重建。
+    expect(terminalHarness.instances).toBe(instances)
+    expect(terminalHarness.disposals).toBe(disposals)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(close).not.toHaveBeenCalled()
+    expect(terminalHarness.last?.options.disableStdin).toBe(true)
+
+    act(() => frames.mock.calls[0][1]({ streamID: 7, seq: 2n, full: false, cols: 80, rows: 24, ansi: new TextEncoder().encode('more') }))
+    expect(acknowledge).toHaveBeenCalledWith(7, 2n)
+
+    rerender(<TerminalPane {...props} viewMode="terminal"/>)
+    expect(screen.queryByRole('region', { name: '对话视图' })).not.toBeInTheDocument()
+    expect(terminalHarness.instances).toBe(instances)
+    expect(terminalHarness.disposals).toBe(disposals)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(terminalHarness.last?.options.disableStdin).toBe(false)
+  })
+
+  it('exposes one role=switch toggle in the pane header and switches without reopening the stream', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    vi.spyOn(client, 'call').mockResolvedValue({ read: { text: '' } })
+    const onViewModeChange = vi.fn()
+    render(<TerminalPane client={client} hostID="hst_test" pane={mockPane} connectionEpoch={1} active connected onFocus={() => {}} onViewModeChange={onViewModeChange} theme={{}} enhancedContrast={false} viewMode="terminal"/>)
+    // 只有一个主开关，且它不在“终端工具”抽屉里。
+    const switches = screen.getAllByRole('switch')
+    expect(switches).toHaveLength(1)
+    const toggle = switches[0]
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(toggle.closest('.pane-header')).not.toBeNull()
+    // 明确显示当前模式的两端文字，而不是两个按钮构成的分段控件。
+    expect(toggle).toHaveTextContent('Terminal')
+    expect(toggle).toHaveTextContent('Chat')
+    expect(within(toggle).queryAllByRole('button')).toHaveLength(0)
+    expect(screen.queryByRole('group', { name: '终端视图切换' })).not.toBeInTheDocument()
+    // 工具入口仍然保留：抽屉里不再放第二个视图开关。
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
+    const drawer = document.querySelector('.terminal-titlebar') as HTMLElement
+    expect(drawer).toBeVisible()
+    expect(drawer.querySelectorAll('[role="switch"]')).toHaveLength(0)
+    expect(drawer.querySelector('.pane-view-toggle')).toBeNull()
+    fireEvent.click(toggle)
+    expect(onViewModeChange).toHaveBeenCalledWith('chat')
+    // 切换会收起工具抽屉，但不会重开终端流。
+    expect(drawer).not.toBeVisible()
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('freezes the terminal grid while the chat view covers the body and refits when the terminal returns', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    vi.spyOn(client, 'call').mockResolvedValue({ read: { text: '' } })
+    const props = { client, hostID: 'hst_test', pane: mockPane, connectionEpoch: 1, active: true, connected: true, onFocus: () => {}, onViewModeChange: () => {}, theme: {}, enhancedContrast: false }
+    const { rerender } = render(<TerminalPane {...props} viewMode="terminal" sourceCols={100} sourceRows={30} layoutVersion={0}/>)
+    await waitFor(() => expect(terminalHarness.last?.cols).toBe(100))
+    expect(terminalHarness.last?.rows).toBe(30)
+
+    // 对话视图期间分屏比例变了也不能改 xterm 网格；模式不进流依赖，也不重开流。
+    rerender(<TerminalPane {...props} viewMode="chat" sourceCols={120} sourceRows={40} layoutVersion={1}/>)
+    expect(terminalHarness.last?.cols).toBe(100)
+    expect(terminalHarness.last?.rows).toBe(30)
+    expect(open).toHaveBeenCalledTimes(1)
+
+    // 切回终端时按现有 fit 补齐新尺寸。
+    rerender(<TerminalPane {...props} viewMode="terminal" sourceCols={120} sourceRows={40} layoutVersion={2}/>)
+    await waitFor(() => expect(terminalHarness.last?.cols).toBe(120))
+    expect(terminalHarness.last?.rows).toBe(40)
+    expect(open).toHaveBeenCalledTimes(1)
   })
 })

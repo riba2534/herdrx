@@ -1,0 +1,53 @@
+/* pane 的单个视图开关：Terminal [开关] Chat。
+   跟随 pane 布局流，不使用绝对定位，因此不会被同名信息块遮盖。 */
+.pane-view-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.pane-view-toggle:hover { background: var(--panel-strong); color: var(--text); }
+.pane-view-toggle:focus-visible { border-color: var(--accent); }
+.pane-view-toggle-label { color: var(--muted); }
+/* 当前模式高亮：用 aria-checked 作样式钩子，状态与无障碍语义不会不同步。 */
+.pane-view-toggle[aria-checked="false"] .pane-view-toggle-label-terminal,
+.pane-view-toggle[aria-checked="true"] .pane-view-toggle-label-chat { color: var(--text); font-weight: 650; }
+.pane-view-toggle-track {
+  position: relative;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 16px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  transition: background-color 150ms, border-color 150ms;
+}
+.pane-view-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 150ms, background-color 150ms;
+}
+.pane-view-toggle[aria-checked="true"] .pane-view-toggle-track { background: var(--accent-soft); border-color: var(--accent); }
+.pane-view-toggle[aria-checked="true"] .pane-view-toggle-thumb { transform: translateX(14px); background: var(--accent); }
+
+@media (pointer: coarse) { .pane-view-toggle { height: 32px; padding: 0 6px; } }
+.workbench-compact .pane-view-toggle { height: 36px; }
+@media (prefers-reduced-motion: reduce) {
+  .pane-view-toggle-track, .pane-view-toggle-thumb { transition: none; }
+}

@@ -4,6 +4,7 @@ import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
+import { clearPaneViewModes, readPaneViewMode } from '../lib/paneViewMode'
 
 const { call, connection, retryNow } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string, message: '', retryAt: 0 }, retryNow: vi.fn() }))
 const snapshot: Snapshot = {
@@ -45,12 +46,26 @@ vi.mock('../lib/api', () => ({
   currentSessionID: () => 'workbench-session',
   onAuthEvent: () => () => {},
 }))
-vi.mock('../components/TerminalPane', () => ({ TerminalPane: () => null }))
+// 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
+// 并提供和真实工具栏一致的“终端 / 对话”切换入口。
+vi.mock('../components/TerminalPane', () => ({
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void }) => <div
+    data-testid={`terminal-pane-${props.pane.pane_id}`}
+    data-view-mode={props.viewMode}
+    data-connected={props.connected ? 'true' : 'false'}
+    data-active={props.active ? 'true' : 'false'}
+  >
+    <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
+    <button aria-label={`${props.pane.pane_id} 切到对话视图`} aria-pressed={props.viewMode === 'chat'} onClick={() => props.onViewModeChange('chat')}>对话</button>
+    <button aria-label={`${props.pane.pane_id} 切回终端视图`} aria-pressed={props.viewMode === 'terminal'} onClick={() => props.onViewModeChange('terminal')}>终端</button>
+  </div>,
+}))
 
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
   clearComposerDrafts()
+  clearPaneViewModes()
   call.mockClear()
   retryNow.mockClear()
   connection.state = 'ready'
@@ -401,5 +416,76 @@ describe('workbench split resize', () => {
     render(<WorkbenchPage hostID="host"/>)
     await screen.findByRole('button', { name: '切换工作区或终端' })
     expect(screen.queryByRole('separator', { name: '左右调整分屏' })).not.toBeInTheDocument()
+  })
+})
+
+describe('workbench pane view mode', () => {
+  beforeEach(() => {
+    snapshot.panes = [
+      { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'idle', focused: true, revision: 1 },
+      { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
+    ]
+    snapshot.layouts = [{
+      workspace_id: 'w1', tab_id: 'w1:t1', focused_pane_id: 'w1:p1', splits: [], zoomed: false,
+      area: { x: 0, y: 0, width: 80, height: 40 },
+      panes: [
+        { pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 40, height: 40 } },
+        { pane_id: 'w1:p2', focused: false, rect: { x: 40, y: 0, width: 40, height: 40 } },
+      ],
+    }]
+  })
+
+  it('keeps the chat view per pane and hides the workbench input box for the pane that is in chat', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: '本地输入框' })
+    fireEvent.click(screen.getByRole('button', { name: '本地输入框' }))
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'terminal')
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-view-mode', 'terminal')
+    expect(screen.getByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-connected', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 切到对话视图' }))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'chat'))
+    // 对话视图自带底部输入框，工作台不再渲染第二个输入框。
+    await waitFor(() => expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument())
+    // 另一个 pane 和另一个主机都不受这次切换影响。
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-view-mode', 'terminal')
+    expect(readPaneViewMode('host', 'w1:p1')).toBe('chat')
+    expect(readPaneViewMode('host', 'w1:p2')).toBe('terminal')
+    expect(readPaneViewMode('host-other', 'w1:p1')).toBe('terminal')
+
+    // 切到另一个 pane：它仍是终端视图，输入框回来。
+    fireEvent.click(screen.getByRole('button', { name: '聚焦 w1:p2' }))
+    await waitFor(() => expect(screen.getByRole('region', { name: '本地输入' })).toBeInTheDocument())
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-view-mode', 'terminal')
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'true')
+
+    // 回到原 pane：对话视图按 pane 记忆，不需要重新选择。
+    fireEvent.click(screen.getByRole('button', { name: '聚焦 w1:p1' }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument())
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'chat')
+
+    // 切回终端视图：模式写回终端，输入框恢复。
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 切回终端视图' }))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'terminal'))
+    expect(screen.getByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    expect(readPaneViewMode('host', 'w1:p1')).toBe('terminal')
+  })
+
+  it('offers the same view switch from the switcher actions and follows the connection state', async () => {
+    connection.state = 'reconnecting'
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: '切换工作区或终端' })
+    // 断线时 pane 收到 connected=false，对话视图据此暂停刷新并禁用发送。
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-connected', 'false')
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'terminal')
+
+    fireEvent.click(screen.getByRole('button', { name: '切换工作区或终端' }))
+    fireEvent.click(within(screen.getByRole('dialog', { name: '切换工作区或终端' })).getByRole('button', { name: /切换到对话视图/ }))
+    await waitFor(() => expect(readPaneViewMode('host', 'w1:p1')).toBe('chat'))
+    expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '切换工作区或终端' }))
+    expect(within(screen.getByRole('dialog', { name: '切换工作区或终端' })).getByRole('button', { name: /切换到终端视图/ })).toHaveAttribute('aria-pressed', 'true')
   })
 })

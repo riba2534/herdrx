@@ -1,0 +1,108 @@
+/*
+ * 语音输入的样式。只作用于 .voice-input 命名空间，不追加到 styles.css，
+ * 也不覆盖任何既有选择器。
+ */
+
+.voice-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted, #8b949e);
+}
+
+.voice-input-compact {
+  gap: 4px;
+  padding: 2px 0;
+}
+
+.voice-input-unavailable {
+  color: var(--text-muted, #8b949e);
+}
+
+.voice-input-unavailable svg {
+  flex: none;
+}
+
+.voice-input-toggle,
+.voice-input-stop,
+.voice-input-audio,
+.voice-input-interrupt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 30px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+}
+
+.voice-input-toggle[aria-pressed='true'] {
+  border-color: var(--accent, #2f81f7);
+}
+
+/* 录音中：用脉冲边框表达“正在采集”，不引入动画之外的副作用。 */
+.voice-input-listening {
+  position: relative;
+  border-color: var(--danger, #f85149);
+}
+
+.voice-input-listening::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 11px;
+  border: 1px solid var(--danger, #f85149);
+  opacity: 0.5;
+  animation: voice-input-pulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes voice-input-pulse {
+  0% { opacity: 0.55; transform: scale(0.96); }
+  100% { opacity: 0; transform: scale(1.14); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-input-listening::after { animation: none; opacity: 0.35; }
+}
+
+.voice-input-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-input-partial {
+  flex: 1 1 100%;
+  color: var(--text, #c9d1d9);
+  font-style: italic;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 明确区分：语音模型的回答与终端 Agent 的输出是两条不同的通道。 */
+.voice-input-note {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--text-muted, #8b949e);
+  opacity: 0.85;
+}
+
+.voice-input-compact .voice-input-note,
+.voice-input-compact .voice-input-status {
+  display: none;
+}
+
+.voice-input-compact .voice-input-partial {
+  flex: 1 1 auto;
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -14,6 +14,10 @@ docker exec herdrx /app/herdrx-server healthcheck
 
 首次初始化 token 位于本地 `./data/bootstrap-token`，日志仅提示文件位置。管理员创建成功后文件删除，令牌原文不写入日志。
 
+## Chat 图片与语音
+
+图片在 Chat 中先暂存，发送时才提交引用。语音需管理员显式启用并配置网关，密钥只留在工作台后端；备份时一并保存受限的 `voice.env`，不要公开或写进前端变量。麦克风权限、安全上下文、资源上限与排障见 [媒体输入说明](voice-input.md)。
+
 ## System OpenSSH 运维
 
 `HERDRX_SSH_BIN` 默认空（禁用）；启用后只有管理员能添加或访问 `system_ssh` 主机。每台活动主机使用独立、权限受限的 OpenSSH ControlMaster 和本地 Unix socket，不接管用户现有 SSH master；断开访问仅关闭此连接及观察进程，不停止远程 Herdr。网站密码/密钥连接及 Tailcat 不受影响。

@@ -138,6 +138,21 @@ describe('Composer', () => {
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
   })
 
+  it('ignores repeated Enter and repeated Ctrl/Cmd+Enter keydown without sending', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '本地输入内容' })
+    typeLocal('长按产生的内容')
+    fireEvent.keyDown(box, { key: 'Enter', repeat: true })
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, repeat: true })
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true, repeat: true })
+    expect(submit).not.toHaveBeenCalled()
+    // Ctrl+Enter 的单次按键仍然按既有语义发送。
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '长按产生的内容')
+  })
+
   it('shows a disconnected placeholder while the host cannot send', () => {
     render(<Composer hostID="host" paneID="p1" sendDisabled placeholder="主机未连接，暂不能发送" {...props} submit={vi.fn()}/>)
     expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveAttribute('placeholder', '主机未连接，暂不能发送')
@@ -202,6 +217,176 @@ describe('Composer', () => {
     render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
     expect(screen.getByRole('status')).toHaveTextContent('结果未知')
     expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('already on the wire')
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Composer media host', () => {
+  /** 最小媒体层替身：只实现冻结的 ComposerMediaHost 接口。 */
+  function mediaHost(overrides: Partial<Parameters<typeof Composer>[0]['mediaHost']> = {}) {
+    return {
+      canSend: vi.fn(() => false),
+      compose: vi.fn((draft: string) => draft),
+      onSettled: vi.fn(),
+      onFiles: vi.fn(),
+      ...overrides,
+    }
+  }
+
+  it('keeps the pre-wiring behavior byte for byte when the media host is absent', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.paste(box, { clipboardData: { items: [{ kind: 'file', getAsFile: () => new File(['x'], 'a.png', { type: 'image/png' }) }], files: [] } })
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('sends an image-only message once: composes with the media host, then settles', async () => {
+    const host = mediaHost({ canSend: vi.fn(() => true), compose: vi.fn(() => '/remote/a.png') })
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit} mediaHost={host}/>)
+    const button = screen.getByRole('button', { name: '发送' })
+    expect(button).toBeEnabled()
+
+    fireEvent.click(button)
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(host.compose).toHaveBeenCalledWith('')
+    expect(submit).toHaveBeenCalledWith('p1', '/remote/a.png')
+    await waitFor(() => expect(host.onSettled).toHaveBeenCalledWith('delivered'))
+  })
+
+  it('sends text plus references as one submission and never types at paste time', async () => {
+    const host = mediaHost({ compose: vi.fn((draft: string) => `${draft}\n/remote/a.png`) })
+    const onPasteImages = vi.fn()
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit} onPasteImages={onPasteImages} mediaHost={host}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    const shot = new File(['x'], 'shot.png', { type: 'image/png' })
+
+    fireEvent.paste(box, { clipboardData: { items: [{ kind: 'file', getAsFile: () => shot }], files: [] } })
+    // 粘贴只交给媒体层暂存：不发送、不走旧的整体上传入口。
+    expect(host.onFiles).toHaveBeenCalledWith([shot])
+    expect(onPasteImages).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
+
+    fireEvent.change(box, { target: { value: '看这张图' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '看这张图\n/remote/a.png')
+  })
+
+  it('abandons the send when the media host refuses to compose', async () => {
+    const host = mediaHost({ canSend: vi.fn(() => true), compose: vi.fn(() => null) })
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit} mediaHost={host}/>)
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    expect(submit).not.toHaveBeenCalled()
+    expect(readComposerSend('host', 'p1').status).toBe('idle')
+  })
+
+  it('keeps medium edits blocked while the media host is busy and renders its tray above the input', () => {
+    const host = mediaHost({ canSend: vi.fn(() => false) })
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={vi.fn()} mediaHost={{ ...host, tray: <p>图片附件占位区</p> }}/>)
+    const tray = screen.getByText('图片附件占位区')
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    // 占位区必须在 textarea 之前（上方），且不抢走输入焦点。
+    expect(tray.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('Composer chat variant', () => {
+  it('sends exactly once with Enter, keeps Shift+Enter and IME Enter as newlines, and has no second mode switch', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    expect(screen.getByRole('region', { name: '对话输入' })).toBeInTheDocument()
+    expect(box).toHaveAttribute('enterkeyhint', 'send')
+    // 对话视图复用同一套草稿与发送事务，不出现第二个输入方式切换。
+    expect(screen.queryByRole('button', { name: /输入方式/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '本地输入' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '直接输入终端' })).not.toBeInTheDocument()
+
+    fireEvent.change(box, { target: { value: '第一行' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true })
+    fireEvent.keyDown(box, { key: 'Process' })
+    fireEvent.keyDown(box, { key: 'Enter', isComposing: true })
+    expect(submit).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '第一行')
+    // 发送后草稿清空，重复按键不会再发一次。
+    await waitFor(() => expect(box).toHaveValue(''))
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the chat draft and never sends while the host is disconnected', () => {
+    const submit = vi.fn()
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" sendDisabled submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    fireEvent.change(box, { target: { value: '断线时输入的内容' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(submit).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+    expect(readComposerDraft('host', 'p1')).toBe('断线时输入的内容')
+    expect(readComposerSend('host', 'p1').status).toBe('idle')
+  })
+
+  it('sends with Ctrl/Cmd+Enter while Shift+Enter keeps newlines even with extra modifiers', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    fireEvent.change(box, { target: { value: '第一行' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, ctrlKey: true })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, metaKey: true })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, altKey: true })
+    expect(submit).not.toHaveBeenCalled()
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '第一行')
+    await waitFor(() => expect(box).toHaveValue(''))
+    fireEvent.change(box, { target: { value: '第二行' } })
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenLastCalledWith('p1', '第二行')
+  })
+
+  it('ignores repeated Enter keydown and presses on an empty draft', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    // 空内容与纯空白都不能发送。
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.change(box, { target: { value: '   ' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(submit).not.toHaveBeenCalled()
+    // 长按 Enter：repeat 的 keydown 不发送，只有单次按键才发送。
+    fireEvent.change(box, { target: { value: '长按' } })
+    fireEvent.keyDown(box, { key: 'Enter', repeat: true })
+    fireEvent.keyDown(box, { key: 'Enter', repeat: true })
+    expect(submit).not.toHaveBeenCalled()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '长按')
+  })
+
+  it('does not send twice while a chat message is still in flight', async () => {
+    let finish: () => void = () => {}
+    const submit = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
+    const box = screen.getByRole('textbox', { name: '对话输入内容' })
+    fireEvent.change(box, { target: { value: '发送中的内容' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('发送中'))
+    expect(submit).toHaveBeenCalledTimes(1)
+    await act(async () => finish())
+    await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
     expect(submit).toHaveBeenCalledTimes(1)
   })
 })

@@ -3,6 +3,7 @@ import { ChevronUp, Keyboard, SquareTerminal } from 'lucide-react'
 import { Button } from './ui'
 import { clipboardImages } from '../lib/imagePaste'
 import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerSend, subscribeComposer, writeComposerDraft, type ComposerSendState } from '../lib/composerDrafts'
+import type { ComposerMediaHost } from '../lib/chatMediaTypes'
 import './Composer.css'
 
 function composing(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
@@ -92,19 +93,28 @@ function InputModeMenu({ directInput, onDirectInput, onLocalInput }: {
   </div>
 }
 
-export function Composer({ hostID, paneID, visible, directInput, compact = false, sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages }: {
+export function Composer({ hostID, paneID, visible, directInput, compact = false, variant = 'dock', sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages, mediaHost }: {
   hostID: string
   paneID: string
   visible: boolean
   directInput: boolean
   compact?: boolean
+  /** `chat` 复用同一套草稿与发送事务，但按对话习惯让 Enter 直接发送。 */
+  variant?: 'dock' | 'chat'
   sendDisabled?: boolean
   placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
   submit: (paneID: string, text: string) => Promise<void>
   onPasteImages?: (files: File[]) => void
+  /**
+   * 可选的媒体层接线点（图片附件）。缺席时本组件行为与接线前**逐字节一致**：
+   * 空草稿一律不能发送、粘贴的图片交给 `onPasteImages`、不渲染附件占位区。
+   * 见 docs/design/chat-media-contract.md §8.3。
+   */
+  mediaHost?: ComposerMediaHost
 }) {
+  const chat = variant === 'chat'
   const [value, setValue] = useState(() => readComposerDraft(hostID, paneID))
   const [send, setSend] = useState(() => readComposerSend(hostID, paneID))
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -154,13 +164,33 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
   }
 
   const sendNow = () => {
-    if (sendDisabled || !paneID || composerInFlight(hostID, paneID) || !value.trim()) return
+    if (sendDisabled || !paneID || composerInFlight(hostID, paneID)) return
+    // 「仅图片也能发」：没有正文但媒体层有已 staged 的附件时同样可发送。
+    if (!value.trim() && !mediaHost?.canSend()) return
+    if (mediaHost) {
+      // 文本与图片引用合成为**一次**提交；null 表示本次放弃（正文与引用都为空）。
+      const composed = mediaHost.compose(readComposerDraft(hostID, paneID))
+      if (composed === null) return
+      writeComposerDraft(hostID, paneID, composed)
+    }
     void runComposerSend(hostID, paneID, submit)
+      .then(() => mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status))
   }
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (composing(event)) return
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    if (event.key !== 'Enter') return
+    // 长按 Enter 会持续产生 repeat keydown，这里一律不发送；发送中的重入由 composerInFlight 拦截。
+    if (event.repeat) return
+    if (event.ctrlKey || event.metaKey) {
+      // 对话视图 Shift+Enter 优先换行，Ctrl/Cmd+Shift+Enter 也不发送。
+      if (chat && event.shiftKey) return
+      event.preventDefault()
+      sendNow()
+      return
+    }
+    // 对话视图：Enter 发送；Shift+Enter 以及带其他修饰键的组合保持换行。
+    if (chat && !event.shiftKey && !event.altKey) {
       event.preventDefault()
       sendNow()
     }
@@ -170,7 +200,9 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
     const files = clipboardImages(event.clipboardData)
     if (!files.length) return
     event.preventDefault()
-    onPasteImages?.(files)
+    // 有媒体层时，粘贴的图片只落占位并 stage-only 上传；绝不在这里发往终端。
+    if (mediaHost) mediaHost.onFiles?.(files)
+    else onPasteImages?.(files)
   }
 
   if (!visible) return null
@@ -179,20 +211,21 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
   const empty = !value.trim()
   const canEdit = Boolean(paneID)
   const selectLocalInput = () => { onLocalInput(); textareaRef.current?.focus() }
-  return <div className={`composer${compact ? ' composer-compact' : ''}`} role="region" aria-label="本地输入">
-    {compact && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}
+  return <div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
+    {compact && !chat && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}
+    {mediaHost?.tray && <div className="composer-media">{mediaHost.tray}</div>}
     <textarea
       ref={textareaRef}
       className="input composer-input"
-      aria-label="本地输入内容"
+      aria-label={chat ? '对话输入内容' : '本地输入内容'}
       rows={compact ? 1 : 2}
       value={value}
-      placeholder={placeholder || (canEdit ? compact ? '本地输入，可换行' : '在本地编辑，发送后整段进入当前终端' : '请先选择一个终端再编辑')}
+      placeholder={placeholder || (canEdit ? compact ? (chat ? '输入消息，Enter 发送' : '本地输入，可换行') : chat ? '输入消息，Enter 发送，Shift+Enter 换行' : '在本地编辑，发送后整段进入当前终端' : '请先选择一个终端再编辑')}
       autoComplete="off"
       autoCorrect="off"
       autoCapitalize="off"
       spellCheck={false}
-      enterKeyHint="enter"
+      enterKeyHint={chat ? 'send' : 'enter'}
       disabled={!canEdit}
       onChange={(event) => change(event.target.value)}
       onFocus={onLocalInput}
@@ -200,10 +233,10 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
       onPaste={onPaste}
     />
     <div className="composer-side">
-      <Button className="button-primary composer-send" disabled={sendDisabled || empty || sendingHere || !paneID} pending={sendingHere} onClick={sendNow}>发送</Button>
+      <Button className="button-primary composer-send" disabled={sendDisabled || (empty && !mediaHost?.canSend()) || sendingHere || !paneID} pending={sendingHere} onClick={sendNow}>发送</Button>
     </div>
     {(!compact || current.status !== 'idle') && <div className="composer-meta">
-      {!compact && <div className="composer-modes">
+      {!compact && !chat && <div className="composer-modes">
         <button type="button" className={directInput ? '' : 'composer-mode-active'} aria-pressed={!directInput} onClick={selectLocalInput}>本地输入</button>
         <button type="button" className={directInput ? 'composer-mode-active' : ''} aria-pressed={directInput} onClick={onDirectInput}>直接输入终端</button>
       </div>}
