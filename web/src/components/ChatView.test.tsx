@@ -158,6 +158,87 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('latest-message following', () => {
+  function scrollGeometry(log: HTMLElement) {
+    const size = { height: 1200, viewport: 400, top: 800 }
+    Object.defineProperties(log, {
+      scrollHeight: { configurable: true, get: () => size.height },
+      clientHeight: { configurable: true, get: () => size.viewport },
+      scrollTop: {
+        configurable: true, get: () => size.top,
+        set: (value: number) => { size.top = Math.max(0, Math.min(value, size.height - size.viewport)) },
+      },
+    })
+    fireEvent.scroll(log)
+    return size
+  }
+
+  async function openChat() {
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('回答中')
+    return screen.getByRole('log', { name: '对话记录' })
+  }
+
+  it('ignores small bottom gaps and uses separate leave/return thresholds', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    for (const gap of [0, 24, 48, 100, 128]) {
+      size.top = 800 - gap
+      fireEvent.scroll(log)
+      expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    }
+    size.top = 500
+    fireEvent.scroll(log)
+    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
+    size.top = 710
+    fireEvent.scroll(log)
+    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
+    size.top = 750
+    fireEvent.scroll(log)
+    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+  })
+
+  it('follows same-ID reply growth without relying on message count', async () => {
+    transcriptServer(sequence(candidatesPage,
+      boundPage([text('a1', 'assistant', '回答中')]),
+      boundPage([text('a1', 'assistant', '回答已经变长')]),
+    ))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    size.height = 1700
+    fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
+    await screen.findByText('回答已经变长')
+    expect(size.top).toBe(1300)
+    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+  })
+
+  it('follows layout resizing but does not pull a historical reader to the bottom', async () => {
+    const callbacks = new Set<() => void>()
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private callback: () => void) { callbacks.add(callback) }
+      observe() {}
+      disconnect() { callbacks.delete(this.callback) }
+    })
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    size.viewport = 250
+    act(() => { for (const callback of callbacks) callback() })
+    expect(size.top).toBe(950)
+    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    size.top = 400
+    fireEvent.scroll(log)
+    size.height = 1800
+    act(() => { for (const callback of callbacks) callback() })
+    expect(size.top).toBe(400)
+    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    expect(size.top).toBe(1550)
+    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+  })
+})
+
 describe('candidate selection', () => {
   it('lists candidates and never claims one automatically', async () => {
     const client = createClient()

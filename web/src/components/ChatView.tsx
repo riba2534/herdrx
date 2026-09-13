@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ChevronUp, Clock3, MessageSquare, RefreshCw, SquareTerminal, TriangleAlert } from 'lucide-react'
 import { ChatMediaComposer } from './media/ChatMediaComposer'
 import { VoiceInput } from './media/VoiceInput'
@@ -54,6 +54,38 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const [voiceReply, setVoiceReply] = useState('')
   const voiceFinalRef = useRef(false)
   const logRef = useRef<HTMLDivElement>(null)
+  const followingRef = useRef(true)
+  const logSizeRef = useRef({ height: 0, viewport: 0 })
+
+  const syncLatest = useCallback(() => {
+    const log = logRef.current
+    if (!log) return
+    if (followingRef.current) log.scrollTop = log.scrollHeight
+    const gap = Math.max(0, log.scrollHeight - log.clientHeight - log.scrollTop)
+    if (gap <= 64) followingRef.current = true
+    logSizeRef.current = { height: log.scrollHeight, viewport: log.clientHeight }
+    setAtLatest(followingRef.current)
+  }, [])
+
+  const jumpToLatest = useCallback(() => {
+    followingRef.current = true
+    syncLatest()
+  }, [syncLatest])
+
+  const onLogScroll = useCallback(() => {
+    const log = logRef.current
+    if (!log) return
+    // Content/input resizing is not a request to stop following the latest turn.
+    const size = logSizeRef.current
+    if (size.height !== log.scrollHeight || size.viewport !== log.clientHeight) {
+      syncLatest()
+      return
+    }
+    const gap = Math.max(0, log.scrollHeight - log.clientHeight - log.scrollTop)
+    // Separate leave/return thresholds prevent trackpad and rounding jitter.
+    followingRef.current = gap <= (followingRef.current ? 128 : 64)
+    setAtLatest(followingRef.current)
+  }, [syncLatest])
 
   /**
    * 图片 stage-only 上传：`inject=false` 只把图片落到远端并返回路径，**绝不**向终端打字。
@@ -102,11 +134,19 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   // 断线或页面隐藏时暂停轮询，恢复后立刻补一次增量；不重读全量。
   useEffect(() => { session.setActive(connected && docVisible) }, [session, connected, docVisible])
 
-  useEffect(() => {
-    if (!atLatest) return
+  useLayoutEffect(() => { jumpToLatest() }, [session, state.session, jumpToLatest])
+
+  // Same-ID streaming updates and loading notices can change height without adding a turn.
+  useLayoutEffect(() => { syncLatest() }, [snapshot, syncLatest])
+
+  useLayoutEffect(() => {
     const log = logRef.current
-    log?.scrollTo?.({ top: log.scrollHeight })
-  }, [state.messages.length, turns.length, atLatest])
+    if (!log || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(syncLatest)
+    observer.observe(log)
+    for (const child of log.children) observer.observe(child)
+    return () => observer.disconnect()
+  }, [snapshot, syncLatest])
 
   const name = paneDisplayName(pane)
   const status = pane.agent_status || 'unknown'
@@ -130,11 +170,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
     </p>
 
     <div className="chat-log-wrap">
-      <div className="chat-log" ref={logRef} tabIndex={0} role="log" aria-label="对话记录" onScroll={() => {
-        const log = logRef.current
-        if (!log) return
-        setAtLatest(log.scrollHeight - log.scrollTop - log.clientHeight < 24)
-      }}>
+      <div className="chat-log" ref={logRef} tabIndex={0} role="log" aria-label="对话记录" onScroll={onLogScroll}>
         {state.status === 'loading' && !bound && !candidates.length && <div className="chat-state" role="status"><Clock3 size={22} aria-hidden="true"/><strong>正在读取会话记录</strong><span>从该终端所在主机读取 Agent 自己写下的会话记录。</span></div>}
         {state.status === 'unavailable' && <div className="chat-state chat-state-error" role="alert" aria-label="结构化记录不可用">
           <TriangleAlert size={22} aria-hidden="true"/><strong>暂不支持结构化会话记录</strong>
@@ -176,7 +212,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
           {state.status === 'empty' && !state.previousCursor && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
         </>}
       </div>
-      {!atLatest && bound && <button type="button" className="chat-jump" onClick={() => { setAtLatest(true); const log = logRef.current; log?.scrollTo?.({ top: log.scrollHeight }) }}><ChevronUp size={12} aria-hidden="true"/>跳到最新</button>}
+      {!atLatest && bound && <button type="button" className="chat-jump" onClick={jumpToLatest}><ChevronUp size={12} aria-hidden="true"/>跳到最新</button>}
     </div>
 
     {!connected && <p className="chat-disconnected" role="alert">主机未连接，已暂停读取会话记录，也不能发送；重新连接后会自动继续。</p>}

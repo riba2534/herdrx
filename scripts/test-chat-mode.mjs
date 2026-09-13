@@ -285,6 +285,42 @@ try {
         assert.deepEqual(desk.errors, [])
       })
 
+      // Bottom-following must survive same-ID reply growth and composer resizing.
+      await withFixture(browser, desktop, {}, async ({ page }) => {
+        const original = QA[1].blocks[0].text
+        try {
+          QA[1].blocks[0].text = Array.from({ length: 80 }, (_, i) => `Reply line ${i}`).join('\n\n')
+          await page.getByRole('switch', { name: '对话视图' }).first().click()
+          const chat = page.getByRole('region', { name: '对话视图' })
+          await chat.getByRole('button', { name: /aaaa1111/ }).click()
+          const log = chat.getByRole('log')
+          const jump = chat.getByRole('button', { name: '跳到最新' })
+          const gap = () => log.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)
+          await expect.poll(gap).toBeLessThan(2)
+          await log.evaluate((node) => { node.scrollTop -= 48 })
+          await expect(jump).toHaveCount(0)
+          QA[1].blocks[0].text += '\n\n' + 'Growing same reply.\n\n'.repeat(40)
+          await chat.getByRole('button', { name: '刷新会话记录' }).click()
+          await expect(log).toContainText('Growing same reply.')
+          await expect.poll(gap).toBeLessThan(2)
+          await chat.getByRole('textbox').fill('Draft\n'.repeat(8))
+          await expect.poll(gap).toBeLessThan(2)
+          await expect(jump).toHaveCount(0)
+          await log.evaluate((node) => { node.scrollTop -= 300 })
+          await expect(jump).toBeVisible()
+          const previousTop = await log.evaluate((node) => node.scrollTop)
+          QA[1].blocks[0].text += '\n\nWhile reading history.\n\n'.repeat(20)
+          await chat.getByRole('button', { name: '刷新会话记录' }).click()
+          await expect(log).toContainText('While reading history.')
+          assert.ok(Math.abs(await log.evaluate((node) => node.scrollTop) - previousTop) < 2, 'reply update pulled reader away from history')
+          await jump.click()
+          await expect.poll(gap).toBeLessThan(2)
+          await expect(jump).toHaveCount(0)
+        } finally {
+          QA[1].blocks[0].text = original
+        }
+      })
+
       // 另一个 pane 保持终端视图，模式按 pane 隔离（走面板右键菜单这条入口）。
       await withFixture(browser, desktop, {}, async (iso) => {
         await iso.page.locator('.pane-position').nth(1).click({ button: 'right' })
