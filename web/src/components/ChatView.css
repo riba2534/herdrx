@@ -27,7 +27,9 @@
 .chat-head-session small { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
 
 /* 记录区：整列文档流，用户靠右、助手靠左。 */
-.chat-view .chat-log { overflow-x: hidden; }
+.chat-view .chat-log { overflow-x: hidden; scrollbar-gutter: stable; }
+/* 跟随时只由应用定位；阅读历史时保留浏览器对上方内容变化的锚定。 */
+.chat-view .chat-log:not([data-following="false"]) { overflow-anchor: none; }
 .chat-turn { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-turn-user { display: flex; justify-content: flex-end; min-width: 0; }
 

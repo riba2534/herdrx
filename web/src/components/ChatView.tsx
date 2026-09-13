@@ -55,37 +55,51 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const voiceFinalRef = useRef(false)
   const logRef = useRef<HTMLDivElement>(null)
   const followingRef = useRef(true)
-  const logSizeRef = useRef({ height: 0, viewport: 0 })
+  const logSizeRef = useRef({ height: 0, viewport: 0, top: 0 })
+  const touchYRef = useRef<number | null>(null)
+
+  const setFollowing = useCallback((following: boolean) => {
+    followingRef.current = following
+    if (logRef.current) logRef.current.dataset.following = String(following)
+  }, [])
+
+  const updateLatestIndicator = useCallback((gap: number) => {
+    setAtLatest((previous) => gap <= (previous ? 128 : 64))
+  }, [])
 
   const syncLatest = useCallback(() => {
     const log = logRef.current
     if (!log) return
-    if (followingRef.current) log.scrollTop = log.scrollHeight
-    const gap = Math.max(0, log.scrollHeight - log.clientHeight - log.scrollTop)
-    if (gap <= 64) followingRef.current = true
-    logSizeRef.current = { height: log.scrollHeight, viewport: log.clientHeight }
-    setAtLatest(followingRef.current)
-  }, [])
+    const bottom = Math.max(0, log.scrollHeight - log.clientHeight)
+    if (followingRef.current && Math.abs(log.scrollTop - bottom) > 1) log.scrollTop = bottom
+    // Record our own write synchronously, before its queued scroll event arrives.
+    const gap = Math.max(0, bottom - log.scrollTop)
+    logSizeRef.current = { height: log.scrollHeight, viewport: log.clientHeight, top: log.scrollTop }
+    updateLatestIndicator(gap)
+  }, [updateLatestIndicator])
 
   const jumpToLatest = useCallback(() => {
-    followingRef.current = true
+    setFollowing(true)
     syncLatest()
-  }, [syncLatest])
+  }, [setFollowing, syncLatest])
 
   const onLogScroll = useCallback(() => {
     const log = logRef.current
     if (!log) return
     // Content/input resizing is not a request to stop following the latest turn.
     const size = logSizeRef.current
+    const bottom = Math.max(0, log.scrollHeight - log.clientHeight)
+    // A shrinking document can clamp scrollTop; movement above that clamp is user navigation.
+    if (log.scrollTop < Math.min(size.top, bottom) - 1) setFollowing(false)
     if (size.height !== log.scrollHeight || size.viewport !== log.clientHeight) {
       syncLatest()
       return
     }
-    const gap = Math.max(0, log.scrollHeight - log.clientHeight - log.scrollTop)
-    // Separate leave/return thresholds prevent trackpad and rounding jitter.
-    followingRef.current = gap <= (followingRef.current ? 128 : 64)
-    setAtLatest(followingRef.current)
-  }, [syncLatest])
+    const gap = Math.max(0, bottom - log.scrollTop)
+    if (gap <= 2 && log.scrollTop > size.top + 1) setFollowing(true)
+    logSizeRef.current = { ...size, top: log.scrollTop }
+    updateLatestIndicator(gap)
+  }, [setFollowing, syncLatest, updateLatestIndicator])
 
   /**
    * 图片 stage-only 上传：`inject=false` 只把图片落到远端并返回路径，**绝不**向终端打字。
@@ -136,17 +150,29 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
 
   useLayoutEffect(() => { jumpToLatest() }, [session, state.session, jumpToLatest])
 
-  // Same-ID streaming updates and loading notices can change height without adding a turn.
-  useLayoutEffect(() => { syncLatest() }, [snapshot, syncLatest])
+  // Include pane-status and local UI commits, not only transcript polling.
+  useLayoutEffect(() => { syncLatest() })
 
   useLayoutEffect(() => {
     const log = logRef.current
     if (!log || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(syncLatest)
     observer.observe(log)
-    for (const child of log.children) observer.observe(child)
-    return () => observer.disconnect()
-  }, [snapshot, syncLatest])
+    const children = new Set<Element>()
+    const observeChildren = () => {
+      for (const child of children) {
+        if (child.parentElement !== log) { observer.unobserve(child); children.delete(child) }
+      }
+      for (const child of log.children) {
+        if (!children.has(child)) { observer.observe(child); children.add(child) }
+      }
+      syncLatest()
+    }
+    observeChildren()
+    const mutations = new MutationObserver(observeChildren)
+    mutations.observe(log, { childList: true })
+    return () => { mutations.disconnect(); observer.disconnect() }
+  }, [syncLatest])
 
   const name = paneDisplayName(pane)
   const status = pane.agent_status || 'unknown'
@@ -158,7 +184,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         <StatusDot status={status}/><strong>{name}</strong><small>{agentStatusLabel(status)}</small>
       </span>
       <span className="chat-head-actions">
-        {bound && <span className="chat-head-session" title="当前读取的会话记录"><code>{shortSessionID(state.sessionID || '')}</code>{state.agent && <small>{state.agent}</small>}</span>}
+        {bound && <span className="chat-head-session" data-tooltip="当前读取的会话记录"><code>{shortSessionID(state.sessionID || '')}</code>{state.agent && <small>{state.agent}</small>}</span>}
         {bound && <Button className="tool-button chat-reselect" aria-label="重新选择会话记录" data-tooltip="回到候选列表，重新选择读取哪一个会话记录" onClick={() => session.reselect()}>重选</Button>}
         <Button className="tool-button" aria-label="刷新会话记录" data-tooltip="立即重新读取会话记录" onClick={() => session.refresh()}><RefreshCw size={14}/></Button>
         <Button className="tool-button" aria-label="显示终端" data-tooltip="切换回终端视图（终端不中断）" onClick={onSwitchToTerminal}><SquareTerminal size={14}/></Button>
@@ -170,7 +196,17 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
     </p>
 
     <div className="chat-log-wrap">
-      <div className="chat-log" ref={logRef} tabIndex={0} role="log" aria-label="对话记录" onScroll={onLogScroll}>
+      <div className="chat-log" ref={logRef} tabIndex={0} role="log" aria-label="对话记录" onScroll={onLogScroll}
+        onPointerDownCapture={(event) => { if (event.target === event.currentTarget || event.button === 1) setFollowing(false) }}
+        onWheelCapture={(event) => { if (event.deltaY < 0) setFollowing(false) }}
+        onTouchStart={(event) => { touchYRef.current = event.touches[0]?.clientY ?? null }}
+        onTouchMove={(event) => {
+          const y = event.touches[0]?.clientY
+          if (y !== undefined && touchYRef.current !== null && y > touchYRef.current) setFollowing(false)
+          touchYRef.current = y ?? null
+        }}
+        onKeyDown={(event) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) setFollowing(false) }}
+      >
         {state.status === 'loading' && !bound && !candidates.length && <div className="chat-state" role="status"><Clock3 size={22} aria-hidden="true"/><strong>正在读取会话记录</strong><span>从该终端所在主机读取 Agent 自己写下的会话记录。</span></div>}
         {state.status === 'unavailable' && <div className="chat-state chat-state-error" role="alert" aria-label="结构化记录不可用">
           <TriangleAlert size={22} aria-hidden="true"/><strong>暂不支持结构化会话记录</strong>

@@ -32,14 +32,14 @@ export function ImageAttachments({ attachments, onRemove, onRetry, retryable, ov
             ? <img className="chat-media-thumb" src={attachment.previewURL} alt="" />
             : <span className="chat-media-thumb chat-media-thumb-fallback" aria-hidden="true"><ImageIcon size={18} /></span>}
           <span className="chat-media-info">
-            <span className="chat-media-name" title={attachment.name}>{attachment.name}</span>
+            <span className="chat-media-name" data-tooltip={attachment.name}>{attachment.name}</span>
             <span className="chat-media-state">
               <span className="chat-media-state-label" role="status" aria-live="polite">
                 {attachment.status === 'staging' && <LoaderCircle className="spin" size={12} aria-hidden="true" />}
                 {state}
               </span>
               {attachment.status === 'staged' && attachment.remotePath &&
-                <code className="chat-media-path" title={attachment.remotePath}>{formatChatMediaPath(attachment.remotePath)}</code>}
+                <code className="chat-media-path" data-tooltip={attachment.remotePath}>{formatChatMediaPath(attachment.remotePath)}</code>}
               {attachment.status === 'failed' &&
                 <span className="chat-media-error" role="alert">{attachment.error || '上传失败，请重试'}</span>}
             </span>

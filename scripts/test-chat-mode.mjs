@@ -297,11 +297,30 @@ try {
           const jump = chat.getByRole('button', { name: '跳到最新' })
           const gap = () => log.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)
           await expect.poll(gap).toBeLessThan(2)
-          await log.evaluate((node) => { node.scrollTop -= 48 })
+          assert.equal(await log.evaluate((node) => getComputedStyle(node).overflowAnchor), 'none', 'native anchoring competes with tail following')
+          // Top notices can change outside transcript polling (e.g. agent status).
+          for (let i = 0; i < 4; i++) {
+            await log.evaluate((node) => {
+              const notice = document.createElement('p')
+              notice.dataset.scrollFixture = 'true'
+              notice.textContent = 'Synthetic agent status notice'
+              node.prepend(notice)
+            })
+            await expect.poll(gap).toBeLessThan(2)
+            await log.locator('[data-scroll-fixture]').evaluate((node) => node.remove())
+            await expect.poll(gap).toBeLessThan(2)
+          }
+          await log.hover()
+          await page.mouse.wheel(0, -48)
+          await expect.poll(gap).toBeGreaterThan(10)
           await expect(jump).toHaveCount(0)
+          const nearBottomTop = await log.evaluate((node) => node.scrollTop)
           QA[1].blocks[0].text += '\n\n' + 'Growing same reply.\n\n'.repeat(40)
           await chat.getByRole('button', { name: '刷新会话记录' }).click()
           await expect(log).toContainText('Growing same reply.')
+          assert.ok(Math.abs(await log.evaluate((node) => node.scrollTop) - nearBottomTop) < 2, 'small upward wheel was undone by polling')
+          await expect(jump).toBeVisible()
+          await jump.click()
           await expect.poll(gap).toBeLessThan(2)
           await chat.getByRole('textbox').fill('Draft\n'.repeat(8))
           await expect.poll(gap).toBeLessThan(2)

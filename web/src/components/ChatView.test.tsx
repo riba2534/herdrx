@@ -200,6 +200,84 @@ describe('latest-message following', () => {
     expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
   })
 
+  it('does not resume following a small manual scroll when polling or resizing', async () => {
+    transcriptServer(sequence(candidatesPage,
+      boundPage([text('a1', 'assistant', '回答中')]),
+      boundPage([text('a1', 'assistant', '手动上翻后更新')]),
+    ))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    fireEvent.wheel(log, { deltaY: -48 })
+    size.top -= 48
+    fireEvent.scroll(log)
+    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    size.height = 1600
+    fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
+    await screen.findByText('手动上翻后更新')
+    expect(size.top).toBe(752)
+    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    expect(size.top).toBe(1200)
+  })
+
+  it('stops following touch and keyboard navigation before a resize event', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    fireEvent.touchStart(log, { touches: [{ clientY: 200 }] })
+    fireEvent.touchMove(log, { touches: [{ clientY: 250 }] })
+    size.top = 750
+    size.height = 1300
+    fireEvent.scroll(log)
+    expect(size.top).toBe(750)
+    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    fireEvent.keyDown(log, { key: 'PageUp' })
+    size.top = 850
+    size.viewport = 250
+    fireEvent.scroll(log)
+    expect(size.top).toBe(850)
+  })
+
+  it('preserves upward scrollbar movement even when content geometry is stale', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    size.height = 1600
+    size.top = 752
+    fireEvent.scroll(log)
+    expect(size.top).toBe(752)
+    expect(log.dataset.following).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    expect(size.top).toBe(1200)
+    expect(log.dataset.following).toBe('true')
+    fireEvent.scroll(log)
+    expect(log.dataset.following).toBe('true')
+  })
+
+  it('keeps following when document shrink clamps the scroll position', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const log = await openChat()
+    const size = scrollGeometry(log)
+    size.height = 1000
+    size.top = 600
+    fireEvent.scroll(log)
+    size.height = 1400
+    fireEvent.scroll(log)
+    expect(size.top).toBe(1000)
+  })
+
+  it('measures pane-status commits without waiting for a transcript poll', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
+    const viewProps = props()
+    const view = render(<ChatView {...viewProps}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('回答中')
+    const size = scrollGeometry(screen.getByRole('log', { name: '对话记录' }))
+    size.height = 1400
+    view.rerender(<ChatView {...viewProps} pane={{ ...basePane, agent_status: 'working' }}/>)
+    expect(size.top).toBe(1000)
+  })
+
   it('follows same-ID reply growth without relying on message count', async () => {
     transcriptServer(sequence(candidatesPage,
       boundPage([text('a1', 'assistant', '回答中')]),
@@ -219,6 +297,7 @@ describe('latest-message following', () => {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private callback: () => void) { callbacks.add(callback) }
       observe() {}
+      unobserve() {}
       disconnect() { callbacks.delete(this.callback) }
     })
     transcriptServer(sequence(candidatesPage, boundPage([text('a1', 'assistant', '回答中')])))
