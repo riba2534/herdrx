@@ -3,7 +3,7 @@ import { Input, Form, Textarea } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, MoreHorizontal, Pencil, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, MoreHorizontal, Pencil, Play, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { useAuth } from '../auth'
 import { Button, EmptyState, Field } from '../components/ui'
@@ -16,7 +16,7 @@ import { AppearanceToggle } from '../components/AppearanceToggle'
 import { Toast } from '../components/Toast'
 import { APIError, api } from '../lib/api'
 import { navigate } from '../lib/navigation'
-import type { Host, HostFolder, SSHKey } from '../types'
+import type { Host, HostFolder, SSHKey, WorkbenchSession } from '../types'
 
 type HostDraft = {
   name: string
@@ -69,6 +69,7 @@ export function HostsPage() {
   const auth = useAuth()
   const TASK_KEY = `herdrx.enrollmentTask.${auth.user?.id}`
   const [hosts, setHosts] = useState<Host[]>([])
+  const [lastSession, setLastSession] = useState<WorkbenchSession | null>(null)
   const [folders, setFolders] = useState<HostFolder[]>([])
   const [keys, setKeys] = useState<SSHKey[]>([])
   const [selectedFolder, setSelectedFolder] = useState('*')
@@ -154,8 +155,12 @@ export function HostsPage() {
   const load = async () => {
     setLoading(true)
     try {
-      const [hostResult, folderResult, keyResult] = await Promise.all([api.hosts(), api.hostFolders(), api.sshKeys()])
-      setHosts(hostResult.hosts ?? []); setFolders(folderResult.folders ?? []); setKeys(keyResult.keys ?? []); setError('')
+      const [hostResult, folderResult, keyResult, sessionResult] = await Promise.all([
+        api.hosts(), api.hostFolders(), api.sshKeys(), api.workbenchSession().catch(() => ({ session: null })),
+      ])
+      setHosts(hostResult.hosts ?? []); setFolders(folderResult.folders ?? []); setKeys(keyResult.keys ?? [])
+      setLastSession(sessionResult.session)
+      setError('')
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : '无法读取主机') }
     finally { setLoading(false) }
@@ -344,6 +349,7 @@ export function HostsPage() {
     const folderPath = options.find((folder) => folder.id === host.folder_id)?.path || ''
     return hostSearchText(host, folderPath).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())
   })
+  const continueHost = lastSession ? hosts.find((host) => host.id === lastSession.host_id) : undefined
   const waiting = Boolean(enrollmentTaskID)
   const openAdd = (trigger: HTMLButtonElement) => {
     addTrigger.current = trigger
@@ -390,7 +396,10 @@ export function HostsPage() {
     <main className="page page-hosts">
       <div className="page-heading">
         <div><h1>主机</h1><p>选择一台主机，继续你的工作。</p></div>
-        <Button className="button-primary" onClick={(event) => openAdd(event.currentTarget)}><Plus size={17} />添加主机</Button>
+        <div className="page-heading-actions">
+          {continueHost && <Button className="button-secondary" onClick={() => navigate(`/h/${continueHost.id}`)}><Play size={16}/>继续上次工作台 · {continueHost.name}</Button>}
+          <Button className="button-primary" onClick={(event) => openAdd(event.currentTarget)}><Plus size={17} />添加主机</Button>
+        </div>
       </div>
       <Toast message={notice} onClear={() => setNotice('')} />
       {timeoutNotice && <div className="notice notice-info" role="status">{timeoutNotice}</div>}

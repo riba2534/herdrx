@@ -33,6 +33,16 @@ export type Host = {
 export type SSHKey = { id: string; name: string; public_key: string; fingerprint: string; algorithm: string; certificate?: string; encrypted: boolean; revision: number; host_count: number; created_at: string; updated_at: string }
 export type HostFolder = { id: string; name: string; parent_id?: string; created_at: string; updated_at: string }
 
+export type WorkbenchSession = {
+  host_id: string
+  workspace_id?: string
+  tab_id?: string
+  pane_id?: string
+  device_id?: string
+  client_class?: 'desktop' | 'mobile'
+  updated_at?: string
+}
+
 export type AgentStatus = 'blocked' | 'working' | 'done' | 'idle' | 'unknown'
 
 export type Workspace = {

@@ -179,7 +179,7 @@ func (a *API) Handler() http.Handler {
 		router.Post("/logout", a.logout)
 		router.Group(func(router chi.Router) {
 			router.Use(a.authenticate)
-			router.Get("/me", a.me)
+			a.registerAuthenticatedMeRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
 			router.Route("/ssh-keys", a.sshKeyRoutes)

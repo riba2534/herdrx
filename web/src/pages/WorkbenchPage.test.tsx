@@ -42,6 +42,8 @@ vi.mock('../lib/api', () => ({
     host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
     hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
     renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
+    workbenchSession: vi.fn().mockResolvedValue({ session: null }),
+    saveWorkbenchSession: vi.fn().mockResolvedValue({ session: { host_id: 'host' } }),
   },
   currentSessionID: () => 'workbench-session',
   onAuthEvent: () => () => {},
@@ -82,11 +84,34 @@ beforeEach(() => {
     { pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
   ]
   snapshot.layouts = []
+  vi.mocked(api.workbenchSession).mockResolvedValue({ session: null })
+  vi.mocked(api.saveWorkbenchSession).mockResolvedValue({ session: { host_id: 'host' } })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+async function waitForRestoredWorkbench() {
+  await waitFor(() => {
+    expect(document.querySelector('.workspace-row[aria-current="true"]')).toBeTruthy()
+  })
+}
+
+describe('workbench session restore', () => {
+  it('lands on the last workspace after a PC ↔ phone handoff', async () => {
+    vi.mocked(api.workbenchSession).mockResolvedValue({
+      session: { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' },
+    })
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(screen.getByRole('button', { name: /agent2/ })).toHaveAttribute('aria-current', 'true'))
+    expect(screen.getByRole('button', { name: /agent1/ })).not.toHaveAttribute('aria-current')
+    expect(document.querySelector('.workspace-row[aria-current="true"]')?.textContent).toContain('beta')
+    await waitFor(() => expect(api.saveWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
+      host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', client_class: 'desktop',
+    })))
+  })
 })
 
 describe('workbench sidebar context menus', () => {
@@ -262,7 +287,7 @@ describe('workbench tab and mobile status', () => {
       { tab_id: 'w1:t2', workspace_id: 'w1', label: '日志', number: 2, pane_count: 1, agent_status: 'working', focused: false },
     ]
     render(<WorkbenchPage hostID="host"/>)
-    await screen.findByRole('button', { name: /agent1/ })
+    await waitForRestoredWorkbench()
     const logTab = screen.getByText('日志').closest('.tab')!
     const logSelect = logTab.querySelector('.tab-select')!
     expect(logSelect).toHaveAttribute('aria-pressed', 'false')
@@ -329,7 +354,7 @@ describe('workbench prefix keymap and focus', () => {
 
   it('switches to tab 2 with Ctrl+B 2', async () => {
     render(<WorkbenchPage hostID="host"/>)
-    await screen.findByRole('button', { name: /agent1/ })
+    await waitForRestoredWorkbench()
     expect(screen.getByRole('button', { pressed: true, name: '空闲 1' })).toBeInTheDocument()
     press('b', { ctrlKey: true })
     press('2')
@@ -350,6 +375,7 @@ describe('workbench prefix keymap and focus', () => {
 
   it('keeps the Agent row as the selected pane after a sidebar click', async () => {
     render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
     const agent2 = await screen.findByRole('button', { name: /agent2/ })
     fireEvent.click(agent2)
     expect(agent2).toHaveAttribute('aria-current', 'true')

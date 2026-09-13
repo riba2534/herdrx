@@ -92,6 +92,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .user-chip { padding: 0 10px; color: var(--muted); font-size: 13px; }
 .page { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 52px 0 80px; }
 .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+.page-heading-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
 .page-heading h1 { font-size: 34px; margin: 5px 0 4px; letter-spacing: -.04em; }
 .page-heading p { margin: 0; color: var(--muted); }
 .host-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
