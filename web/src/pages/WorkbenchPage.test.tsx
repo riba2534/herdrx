@@ -140,6 +140,33 @@ describe('workbench session restore', () => {
     expect(api.saveWorkbenchSession).not.toHaveBeenCalledWith(expect.objectContaining({ workspace_id: 'w1' }))
   })
 
+  it('uses the large desktop shell after a mobile-written session, not leftover compact chrome', async () => {
+    localStorage.setItem('herdrx.sidebar-open', 'false')
+    vi.mocked(api.workbenchSession).mockResolvedValue({ session: savedW2 })
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(document.querySelector('.workspace-row.sidebar-row-active')?.textContent).toContain('beta'))
+    const bench = document.querySelector('.workbench')
+    expect(bench).toHaveAttribute('data-window-form', 'large')
+    expect(bench).not.toHaveClass('workbench-compact')
+    expect(bench).not.toHaveClass('workbench-sidebar-closed')
+    expect(screen.getByRole('button', { name: '收起侧边栏' })).toBeInTheDocument()
+    expect(document.querySelector('.hostbar')).toBeTruthy()
+    expect(document.querySelector('.mobile-topbar')).toBeNull()
+  })
+
+  it('uses compact chrome when the attaching client is a phone, even if the snapshot was written on desktop', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    vi.mocked(api.workbenchSession).mockResolvedValue({
+      session: { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'pc-1', client_class: 'desktop' as const },
+    })
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(screen.getByRole('button', { name: '切换工作区或终端' })).toHaveTextContent('beta'))
+    const bench = document.querySelector('.workbench')
+    expect(bench).toHaveAttribute('data-window-form', 'compact')
+    expect(bench).toHaveClass('workbench-compact')
+    expect(screen.queryByRole('button', { name: '收起侧边栏' })).not.toBeInTheDocument()
+  })
+
   it('applies the saved workspace after a later snapshot and never persists Herdr focused_* first', async () => {
     snapshot.workspaces = []
     snapshot.tabs = []

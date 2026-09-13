@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '../types'
 import {
+  applyAttachWindowForm,
   matchWorkbenchLocation,
   shouldRestoreWorkbenchSession,
+  workbenchWindowForm,
+  WORKBENCH_SIDEBAR_KEY,
 } from './workbenchSession'
 
 const snapshot: Snapshot = {
@@ -37,6 +40,23 @@ describe('shouldRestoreWorkbenchSession', () => {
     expect(shouldRestoreWorkbenchSession(session, { path: '/', deviceID: 'pc-1', clientClass: 'desktop', hasVisit: true })).toBe(false)
     expect(shouldRestoreWorkbenchSession(session, { path: '/h/hst_desk', deviceID: 'phone-1', clientClass: 'mobile', hasVisit: false })).toBe(false)
     expect(shouldRestoreWorkbenchSession(null, { path: '/', deviceID: 'pc-1', clientClass: 'desktop', hasVisit: false })).toBe(false)
+  })
+})
+
+describe('workbenchWindowForm', () => {
+  it('gives the attaching client large or compact chrome, not the last writer', () => {
+    expect(workbenchWindowForm('desktop')).toBe('large')
+    expect(workbenchWindowForm('mobile')).toBe('compact')
+    expect(applyAttachWindowForm('desktop').sidebarOpen).toBe(true)
+    expect(applyAttachWindowForm('mobile')).toEqual({ form: 'compact', compact: true, sidebarOpen: false })
+  })
+
+  it('clears a leftover collapsed sidebar so a desktop attach is not a small shell', () => {
+    localStorage.setItem(WORKBENCH_SIDEBAR_KEY, 'false')
+    expect(applyAttachWindowForm('desktop')).toEqual({ form: 'large', compact: false, sidebarOpen: true })
+    expect(localStorage.getItem(WORKBENCH_SIDEBAR_KEY)).toBe('true')
+    applyAttachWindowForm('mobile')
+    expect(localStorage.getItem(WORKBENCH_SIDEBAR_KEY)).toBeNull()
   })
 })
 
