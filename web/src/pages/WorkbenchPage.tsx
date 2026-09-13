@@ -20,6 +20,7 @@ import { composerSubmitParams } from '../lib/composerDrafts'
 import { navigate } from '../lib/navigation'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel } from '../lib/labels'
+import { matchWorkbenchLocation, workbenchSessionPayload, type WorkbenchLocation } from '../lib/workbenchSession'
 import { terminalThemes } from '../lib/themes'
 import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
 
@@ -60,6 +61,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [workspaceID, setWorkspaceID] = useState('')
   const [tabID, setTabID] = useState('')
   const [paneID, setPaneID] = useState('')
+  const [restoreLocation, setRestoreLocation] = useState<WorkbenchLocation | null>(null)
+  const [restoreReady, setRestoreReady] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('herdrx.sidebar-open') !== 'false')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
@@ -246,7 +249,45 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }, [client, hostID])
 
   useEffect(() => {
-    if (!snapshot) return
+    let cancelled = false
+    setRestoreReady(false)
+    setRestoreLocation(null)
+    void api.workbenchSession().then(({ session }) => {
+      if (cancelled) return
+      if (session?.host_id === hostID) setRestoreLocation({
+        host_id: session.host_id,
+        workspace_id: session.workspace_id,
+        tab_id: session.tab_id,
+        pane_id: session.pane_id,
+      })
+      setRestoreReady(true)
+    }).catch(() => { if (!cancelled) setRestoreReady(true) })
+    return () => { cancelled = true }
+  }, [hostID])
+
+  useEffect(() => {
+    if (!restoreReady || !workspaceID) return
+    const persist = () => {
+      void api.saveWorkbenchSession(workbenchSessionPayload({
+        host_id: hostID,
+        workspace_id: workspaceID,
+        tab_id: tabID,
+        pane_id: paneID,
+      }, mobile)).catch(() => {})
+    }
+    const timer = window.setTimeout(persist, 300)
+    const hide = () => { if (document.visibilityState === 'hidden') persist() }
+    window.addEventListener('pagehide', persist)
+    document.addEventListener('visibilitychange', hide)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('pagehide', persist)
+      document.removeEventListener('visibilitychange', hide)
+    }
+  }, [restoreReady, hostID, workspaceID, tabID, paneID, mobile])
+
+  useEffect(() => {
+    if (!snapshot || !restoreReady) return
     if (pendingWorkspaceSelection.current) {
       const created = snapshot.workspaces.find((item) => item.workspace_id === pendingWorkspaceSelection.current)
       if (!created) return // The RPC result can precede its snapshot.
@@ -269,6 +310,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return
       }
     }
+    if (restoreLocation) {
+      const restored = matchWorkbenchLocation(snapshot, restoreLocation)
+      setRestoreLocation(null)
+      if (restored) {
+        setWorkspaceID(restored.workspaceID)
+        setTabID(restored.tabID)
+        setPaneID(restored.paneID)
+        return
+      }
+    }
     const workspace = snapshot.workspaces.find((item) => item.workspace_id === workspaceID)
       || snapshot.workspaces.find((item) => item.workspace_id === snapshot.focused_workspace_id)
       || snapshot.workspaces[0]
@@ -284,7 +335,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.pane_id === layout?.focused_pane_id)
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
-  }, [snapshot, workspaceID, tabID, paneID])
+  }, [snapshot, workspaceID, tabID, paneID, restoreLocation, restoreReady])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
