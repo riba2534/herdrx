@@ -101,7 +101,8 @@ try {
       await page.reload(); await controllerReady(page)
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true)
       await page.goto(base + '/h/original-pane')
-      // WebKit uses real socket failures here; allow its network error to settle.
+      // WebKit uses real socket failures here; hung /api/me is released by the
+      // 8s auth-check timeout, then the error heading can render.
       const offlineTimeout = engine === 'webkit' ? 30000 : 5000
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       assert.equal(new URL(page.url()).pathname, '/h/original-pane')

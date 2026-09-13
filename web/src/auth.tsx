@@ -16,6 +16,21 @@ type AuthState = {
 }
 const AuthContext = createContext<AuthState | null>(null)
 
+/** WebKit can leave same-origin fetch pending after the fixture/server drops the socket. */
+export const AUTH_CHECK_TIMEOUT_MS = 8_000
+
+function withTimeout<T>(promise: Promise<T>, ms = AUTH_CHECK_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(new Error('无法连接工作台，请重试'))
+    }, ms)
+    promise.then(
+      (value) => { window.clearTimeout(timer); resolve(value) },
+      (reason) => { window.clearTimeout(timer); reject(reason) },
+    )
+  })
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [bootstrapRequired, setBootstrapRequired] = useState(false)
@@ -25,29 +40,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const refreshSequence = useRef(0)
+  const inFlight = useRef(false)
   const channel = useRef<BroadcastChannel | null>(null)
 
   const refresh = useCallback(async () => {
+    if (inFlight.current) return
+    inFlight.current = true
     const sequence = ++refreshSequence.current
     const epoch = authenticationGeneration()
+    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      ? AbortSignal.timeout(AUTH_CHECK_TIMEOUT_MS)
+      : undefined
     try {
-      const bootstrap = await api.bootstrapStatus()
-      if (sequence !== refreshSequence.current || epoch !== authenticationGeneration()) return
-      setBootstrapRequired(bootstrap.required)
-      setRegistration(bootstrap.registration === 'invite' ? 'invite' : 'closed')
-      if (bootstrap.required) { if (currentSessionID()) invalidateAuthentication(); setUser(null); setSessionID(''); setError('') }
-      else {
-        const result = await api.me()
-        if (sequence !== refreshSequence.current || currentSessionID() !== result.session_id) return
-        setUser(result.user)
-        setSessionID(result.session_id)
-        setError('')
-      }
+      await withTimeout((async () => {
+        const bootstrap = await api.bootstrapStatus(signal ? { signal } : undefined)
+        if (sequence !== refreshSequence.current || epoch !== authenticationGeneration()) return
+        setBootstrapRequired(bootstrap.required)
+        setRegistration(bootstrap.registration === 'invite' ? 'invite' : 'closed')
+        if (bootstrap.required) { if (currentSessionID()) invalidateAuthentication(); setUser(null); setSessionID(''); setError('') }
+        else {
+          const result = await api.me(signal ? { signal } : undefined)
+          if (sequence !== refreshSequence.current || currentSessionID() !== result.session_id) return
+          setUser(result.user)
+          setSessionID(result.session_id)
+          setError('')
+        }
+      })())
     } catch (reason) {
       if (sequence !== refreshSequence.current) return
       if (reason instanceof APIError && reason.status === 401) { setUser(null); setSessionID(''); setError('') }
-      else if (!(reason instanceof APIError && reason.code === 'auth_changed')) setError(reason instanceof Error ? reason.message : '无法连接工作台，请重试')
+      else if (!(reason instanceof APIError && reason.code === 'auth_changed')) {
+        const aborted = reason instanceof DOMException && reason.name === 'AbortError'
+        setError(aborted || !(reason instanceof Error) ? '无法连接工作台，请重试' : reason.message)
+      }
     } finally {
+      inFlight.current = false
       if (sequence === refreshSequence.current) setLoading(false)
     }
   }, [])

@@ -65,14 +65,14 @@ export type RelayOffer = { available: boolean; workbench?: string; token?: strin
 export const api = {
   cliRelease: () => request<CLIRelease>('/api/cli-release'),
   relayOffer: () => request<RelayOffer>('/api/tailcat/relay-offer', { method: 'POST' }),
-  bootstrapStatus: () => request<{ required: boolean; registration: 'invite' | 'closed' }>('/api/bootstrap/status'),
+  bootstrapStatus: (init?: RequestInit) => request<{ required: boolean; registration: 'invite' | 'closed' }>('/api/bootstrap/status', init),
   bootstrap: (input: { email: string; password: string; display_name: string; token: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/bootstrap', { method: 'POST', body: JSON.stringify(input) }),
   login: (input: { email: string; password: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/login', { method: 'POST', body: JSON.stringify(input) }),
   register: (input: { email: string; password: string; display_name: string; invite_code: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/register', { method: 'POST', body: JSON.stringify(input) }),
-  me: () => request<{ user: User; csrf_token: string; session_id: string }>('/api/me'),
+  me: (init?: RequestInit) => request<{ user: User; csrf_token: string; session_id: string }>('/api/me', init),
   workbenchSession: () => request<{ session: WorkbenchSession | null }>('/api/me/workbench-session'),
   saveWorkbenchSession: (input: WorkbenchSession) => request<{ session: WorkbenchSession }>('/api/me/workbench-session', { method: 'PUT', body: JSON.stringify(input), keepalive: true }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
