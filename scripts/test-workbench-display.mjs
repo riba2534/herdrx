@@ -22,7 +22,7 @@ const snapshot = {
 const ansi = Array.from({ length: 40 }, (_, i) => `\x1b[${i + 1};1H\x1b[0m${String(i + 1).padStart(2)}  ${i % 3 === 0 ? '\x1b[38;2;142;192;170m终端（Terminal），中文标点与对齐。' : 'const status = "ready"; // display settings'}\x1b[0m\x1b[${i + 1};70H\x1b[48;2;38;38;38m RIGHT EDGE`).join('') + '\x1b[0m\x1b[40;7H'
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/display-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/display-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {
@@ -217,8 +217,12 @@ async function assertNoReservedHeaders(page) {
     const header = pane.locator('.terminal-titlebar')
     await expect(header).toBeHidden()
     const paneBox = await pane.boundingBox()
+    const paneHeader = await pane.locator('.pane-header').boundingBox()
+    const body = await pane.locator('.pane-body').boundingBox()
     const content = await pane.locator('.terminal-viewport').boundingBox()
-    assert.ok(Math.abs(content.y - paneBox.y) <= 1, 'hidden terminal tools still reserve a header row')
+    assert.ok(paneHeader.height <= 45 && Math.abs(paneHeader.y - paneBox.y) <= 1, `pane switch header exceeded one 44px touch row plus its border: ${JSON.stringify(paneHeader)}`)
+    assert.ok(Math.abs(body.y - paneHeader.y - paneHeader.height) <= 1, 'unexpected gap below pane switch header')
+    assert.ok(Math.abs(content.y - body.y) <= 1, 'hidden terminal tools still reserve a row inside the pane body')
     await openPaneTools(page, index)
     assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'opening terminal tools changed terminal geometry')
     assert.equal(await header.evaluate(el => getComputedStyle(el).position), 'absolute', 'terminal tools must float above the terminal')
@@ -298,14 +302,14 @@ try {
       await assertNoReservedHeaders(page)
       await openPaneTools(page)
       await expect(page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
-      await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
+      await expect(page.locator('.terminal-pane-active > .pane-body > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       await closePaneTools(page)
       const originalTerminals = await page.locator('.terminal-host > .xterm').elementHandles()
       const originalViewports = await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       const focusStart = messages.length
       await page.locator('.terminal-pane').nth(1).locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 2')
-      await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
+      await expect(page.locator('.terminal-pane-active > .pane-body > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       await page.locator('.terminal-pane').first().locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 1')
       assert.deepEqual(await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } })), originalViewports, 'pane focus moved or resized terminal content')
@@ -378,7 +382,7 @@ try {
       const single = await fixture(browser, { viewport: { width: 1440, height: 900 } }, singleSnapshot)
       await assertNoReservedHeaders(single.page)
       const tabbar = await single.page.locator('.tabbar').boundingBox()
-      assert.ok((await single.page.locator('.terminal-viewport').boundingBox()).y - tabbar.y - tabbar.height <= 2, 'single pane still reserves a separate display row')
+      assert.ok(Math.abs((await single.page.locator('.terminal-pane').boundingBox()).y - tabbar.y - tabbar.height) <= 2, 'single pane reserves an extra row above its mode header')
       await screenshot(single.page, `${name}-single-pane`)
       await assertTerminalRecovery(single, 'p1')
       assert.deepEqual(single.errors, [])
@@ -570,7 +574,7 @@ try {
         assert.deepEqual(f.errors, [], `${name} ${width}x${height} compact loop: ${f.errors.join(' | ')}`)
         await f.context.close()
       }
-      console.log(`${name}: floating tools without reserved header space, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, 40 rapid responsive rotations, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
+      console.log(`${name}: floating tools with bounded mode headers, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, 40 rapid responsive rotations, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
     } finally { await browser.close() }
   }
 } finally { await new Promise((done) => server.close(done)) }

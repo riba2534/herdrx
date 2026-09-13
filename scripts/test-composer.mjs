@@ -22,7 +22,7 @@ const snapshot = {
 const ansi = Array.from({ length: 24 }, (_, i) => `\x1b[${i + 1};1HComposer terminal ${i}`).join('')
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'composer-user', email: 'composer@example.test', display_name: 'Composer', role: 'admin' }, csrf_token: 'composer-fixture', session_id: 'composer-session' } : path === '/api/hosts/' ? { hosts: [host, otherHost] } : path === '/api/hosts/composer-test/' ? { host } : path === '/api/hosts/composer-other/' ? { host: otherHost } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'composer-user', email: 'composer@example.test', display_name: 'Composer', role: 'admin' }, csrf_token: 'composer-fixture', session_id: 'composer-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host, otherHost] } : path === '/api/hosts/composer-test/' ? { host } : path === '/api/hosts/composer-other/' ? { host: otherHost } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {

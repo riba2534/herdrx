@@ -39,6 +39,7 @@ const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
   const json = path === '/api/bootstrap/status' ? { required: false }
     : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' }
+    : path === '/api/me/workbench-session' ? { session: null }
     : path === '/api/hosts/' ? { hosts: [host] }
     : path === '/api/hosts/display-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }

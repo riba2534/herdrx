@@ -44,6 +44,7 @@ const server = createServer(async (req, res) => {
   const selectedHost = hosts.find((host) => path === `/api/hosts/${host.id}/`)
   const json = path === '/api/bootstrap/status' ? { required: false }
     : path === '/api/me' ? { user: { id: 'space-user', email: 'space@example.test', display_name: 'Space', role: 'admin' }, csrf_token: 'space-fixture', session_id: 'space-session' }
+    : path === '/api/me/workbench-session' ? { session: null }
     : path === '/api/hosts/' ? { hosts } : selectedHost ? { host: selectedHost } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
@@ -118,6 +119,7 @@ async function geometry(page) {
     return {
       viewport: { width: innerWidth, height: innerHeight, visualHeight: visualViewport.height },
       workbench: box(bench), hostbar: visible('.hostbar'), topbar: visible('.mobile-topbar'), mobileHeader: visible('.mobile-header'), mobileTabs: visible('.mobile-tabs'), paneChips: visible('.mobile-pane-chips'),
+      paneHeaders: visible('.pane-header'), bodies: visible('.pane-body'),
       titlebars: visible('.terminal-titlebar'), terminals: visible('.terminal-viewport'), panes: visible('.terminal-pane'), surface: visible('.terminal-surface'),
       composer: visible('.composer'), keybar: visible('.keybar'), dock: visible('.workbench-dock'),
       horizontalOverflow: document.documentElement.scrollWidth > innerWidth + 1,
@@ -153,7 +155,9 @@ async function assertMobileSpace(page, minimum = .8) {
   assert.ok(g.topbar[0].height - g.safeArea.top <= 45, `mobile navigation taller than one row: ${JSON.stringify(g.topbar)}`)
   assert.ok(g.composer[0].height <= 56, `empty/single-line composer grew: ${JSON.stringify(g.composer)}`)
   const chipHeight = g.paneChips[0]?.height || 0
-  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom - chipHeight
+  const paneHeaderHeight = g.paneHeaders[0]?.height || 0
+  assert.ok(paneHeaderHeight > 0 && paneHeaderHeight <= 45, 'pane switch header exceeds one 44px touch row plus its border')
+  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom - chipHeight - paneHeaderHeight
   const ratio = g.terminals[0].height / available
   assert.ok(ratio >= minimum, `terminal only uses ${(100 * ratio).toFixed(1)}% of available height; minimum ${100 * minimum}%`)
   await contained(page, '.mobile-topbar button, .composer, .composer-send, .composer-input')
@@ -305,10 +309,14 @@ try {
         if (!baseline) {
           assert.equal(g.terminals.length, 2)
           assert.equal(g.titlebars.length, 0, 'desktop panes reserve titlebar rows')
-          const terminals = [...g.terminals].sort((a, b) => direction === 'vertical' ? a.y - b.y : a.x - b.x)
-          const gap = direction === 'vertical' ? terminals[1].y - terminals[0].bottom : terminals[1].x - terminals[0].right
+          const panes = [...g.panes].sort((a, b) => direction === 'vertical' ? a.y - b.y : a.x - b.x)
+          const gap = direction === 'vertical' ? panes[1].y - panes[0].bottom : panes[1].x - panes[0].right
           assert.ok(gap >= 0 && gap <= 1.5, `desktop divider is ${gap}px`)
-          for (let i = 0; i < g.panes.length; i++) assert.ok(g.terminals[i].height >= g.panes[i].height - 2, 'desktop pane reserves non-terminal vertical space')
+          for (let i = 0; i < g.panes.length; i++) {
+            assert.ok(g.paneHeaders[i].height > 0 && g.paneHeaders[i].height <= 45, 'pane switch header exceeds one 44px touch row plus its border')
+            assert.ok(Math.abs(g.terminals[i].y - g.bodies[i].y) <= 1, 'terminal has a gap inside its body')
+            assert.ok(g.terminals[i].height >= g.panes[i].height - g.paneHeaders[i].height - 2, 'desktop pane reserves unexpected vertical space')
+          }
           await assertOverlayStable(f.page, f.page.locator('.pane-controls-toggle').first())
           assert.deepEqual(f.errors, [])
         }

@@ -27,7 +27,8 @@ const server = createServer(async (req, res) => {
   else if (path === '/api/me') {
     if (role === 'guest' || expiredContexts.has(req.headers['x-ui-context'])) { res.writeHead(401, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'unauthorized' })); return }
     body = { user: { ...users.find((user) => user.role === role), ...(req.headers['x-ui-long-name'] ? { display_name: '很长的用户名用于检查导航是否保持单行'.repeat(5) } : {}) }, csrf_token: 'appearance-fixture', session_id: role }
-  } else if (path === '/api/hosts/') body = { hosts: hosts.filter((host) => role === 'admin' || host.transport !== 'local') }
+  } else if (path === '/api/me/workbench-session') body = { session: null }
+  else if (path === '/api/hosts/') body = { hosts: hosts.filter((host) => role === 'admin' || host.transport !== 'local') }
   else if (path === '/api/ssh-keys/') body = { keys: [] }
   else if (path === '/api/host-folders/') body = { folders: [] }
   else if (path === '/api/hosts/dev/') body = { host: hosts[0] }
