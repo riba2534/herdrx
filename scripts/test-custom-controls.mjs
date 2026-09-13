@@ -47,6 +47,7 @@ const server = createServer(async (req, res) => {
     let body = { ok: true }, status = 200
     if (path === '/api/bootstrap/status') body = { required: false, registration: 'closed' }
     else if (path === '/api/me') { body = { user: admin, csrf_token: 'isolated-ui-fixture', session_id: 'admin' }; if (guest) { status = 401; body = { error: 'unauthorized' } } }
+    else if (path === '/api/me/workbench-session') body = { session: null }
     else if (path === '/api/hosts/' && req.method === 'GET') body = { hosts: removed.has(scope) ? [] : [host] }
     else if (path === '/api/hosts/fixture-host/' && req.method === 'DELETE') removed.add(scope)
     else if (path === '/api/host-folders/') body = { folders: Array.from({ length: 48 }, (_, i) => ({ id: `folder-${i}`, name: `文件夹 ${String(i).padStart(2, '0')} ${'较长的文件夹名称'.repeat(3)}`, parent_id: '', position: i })) }

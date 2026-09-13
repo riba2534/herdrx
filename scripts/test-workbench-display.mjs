@@ -22,7 +22,7 @@ const snapshot = {
 const ansi = Array.from({ length: 40 }, (_, i) => `\x1b[${i + 1};1H\x1b[0m${String(i + 1).padStart(2)}  ${i % 3 === 0 ? '\x1b[38;2;142;192;170m终端（Terminal），中文标点与对齐。' : 'const status = "ready"; // display settings'}\x1b[0m\x1b[${i + 1};70H\x1b[48;2;38;38;38m RIGHT EDGE`).join('') + '\x1b[0m\x1b[40;7H'
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/display-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/display-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {

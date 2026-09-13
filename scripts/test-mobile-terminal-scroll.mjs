@@ -34,7 +34,7 @@ const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
   if (path === '/harness') { res.setHeader('content-type', 'text/html'); res.end(harness); return }
   if (path === '/terminalTouch.js') { res.setHeader('content-type', 'application/javascript'); res.end(module); return }
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'test-user', email: 'test@example.test', display_name: 'Test', role: 'admin' }, csrf_token: 'fixture', session_id: 'test-session' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/mobile-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'test-user', email: 'test@example.test', display_name: 'Test', role: 'admin' }, csrf_token: 'fixture', session_id: 'test-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/mobile-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {

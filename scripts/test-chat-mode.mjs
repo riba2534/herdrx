@@ -65,7 +65,7 @@ const server = createServer(async (req, res) => {
     const echoed = sentTexts.map((item, index) => ({ id: `sent-${index + 1}`, role: 'user', at: '2026-09-13T05:00:09.000Z', blocks: [{ type: 'text', text: item.text }] }))
     return sendJSON(res, 200, { supported: true, agent: AGENTS[pane], session_id: SESSIONS[pane], binding: 'selected', messages: QA.concat(echoed), skipped: 0, has_more: false })
   }
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'chat-user', email: 'chat@example.test', display_name: 'Chat', role: 'admin' }, csrf_token: 'chat-fixture', session_id: 'chat-session' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/chat-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'chat-user', email: 'chat@example.test', display_name: 'Chat', role: 'admin' }, csrf_token: 'chat-fixture', session_id: 'chat-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/chat-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {

@@ -95,7 +95,7 @@ const server = createServer(async (req, res) => {
     return sendJSON(res, 200, { ticket: `ticket-${voiceLog.sessions}`, expiresAt: '2026-09-13T06:00:00.000Z', capabilities: VOICE_CAPS })
   }
 
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'media-user', email: 'media@example.test', display_name: 'Media', role: 'admin' }, csrf_token: 'media-fixture', session_id: 'media-session' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/media-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'media-user', email: 'media@example.test', display_name: 'Media', role: 'admin' }, csrf_token: 'media-fixture', session_id: 'media-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/media-test/' ? { host } : null
   if (json) { sendJSON(res, 200, json); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {
