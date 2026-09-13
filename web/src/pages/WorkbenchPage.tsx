@@ -299,13 +299,19 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       }, mobile)).catch(() => {})
     }
     const timer = window.setTimeout(persist, 300)
-    const hide = () => { if (document.visibilityState === 'hidden') persist() }
-    window.addEventListener('pagehide', persist)
-    document.addEventListener('visibilitychange', hide)
+    let hiding = false
+    const hide = () => {
+      if (hiding) return
+      hiding = true
+      persist()
+    }
+    const onHidden = () => { if (document.visibilityState === 'hidden') hide() }
+    window.addEventListener('pagehide', hide)
+    document.addEventListener('visibilitychange', onHidden)
     return () => {
       window.clearTimeout(timer)
-      window.removeEventListener('pagehide', persist)
-      document.removeEventListener('visibilitychange', hide)
+      window.removeEventListener('pagehide', hide)
+      document.removeEventListener('visibilitychange', onHidden)
     }
   }, [restore, hostID, workspaceID, tabID, paneID, mobile])
 

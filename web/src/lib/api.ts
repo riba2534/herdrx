@@ -74,7 +74,7 @@ export const api = {
     request<{ user: User; csrf_token: string; session_id: string }>('/api/register', { method: 'POST', body: JSON.stringify(input) }),
   me: () => request<{ user: User; csrf_token: string; session_id: string }>('/api/me'),
   workbenchSession: () => request<{ session: WorkbenchSession | null }>('/api/me/workbench-session'),
-  saveWorkbenchSession: (input: WorkbenchSession) => request<{ session: WorkbenchSession }>('/api/me/workbench-session', { method: 'PUT', body: JSON.stringify(input) }),
+  saveWorkbenchSession: (input: WorkbenchSession) => request<{ session: WorkbenchSession }>('/api/me/workbench-session', { method: 'PUT', body: JSON.stringify(input), keepalive: true }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
   hosts: () => request<{ hosts: Host[] }>('/api/hosts/'),
   host: (id: string) => request<{ host: Host }>(`/api/hosts/${encodeURIComponent(id)}/`),
