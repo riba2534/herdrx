@@ -14,6 +14,7 @@ import {
   hasWorkbenchVisit,
   markWorkbenchVisit,
   shouldRestoreWorkbenchSession,
+  cacheWorkbenchSession,
   workbenchClientClass,
   workbenchDeviceID,
 } from './lib/workbenchSession'
@@ -74,6 +75,7 @@ function useRootWorkbenchRestore(enabled: boolean, path: string) {
     void (async () => {
       try {
         const { session } = await api.workbenchSession()
+        cacheWorkbenchSession(session ?? null)
         if (cancelled) return
         if (shouldRestoreWorkbenchSession(session, {
           path,

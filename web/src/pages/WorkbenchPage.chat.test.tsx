@@ -40,6 +40,8 @@ vi.mock('../lib/api', () => ({
   api: {
     host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
     hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
+    workbenchSession: vi.fn().mockResolvedValue({ session: null }),
+    saveWorkbenchSession: vi.fn().mockResolvedValue({ session: { host_id: 'host' } }),
   },
   currentSessionID: () => 'workbench-session',
   onAuthEvent: () => () => {},

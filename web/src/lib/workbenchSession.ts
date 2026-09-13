@@ -23,6 +23,32 @@ export type WorkbenchLocation = {
   pane_id?: string
 }
 
+// App caches the last GET so WorkbenchPage can apply it on the first snapshot
+// instead of racing a second fetch against Herdr focused_*.
+let cachedWorkbenchSession: WorkbenchSession | null | undefined
+
+export function cacheWorkbenchSession(session: WorkbenchSession | null) {
+  cachedWorkbenchSession = session
+}
+
+export function peekWorkbenchSession() {
+  return cachedWorkbenchSession
+}
+
+export function resetWorkbenchSessionCache() {
+  cachedWorkbenchSession = undefined
+}
+
+export function workbenchLocationFromSession(session: WorkbenchSession | null | undefined, hostID: string): WorkbenchLocation | null {
+  if (!session?.host_id || session.host_id !== hostID) return null
+  return {
+    host_id: session.host_id,
+    workspace_id: session.workspace_id,
+    tab_id: session.tab_id,
+    pane_id: session.pane_id,
+  }
+}
+
 export function workbenchDeviceID(storage: Storage | undefined = localStorage) {
   let value: string | null = null
   try {

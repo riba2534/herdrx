@@ -21,7 +21,7 @@ import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneV
 import { navigate } from '../lib/navigation'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel } from '../lib/labels'
-import { matchWorkbenchLocation, workbenchSessionPayload, type WorkbenchLocation } from '../lib/workbenchSession'
+import { cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchLocationFromSession, workbenchSessionPayload, type WorkbenchLocation } from '../lib/workbenchSession'
 import { terminalThemes } from '../lib/themes'
 import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
 
@@ -62,8 +62,11 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [workspaceID, setWorkspaceID] = useState('')
   const [tabID, setTabID] = useState('')
   const [paneID, setPaneID] = useState('')
-  const [restoreLocation, setRestoreLocation] = useState<WorkbenchLocation | null>(null)
-  const [restoreReady, setRestoreReady] = useState(false)
+  const [restore, setRestore] = useState<{ phase: 'loading' | 'ready'; location: WorkbenchLocation | null }>(() => {
+    const cached = peekWorkbenchSession()
+    if (cached === undefined) return { phase: 'loading', location: null }
+    return { phase: 'ready', location: workbenchLocationFromSession(cached, hostID) }
+  })
   const [sidebarOpen, setSidebarOpen] = useState(() => localStorage.getItem('herdrx.sidebar-open') !== 'false')
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
@@ -271,23 +274,22 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   useEffect(() => {
     let cancelled = false
     userPickedLocation.current = false
-    setRestoreReady(false)
-    setRestoreLocation(null)
+    const cached = peekWorkbenchSession()
+    setRestore(cached === undefined
+      ? { phase: 'loading', location: null }
+      : { phase: 'ready', location: workbenchLocationFromSession(cached, hostID) })
     void api.workbenchSession().then(({ session }) => {
+      cacheWorkbenchSession(session ?? null)
       if (cancelled) return
-      if (session?.host_id === hostID) setRestoreLocation({
-        host_id: session.host_id,
-        workspace_id: session.workspace_id,
-        tab_id: session.tab_id,
-        pane_id: session.pane_id,
-      })
-      setRestoreReady(true)
-    }).catch(() => { if (!cancelled) setRestoreReady(true) })
+      setRestore({ phase: 'ready', location: workbenchLocationFromSession(session, hostID) })
+    }).catch(() => {
+      if (!cancelled) setRestore((current) => current.phase === 'ready' ? current : { phase: 'ready', location: null })
+    })
     return () => { cancelled = true }
   }, [hostID])
 
   useEffect(() => {
-    if (!restoreReady || !workspaceID) return
+    if (restore.phase !== 'ready' || restore.location || !workspaceID) return
     const persist = () => {
       void api.saveWorkbenchSession(workbenchSessionPayload({
         host_id: hostID,
@@ -305,7 +307,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       window.removeEventListener('pagehide', persist)
       document.removeEventListener('visibilitychange', hide)
     }
-  }, [restoreReady, hostID, workspaceID, tabID, paneID, mobile])
+  }, [restore, hostID, workspaceID, tabID, paneID, mobile])
 
   useEffect(() => {
     if (!snapshot) return
@@ -331,16 +333,18 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return
       }
     }
-    if (!restoreReady) return
-    if (restoreLocation && !userPickedLocation.current) {
-      const restored = matchWorkbenchLocation(snapshot, restoreLocation)
-      setRestoreLocation(null)
+    if (restore.phase !== 'ready') return
+    if (restore.location && !userPickedLocation.current) {
+      const restored = matchWorkbenchLocation(snapshot, restore.location)
       if (restored) {
         setWorkspaceID(restored.workspaceID)
         setTabID(restored.tabID)
         setPaneID(restored.paneID)
+        setRestore({ phase: 'ready', location: null })
         return
       }
+      if (snapshot.workspaces.length === 0) return
+      setRestore({ phase: 'ready', location: null })
     }
     const workspace = snapshot.workspaces.find((item) => item.workspace_id === workspaceID)
       || snapshot.workspaces.find((item) => item.workspace_id === snapshot.focused_workspace_id)
@@ -357,7 +361,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.pane_id === layout?.focused_pane_id)
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
-  }, [snapshot, workspaceID, tabID, paneID, restoreLocation, restoreReady])
+  }, [snapshot, workspaceID, tabID, paneID, restore])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {

@@ -5,8 +5,14 @@ import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
 import { clearPaneViewModes, readPaneViewMode } from '../lib/paneViewMode'
+import { resetWorkbenchSessionCache } from '../lib/workbenchSession'
 
-const { call, connection, retryNow } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string, message: '', retryAt: 0 }, retryNow: vi.fn() }))
+const { call, connection, retryNow, snapshotListeners } = vi.hoisted(() => ({
+  call: vi.fn().mockResolvedValue({}),
+  connection: { state: 'ready' as string, message: '', retryAt: 0 },
+  retryNow: vi.fn(),
+  snapshotListeners: [] as Array<(value: Snapshot) => void>,
+}))
 const snapshot: Snapshot = {
   version: 'test', protocol: 1,
   focused_workspace_id: 'w1', focused_tab_id: 'w1:t1', focused_pane_id: 'w1:p1',
@@ -28,7 +34,14 @@ const snapshot: Snapshot = {
 vi.mock('../lib/workbench', () => ({
   WorkbenchClient: class {
     call = call
-    onSnapshot(handler: (value: Snapshot) => void) { handler(snapshot); return () => {} }
+    onSnapshot(handler: (value: Snapshot) => void) {
+      snapshotListeners.push(handler)
+      handler(snapshot)
+      return () => {
+        const index = snapshotListeners.indexOf(handler)
+        if (index >= 0) snapshotListeners.splice(index, 1)
+      }
+    }
     onState(handler: (state: string, message?: string, retryAt?: number) => void) { handler(connection.state, connection.message, connection.retryAt); return () => {} }
     onEpoch() { return () => {} }
     connect() {}
@@ -68,11 +81,17 @@ beforeEach(() => {
   sessionStorage.clear()
   clearComposerDrafts()
   clearPaneViewModes()
+  resetWorkbenchSessionCache()
+  snapshotListeners.length = 0
   call.mockClear()
   retryNow.mockClear()
   connection.state = 'ready'
   connection.message = ''
   connection.retryAt = 0
+  snapshot.focused_workspace_id = 'w1'
+  snapshot.focused_tab_id = 'w1:t1'
+  snapshot.focused_pane_id = 'w1:p1'
+  snapshot.workspaces = ['alpha', 'beta'].map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1, active_tab_id: `w${i + 1}:t1`, agent_status: 'idle', focused: i === 0, pane_count: 1, tab_count: 1 }))
   snapshot.tabs = [
     { tab_id: 'w1:t1', workspace_id: 'w1', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
     { tab_id: 'w1:t2', workspace_id: 'w1', label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false },
@@ -83,7 +102,10 @@ beforeEach(() => {
     { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t2', terminal_id: 'term3', agent_status: 'idle', focused: false, revision: 1 },
     { pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
   ]
+  snapshot.agents = [1, 2].map((i) => ({ name: `agent${i}`, agent: 'codex', agent_status: 'idle', pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, focused: i === 1 }))
   snapshot.layouts = []
+  vi.mocked(api.workbenchSession).mockReset()
+  vi.mocked(api.saveWorkbenchSession).mockReset()
   vi.mocked(api.workbenchSession).mockResolvedValue({ session: null })
   vi.mocked(api.saveWorkbenchSession).mockResolvedValue({ session: { host_id: 'host' } })
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
@@ -99,18 +121,71 @@ async function waitForRestoredWorkbench() {
   })
 }
 
+function emitSnapshot(value: Snapshot = snapshot) {
+  for (const handler of snapshotListeners) handler(value)
+}
+
+const savedW2 = { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' as const }
+
 describe('workbench session restore', () => {
   it('lands on the last workspace after a PC ↔ phone handoff', async () => {
-    vi.mocked(api.workbenchSession).mockResolvedValue({
-      session: { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' },
-    })
+    vi.mocked(api.workbenchSession).mockResolvedValue({ session: savedW2 })
     render(<WorkbenchPage hostID="host"/>)
     await waitFor(() => expect(screen.getByRole('button', { name: /agent2/ })).toHaveAttribute('aria-current', 'true'))
     expect(screen.getByRole('button', { name: /agent1/ })).not.toHaveAttribute('aria-current')
-    expect(document.querySelector('.workspace-row[aria-current="true"]')?.textContent).toContain('beta')
+    expect(document.querySelector('.workspace-row.sidebar-row-active')?.textContent).toContain('beta')
     await waitFor(() => expect(api.saveWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
       host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', client_class: 'desktop',
     })))
+    expect(api.saveWorkbenchSession).not.toHaveBeenCalledWith(expect.objectContaining({ workspace_id: 'w1' }))
+  })
+
+  it('applies the saved workspace after a later snapshot and never persists Herdr focused_* first', async () => {
+    snapshot.workspaces = []
+    snapshot.tabs = []
+    snapshot.panes = []
+    snapshot.agents = []
+    vi.mocked(api.workbenchSession).mockResolvedValue({ session: savedW2 })
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(api.workbenchSession).toHaveBeenCalled())
+    expect(document.querySelector('.workspace-row[aria-current="true"]')).toBeNull()
+    expect(api.saveWorkbenchSession).not.toHaveBeenCalled()
+
+    emitSnapshot({
+      ...snapshot,
+      focused_workspace_id: 'w1',
+      workspaces: ['alpha', 'beta'].map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1, active_tab_id: `w${i + 1}:t1`, agent_status: 'idle', focused: i === 0, pane_count: 1, tab_count: 1 })),
+      tabs: [
+        { tab_id: 'w1:t1', workspace_id: 'w1', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
+        { tab_id: 'w1:t2', workspace_id: 'w1', label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false },
+        { tab_id: 'w2:t1', workspace_id: 'w2', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: false },
+      ],
+      panes: [
+        { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'idle', focused: true, revision: 1 },
+        { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t2', terminal_id: 'term3', agent_status: 'idle', focused: false, revision: 1 },
+        { pane_id: 'w2:p1', workspace_id: 'w2', tab_id: 'w2:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
+      ],
+      agents: [1, 2].map((i) => ({ name: `agent${i}`, agent: 'codex', agent_status: 'idle', pane_id: `w${i}:p1`, workspace_id: `w${i}`, tab_id: `w${i}:t1`, focused: i === 1 })),
+    })
+
+    await waitFor(() => expect(document.querySelector('.workspace-row.sidebar-row-active')?.textContent).toContain('beta'))
+    expect(screen.getByRole('button', { name: /agent2/ })).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(api.saveWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({
+      workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1',
+    })))
+    expect(api.saveWorkbenchSession).not.toHaveBeenCalledWith(expect.objectContaining({ workspace_id: 'w1' }))
+  })
+
+  it('does not adopt Herdr focused_* while the session fetch is in flight', async () => {
+    let finish!: (value: { session: typeof savedW2 }) => void
+    vi.mocked(api.workbenchSession).mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    expect(document.querySelector('.workspace-row[aria-current="true"]')).toBeNull()
+    expect(api.saveWorkbenchSession).not.toHaveBeenCalled()
+    finish({ session: savedW2 })
+    await waitFor(() => expect(document.querySelector('.workspace-row.sidebar-row-active')?.textContent).toContain('beta'))
+    expect(vi.mocked(api.saveWorkbenchSession).mock.calls.every(([payload]) => payload.workspace_id !== 'w1')).toBe(true)
   })
 })
 
