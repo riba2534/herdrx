@@ -501,6 +501,7 @@ describe('workbench pane view mode', () => {
   it('offers the same view switch from the switcher actions and follows the connection state', async () => {
     connection.state = 'reconnecting'
     render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
     await screen.findByRole('button', { name: '切换工作区或终端' })
     // 断线时 pane 收到 connected=false，对话视图据此暂停刷新并禁用发送。
     expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-connected', 'false')
