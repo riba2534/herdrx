@@ -6,8 +6,24 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/riba2534/herdrx/internal/store"
 )
+
+// registerAuthenticatedMeRoutes mounts GET /me together with the workbench
+// session handoff routes on the same authenticated mux. Chat-mode and similar
+// merges that keep only router.Get("/me", ...) drop GET/PUT
+// /api/me/workbench-session and production then returns text/plain
+// "404 page not found" while /api/me still works.
+func (a *API) registerAuthenticatedMeRoutes(router chi.Router) {
+	router.Get("/me", a.me)
+	a.registerWorkbenchSessionRoutes(router)
+}
+
+func (a *API) registerWorkbenchSessionRoutes(router chi.Router) {
+	router.Get("/me/workbench-session", a.getWorkbenchSession)
+	router.With(a.requireCSRF, requireJSON).Put("/me/workbench-session", a.putWorkbenchSession)
+}
 
 type workbenchSessionRequest struct {
 	HostID      string `json:"host_id"`

@@ -78,6 +78,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+async function waitForRestoredWorkbench() {
+  await waitFor(() => {
+    expect(document.querySelector('.workspace-row[aria-current="true"]')).toBeTruthy()
+  })
+}
+
 describe('workbench session restore', () => {
   it('lands on the last workspace after a PC ↔ phone handoff', async () => {
     vi.mocked(api.workbenchSession).mockResolvedValue({
@@ -266,7 +272,7 @@ describe('workbench tab and mobile status', () => {
       { tab_id: 'w1:t2', workspace_id: 'w1', label: '日志', number: 2, pane_count: 1, agent_status: 'working', focused: false },
     ]
     render(<WorkbenchPage hostID="host"/>)
-    await screen.findByRole('button', { name: /agent1/ })
+    await waitForRestoredWorkbench()
     const logTab = screen.getByText('日志').closest('.tab')!
     const logSelect = logTab.querySelector('.tab-select')!
     expect(logSelect).toHaveAttribute('aria-pressed', 'false')
@@ -333,7 +339,7 @@ describe('workbench prefix keymap and focus', () => {
 
   it('switches to tab 2 with Ctrl+B 2', async () => {
     render(<WorkbenchPage hostID="host"/>)
-    await screen.findByRole('button', { name: /agent1/ })
+    await waitForRestoredWorkbench()
     expect(screen.getByRole('button', { pressed: true, name: '空闲 1' })).toBeInTheDocument()
     press('b', { ctrlKey: true })
     press('2')
@@ -354,6 +360,7 @@ describe('workbench prefix keymap and focus', () => {
 
   it('keeps the Agent row as the selected pane after a sidebar click', async () => {
     render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
     const agent2 = await screen.findByRole('button', { name: /agent2/ })
     fireEvent.click(agent2)
     expect(agent2).toHaveAttribute('aria-current', 'true')

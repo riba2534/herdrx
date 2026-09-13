@@ -155,9 +155,7 @@ func (a *API) Handler() http.Handler {
 		router.Post("/logout", a.logout)
 		router.Group(func(router chi.Router) {
 			router.Use(a.authenticate)
-			router.Get("/me", a.me)
-			router.Get("/me/workbench-session", a.getWorkbenchSession)
-			router.With(a.requireCSRF, requireJSON).Put("/me/workbench-session", a.putWorkbenchSession)
+			a.registerAuthenticatedMeRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
 			router.Route("/ssh-keys", a.sshKeyRoutes)

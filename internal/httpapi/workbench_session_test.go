@@ -1,8 +1,59 @@
 package httpapi
 
 import (
+	"io"
+	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 )
+
+func TestWorkbenchSessionRoutesMountedOnHandler(t *testing.T) {
+	api, _, srv, admin, _ := authFixture(t)
+	router, ok := api.Handler().(chi.Router)
+	if !ok {
+		t.Fatalf("Handler() must be the chi mux used in production, got %T", api.Handler())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		if !router.Match(chi.NewRouteContext(), method, "/api/me/workbench-session") {
+			t.Fatalf("%s /api/me/workbench-session is not registered on Handler(); chat-mode merges that keep only GET /me drop this route and production returns text/plain 404 page not found", method)
+		}
+	}
+
+	anon := newTestClient(t)
+	assertWorkbenchSessionStatus(t, anon, http.MethodGet, srv.URL+"/api/me/workbench-session", http.StatusUnauthorized)
+	assertWorkbenchSessionStatus(t, admin, http.MethodGet, srv.URL+"/api/me/workbench-session", http.StatusOK)
+	assertWorkbenchSessionStatus(t, anon, http.MethodPut, srv.URL+"/api/me/workbench-session", http.StatusUnauthorized)
+}
+
+func assertWorkbenchSessionStatus(t *testing.T, client *http.Client, method, url string, want int) {
+	t.Helper()
+	request, err := http.NewRequest(method, url, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://example.test")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode == http.StatusNotFound && strings.Contains(string(body), "page not found") {
+		t.Fatalf("%s %s hit the chi/net/http fallback (%q); the workbench-session route is not on the production mux", method, url, body)
+	}
+	if response.StatusCode != want {
+		t.Fatalf("%s %s status=%d want=%d body=%s", method, url, response.StatusCode, want, body)
+	}
+	if ct := response.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("%s %s content-type=%q, want JSON (not text/plain 404)", method, url, ct)
+	}
+}
 
 func TestWorkbenchSessionHandoffRoundTrip(t *testing.T) {
 	_, _, srv, admin, info := authFixture(t)

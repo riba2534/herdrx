@@ -312,6 +312,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return
       }
     }
+    if (!restoreReady) return
     if (restoreLocation && !userPickedLocation.current) {
       const restored = matchWorkbenchLocation(snapshot, restoreLocation)
       setRestoreLocation(null)
@@ -337,7 +338,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.pane_id === layout?.focused_pane_id)
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
-  }, [snapshot, workspaceID, tabID, paneID, restoreLocation])
+  }, [snapshot, workspaceID, tabID, paneID, restoreLocation, restoreReady])
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
