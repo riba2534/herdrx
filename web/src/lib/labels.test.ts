@@ -9,7 +9,9 @@ import {
   tabCountLabel,
   terminalCountLabel,
   transportLabel,
+  workspaceBranchLine,
   workspaceCountLabel,
+  workspaceSwitcherDetail,
 } from './labels'
 
 describe('workbench labels', () => {
@@ -29,6 +31,10 @@ describe('workbench labels', () => {
 
   it('formats counts, notifications and host connection text', () => {
     expect(workspaceCountLabel(2, 2)).toBe('2 个终端 · 2 个标签页')
+    expect(workspaceBranchLine(' feat/overview ')).toBe('feat/overview')
+    expect(workspaceBranchLine(null)).toBe('')
+    expect(workspaceSwitcherDetail(1, 'main')).toBe('main · 1 个终端')
+    expect(workspaceSwitcherDetail(3)).toBe('3 个终端')
     expect(terminalCountLabel(3)).toBe('3 个终端')
     expect(tabCountLabel(1)).toBe('1 个标签页')
     expect(agentNotificationTitle('Claude', 'blocked')).toBe('Claude 等待你的确认')

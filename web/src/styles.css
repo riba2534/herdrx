@@ -183,14 +183,22 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .sidebar-row { width: 100%; min-height: 40px; display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 6px; border: 0; border-radius: 3px; padding: 4px 6px; background: transparent; text-align: left; color: var(--text); }
 .sidebar-row:hover { background: var(--panel-strong); }
 .sidebar-row-active { background: var(--accent-soft) !important; }
-.agent-row { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.agent-row { min-height: 32px; grid-template-columns: 16px minmax(0, 1fr) auto; }
 .agent-meta { min-width: 0; display: grid; }
 .agent-state { white-space: nowrap; min-width: 3em; text-align: right; align-self: start; padding-top: 2px; font-size: 11px; color: var(--muted); }
 .sidebar-row strong, .sidebar-row small { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 .sidebar-row strong { font-size: 12px; font-weight: 500; }
 .sidebar-row small { color: var(--muted); font-size: 11px; margin-top: 1px; }
-.workspace-row { min-height: 28px; display: flex; gap: 4px; }
+.workspace-group { min-width: 0; }
+.workspace-item { width: 100%; min-width: 0; display: flex; align-items: stretch; gap: 2px; }
+.workspace-item-child { padding-left: 12px; }
+.workspace-group-toggle { flex: 0 0 var(--workspace-gutter, 16px); width: var(--workspace-gutter, 16px); min-height: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.workspace-group-toggle:hover { background: var(--panel-strong); color: var(--text); }
+.workspace-group-spacer { flex: 0 0 var(--workspace-gutter, 16px); }
+.workspace-row { min-height: 28px; display: flex; gap: 4px; flex: 1; min-width: 0; }
 .workspace-row strong { min-width: 0; flex: 1; }
+.workspace-copy { min-width: 0; flex: 1; display: grid; }
+.workspace-branch { color: var(--muted); }
 .workspace-row .status-dot, .workspace-number, .workspace-count { flex-shrink: 0; }
 .sidebar-section-title .workspace-create { width: auto; padding: 0 7px; display: flex; gap: 3px; color: var(--text); background: var(--panel-strong); }
 .workspace-create:disabled { opacity: .5; cursor: wait; }
@@ -443,7 +451,9 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 
 @media (pointer: coarse) and (min-width: 768px) {
   .workbench { --hostbar-height: 44px; --tabbar-height: 44px; --pane-bar-height: 44px; }
-  .workspace-row, .agent-row { min-height: 44px; }
+  .workspace-row, .agent-row, .workspace-group-toggle { min-height: 44px; }
+  /* Declared on the gutter elements so it beats the inherited density value. */
+  .workspace-group-toggle, .workspace-group-spacer { --workspace-gutter: 44px; }
   .workbench-brand .icon-button, .tab-close, .tab-add, .sidebar-reopen, .workbench .tool-button { min-width: 44px; min-height: 44px; }
   .tab-close { flex-basis: 44px; }
   .sidebar-section-title { min-height: 44px; }
@@ -528,6 +538,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }
 @media (pointer: coarse) {
   .workbench .display-toolbar .tool-button, .workbench .history-navigation .tool-button { min-height: 44px; min-width: 44px; }
+  /* Compact panes show the crop badge too, so it needs a touch target there. */
+  .pane-crop-badge { height: auto; min-height: 44px; }
   .pane-menu-button { display: inline-flex; }
 }
 @media (max-width: 350px) {
