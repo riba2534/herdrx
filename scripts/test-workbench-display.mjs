@@ -91,6 +91,33 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
           setTimeout(() => ws.send(JSON.stringify({ t: 'snapshot', snapshot: fixtureSnapshot })), 200)
           return
         }
+        if (message.method === 'worktree.list') {
+          const worktrees = (fixtureSnapshot.workspaces || []).filter((workspace) => workspace.worktree).map((workspace) => ({
+            path: workspace.worktree.checkout_path,
+            is_bare: false,
+            is_detached: false,
+            is_prunable: false,
+            is_linked_worktree: Boolean(workspace.worktree.is_linked_worktree),
+            label: workspace.label,
+            open_workspace_id: workspace.workspace_id,
+            branch: workspace.label === 'astergate' ? 'feat/overview-tps-m' : workspace.label === 'codex-reset-cards' ? 'feat/codex-reset-credits' : workspace.label === 'herdrx' ? 'main' : workspace.label.includes('linked-worktree') ? 'feat/very-long-branch-name-should-wrap-完整展示分支名称' : null,
+          }))
+          const sourceWorkspace = fixtureSnapshot.workspaces.find((workspace) => workspace.worktree) || {}
+          ws.send(JSON.stringify({
+            t: 'result', id: message.id, result: {
+              type: 'worktree_list',
+              source: {
+                repo_key: sourceWorkspace.worktree?.repo_key || '/workspace/example/.git',
+                repo_name: sourceWorkspace.worktree?.repo_name || 'example',
+                repo_root: '/workspace/example',
+                source_checkout_path: '/workspace/example',
+                source_workspace_id: message.params?.workspace_id || null,
+              },
+              worktrees,
+            },
+          }))
+          return
+        }
         if (message.method === 'terminal.scroll') emitFrame(message.params.stream_id, `\x1b[2J\x1b[HNative wheel ${message.params.lines}`)
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: message.method === 'pane.read' ? { read: { text: Array.from({ length: 100 }, (_, i) => `history line ${i}`).join('\n') } } : {} }))
       }
@@ -276,10 +303,18 @@ try {
     try {
       const labels = structuredClone(snapshot)
       labels.workspaces[0].label = 'workspace-with-a-very-long-name-工作区名称应完整展示'
+      labels.workspaces[0].worktree = { repo_key: '/workspace/example/.git', repo_name: 'example', repo_root: '/workspace/example', checkout_path: '/workspace/example', is_linked_worktree: false }
+      labels.workspaces.push({
+        workspace_id: 'w2', active_tab_id: 't1', label: 'linked-worktree-with-a-very-long-name-子工作区',
+        number: 2, pane_count: 1, tab_count: 1, agent_status: 'idle',
+        worktree: { repo_key: '/workspace/example/.git', repo_name: 'example', repo_root: '/workspace/example', checkout_path: '/workspace/example/.herdr/worktrees/example/feat-long', is_linked_worktree: true },
+      })
       labels.agents = [{ pane_id: 'p1', workspace_id: 'w1', tab_id: 't1', agent: 'codex', name: 'Agent-with-a-long-name-中文测试', agent_status: 'blocked' }]
       const sidebar = await fixture(browser, { viewport: { width: 1024, height: 768 } }, labels)
       await expect(sidebar.page.getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
-      for (const selector of ['.workspace-row strong', '.agent-meta strong', '.agent-meta small', '.agent-state']) {
+      await expect(sidebar.page.locator('.workspace-row-child strong')).toContainText('linked-worktree')
+      await expect(sidebar.page.locator('.workspace-branch').first()).toBeVisible()
+      for (const selector of ['.workspace-row strong', '.workspace-branch', '.agent-meta strong', '.agent-meta small', '.agent-state']) {
         const clipped = await sidebar.page.locator(selector).evaluateAll(els => els.some(el => {
           const box = el.getBoundingClientRect(), row = el.closest('.sidebar-row').getBoundingClientRect()
           return el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1 || box.right > row.right + 1
@@ -290,10 +325,82 @@ try {
       await sidebar.page.getByRole('button', { name: '新建工作区', exact: true }).click()
       await expect.poll(() => sidebar.messages.filter(m => m.t === 'terminal.open').at(-1)?.pane_id).toBe('created-pane')
       await sidebar.context.close()
+      const treeSnapshot = structuredClone(snapshot)
+      treeSnapshot.workspaces = [
+        { workspace_id: 'w-home', active_tab_id: 't1', label: '~', number: 1, pane_count: 1, tab_count: 1, agent_status: 'idle' },
+        { workspace_id: 'w-parent', active_tab_id: 't1', label: 'astergate', number: 2, pane_count: 1, tab_count: 1, agent_status: 'working', worktree: { repo_key: '/workspace/example/.git', repo_name: 'example', repo_root: '/workspace/example', checkout_path: '/workspace/example', is_linked_worktree: false } },
+        { workspace_id: 'w-child', active_tab_id: 't1', label: 'codex-reset-cards', number: 3, pane_count: 1, tab_count: 1, agent_status: 'idle', worktree: { repo_key: '/workspace/example/.git', repo_name: 'example', repo_root: '/workspace/example', checkout_path: '/workspace/example/.herdr/worktrees/example/feat-codex-reset', is_linked_worktree: true } },
+        { workspace_id: 'w-other', active_tab_id: 't1', label: 'herdrx', number: 4, pane_count: 1, tab_count: 1, agent_status: 'idle', worktree: { repo_key: '/workspace/herdrx/.git', repo_name: 'herdrx', repo_root: '/workspace/herdrx', checkout_path: '/workspace/herdrx', is_linked_worktree: false } },
+      ]
+      const tree = await fixture(browser, { viewport: { width: 1024, height: 768 } }, treeSnapshot)
+      await expect(tree.page.locator('.workspace-row strong')).toHaveText(['~', 'astergate', 'codex-reset-cards', 'herdrx'])
+      await expect(tree.page.locator('.workspace-row-child strong')).toHaveText('codex-reset-cards')
+      await expect(tree.page.locator('.workspace-branch')).toContainText(['feat/overview-tps-m', 'feat/codex-reset-credits', 'main'])
+      const indent = await tree.page.evaluate(() => {
+        const parent = document.querySelector('[data-tooltip^="astergate"]')
+        const child = document.querySelector('.workspace-row-child')
+        return { parent: parent?.getBoundingClientRect().left ?? 0, child: child?.getBoundingClientRect().left ?? 0 }
+      })
+      assert.ok(indent.child > indent.parent + 8, `linked worktree row is not indented: ${JSON.stringify(indent)}`)
+      await tree.page.getByRole('button', { name: '收起 astergate 的 Worktree 组' }).click()
+      await expect(tree.page.locator('.workspace-row-child')).toHaveCount(0)
+      await tree.page.getByRole('button', { name: '切换工作区或终端' }).click()
+      await expect(tree.page.locator('.switcher').getByText(/feat\/overview-tps-m/)).toBeVisible()
+      await tree.page.keyboard.press('Escape')
+      // Selecting the linked child must never leave the sidebar without an active
+      // row, so its group refuses to collapse while it holds the active workspace.
+      await tree.page.getByRole('button', { name: '展开 astergate 的 Worktree 组' }).click()
+      await tree.page.locator('.workspace-row-child').click()
+      const activeToggle = tree.page.getByRole('button', { name: '收起 astergate 的 Worktree 组' })
+      await expect(activeToggle).toHaveAttribute('aria-disabled', 'true')
+      // aria-disabled marks the control unavailable to automation too, so force the
+      // click to prove the handler itself refuses to hide the active workspace.
+      await activeToggle.click({ force: true })
+      await expect(tree.page.locator('.workspace-row-child')).toHaveCount(1)
+      await expect(tree.page.locator('.workspace-row-child')).toHaveAttribute('aria-current', 'true')
+      await tree.context.close()
+      // The Agent section owns the sidebar's remaining row; capping it leaves a
+      // dead band above the footer and hides most of the list.
+      const stress = structuredClone(treeSnapshot)
+      stress.agents = Array.from({ length: 24 }, (_, i) => ({ pane_id: `sp${i}`, workspace_id: 'w-parent', tab_id: 't1', agent: 'codex', agent_status: 'idle', name: `agent-${i}` }))
+      const density = await fixture(browser, { viewport: { width: 1440, height: 900 } }, stress)
+      const band = await density.page.evaluate(() => {
+        const section = document.querySelector('.workbench-sidebar > .sidebar-section:nth-of-type(2)')
+        const list = section?.querySelector('.sidebar-list')
+        return {
+          sectionBottom: section?.getBoundingClientRect().bottom ?? 0,
+          footerTop: document.querySelector('.sidebar-footer')?.getBoundingClientRect().top ?? 0,
+          rows: list?.querySelectorAll('.agent-row').length ?? 0,
+          scrollable: (list?.scrollHeight ?? 0) > (list?.clientHeight ?? 0),
+        }
+      })
+      assert.ok(band.footerTop - band.sectionBottom <= 1, `sidebar leaves a dead band above the footer: ${JSON.stringify(band)}`)
+      assert.ok(band.scrollable && band.rows === 24, `agent list did not fill the sidebar row: ${JSON.stringify(band)}`)
+      await density.context.close()
+      if (name === 'chromium') {
+        // Coarse pointers only (Chromium honours touch emulation): the worktree
+        // gutter keeps the 44px target and stays aligned with plain rows.
+        const coarse = await fixture(browser, { viewport: { width: 1024, height: 768 }, hasTouch: true }, treeSnapshot)
+        const gutter = await coarse.page.evaluate(() => {
+          const rect = (el) => { const r = el.getBoundingClientRect(); return { width: r.width, height: r.height } }
+          const toggle = document.querySelector('.workspace-group-toggle'), spacer = document.querySelector('.workspace-group-spacer')
+          return { reports: matchMedia('(pointer: coarse) and (min-width: 768px)').matches, toggle: toggle ? rect(toggle) : null, spacer: spacer ? rect(spacer) : null }
+        })
+        assert.ok(gutter.reports, 'chromium touch emulation did not report a coarse pointer')
+        assert.ok(gutter.toggle && gutter.toggle.width >= 44 && gutter.toggle.height >= 44, `group toggle is below the 44px touch target: ${JSON.stringify(gutter)}`)
+        assert.equal(gutter.spacer?.width, gutter.toggle.width, `worktree gutter is misaligned: ${JSON.stringify(gutter)}`)
+        await coarse.context.close()
+      }
       const desktop = await fixture(browser, { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 })
       const { page, messages } = desktop
+      // Desktop defaults to auto: it shrinks the font to show the complete grid
+      // while staying inside the readable range, and never crops what fits.
+      await expect.poll(async () => {
+        const m = await metrics(page)
+        return m.font >= 10 && m.font <= 14 && m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1
+      }, { timeout: 15000 }).toBe(true)
       const initial = await metrics(page)
-      assert.equal(initial.font, 14, 'desktop default font must stay 14px')
+      await expect(page.locator('.pane-crop-badge')).toHaveCount(0)
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'page has horizontal overflow')
       await assertNoReservedHeaders(page)
       await openPaneTools(page)

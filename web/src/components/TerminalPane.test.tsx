@@ -1005,6 +1005,64 @@ describe('TerminalPane status chip and crop badge', () => {
     expect(onDisplayChange).toHaveBeenCalledWith({ mode: 'fit', zoom: 100 })
   })
 
+  it('shrinks the font in auto mode so the complete remote grid stays visible', async () => {
+    const onFontSizeChange = vi.fn()
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'auto' as const }, sourceCols: 80, sourceRows: 40, onFontSizeChange }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 500 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 400 })
+    rerender(<TerminalPane {...props} layoutVersion={1}/>)
+    await waitFor(() => expect(onFontSizeChange).toHaveBeenLastCalledWith(10))
+    expect(screen.queryByRole('button', { name: /已裁切/ })).not.toBeInTheDocument()
+  })
+
+  it('falls back to the crop badge in auto mode when fitting would go below the readable floor', async () => {
+    const onDisplayChange = vi.fn()
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'auto' as const }, sourceCols: 80, sourceRows: 40, onDisplayChange }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
+    rerender(<TerminalPane {...props} layoutVersion={1}/>)
+    const badge = await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })
+    expect(badge).toBeInTheDocument()
+    // The badge states the size it will produce, so the drop below the floor is a choice.
+    expect(badge).toHaveAttribute('data-tooltip', expect.stringContaining('字号约 2 px'))
+  })
+
+  it('keeps the complete grid when the zoom raises the fit ceiling in auto mode', async () => {
+    const onFontSizeChange = vi.fn()
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, sourceCols: 80, sourceRows: 40, onFontSizeChange }
+    const { rerender } = render(<TerminalPane {...props} display={{ fontSize: 14, zoom: 100, mode: 'auto' }} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 500 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 400 })
+    // 缩放 is the ceiling: at 150% the grid still caps the font at 10px instead
+    // of rendering 15px and cutting the right side off without a badge.
+    rerender(<TerminalPane {...props} display={{ fontSize: 14, zoom: 150, mode: 'auto' }} layoutVersion={1}/>)
+    await waitFor(() => expect(onFontSizeChange).toHaveBeenLastCalledWith(10))
+    expect(screen.queryByRole('button', { name: /已裁切/ })).not.toBeInTheDocument()
+  })
+
+  it('warns about a cropped grid in the compact layout as well', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, compact: true, display: { fontSize: 14, zoom: 100, mode: 'auto' as const }, sourceCols: 80, sourceRows: 40 }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
+    rerender(<TerminalPane {...props} layoutVersion={1}/>)
+    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })).toBeInTheDocument()
+  })
+
   it('does not show a crop badge in responsive mode', () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
