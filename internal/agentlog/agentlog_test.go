@@ -399,13 +399,13 @@ func TestBlockMarshalsContractShape(t *testing.T) {
 }
 
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
-	for _, agent := range []string{AgentClaude, AgentCodex} {
+	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH} {
 		if !Supported(agent) {
 			t.Fatalf("%s should be supported", agent)
 		}
 	}
 	// 与 claude/codex 同格式族的这些 agent 在各自的 decoder 与日志根被真实验证前一律不支持。
-	for _, agent := range []string{"openclaude", "grok", "omp", "gemini", "cursor", "", "CLAUDE"} {
+	for _, agent := range []string{"openclaude", "grok", "omp", "gemini", "cursor", "", "CLAUDE", "DSH"} {
 		if Supported(agent) {
 			t.Fatalf("%q must not be claimed as supported", agent)
 		}

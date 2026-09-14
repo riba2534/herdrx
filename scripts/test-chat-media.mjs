@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// 对话视图「图片附件 + 语音输入」的浏览器回归（真实构建产物 web/dist，纯假后端）。
+// 对话视图「图片附件 + 语音输入」浏览器回归：真实 web/dist 和网站 CSP，媒体/Herdr 使用假后端。
+// 用法：node scripts/test-chat-media.mjs /absolute/path/to/herdrx-server
+// 网站二进制仅在临时目录启动以读取安全响应头，不连接任何真实主机。
 //
 // 全部是假的后端，任何一步都不碰真实 Herdr 主机 / pane / PTY / 用户会话：
 // - 假工作台 WebSocket（`**/api/hosts/*/ws`）：终端观察流 + `pane.send_input`，与
@@ -18,7 +20,9 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { websiteSecurityPolicy } from './browser-security-policy.mjs'
 
+const security = await websiteSecurityPolicy(process.argv[2] || 'bin/herdrx-server')
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_CHAT_MEDIA_ARTIFACTS
 const host = { id: 'media-test', name: '媒体测试', transport: 'ssh' }
@@ -101,8 +105,8 @@ const server = createServer(async (req, res) => {
   try {
     const file = (path.startsWith('/assets/') || path.startsWith('/brand/')) || ['/boot.js', '/sw.js', '/manifest.webmanifest', '/favicon.ico'].includes(path) ? path.slice(1) : 'index.html'
     res.setHeader('content-type', file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.png') ? 'image/png' : file.endsWith('.ico') ? 'image/x-icon' : file.endsWith('.webmanifest') ? 'application/manifest+json' : 'text/html')
-    // 与契约 §8.1 要求接线后的 server.go 一致：`microphone=(self)` 才允许本源的麦克风。
-    res.setHeader('permissions-policy', 'camera=(), microphone=(self), geolocation=()')
+    res.setHeader('content-security-policy', security.csp)
+    res.setHeader('permissions-policy', security.permissions)
     res.end(await readFile(join(dist, file)))
   } catch { res.writeHead(404); res.end() }
 })

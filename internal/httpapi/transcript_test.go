@@ -144,6 +144,50 @@ func agentPane(agent, cwd, foreground string) herdr.Snapshot {
 	}}}
 }
 
+func TestTranscriptExplicitDSHSource(t *testing.T) {
+	for _, agent := range []string{"", "unrecognized-program", "dsh"} {
+		t.Run("agent="+agent, func(t *testing.T) {
+			endpoint := &transcriptTestEndpoint{
+				snapshot: agentPane(agent, "/srv/fallback", "/srv/dsh-project"),
+				page:     herdr.TranscriptPage{Supported: true, Agent: "dsh"},
+			}
+			fixture := newTranscriptFixture(t, endpoint)
+			requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "source=dsh&cwd=/forged&agent=claude&path=/etc/passwd"), "", nil, 200)
+			if endpoint.calls != 1 || endpoint.scope.Agent != "dsh" || endpoint.scope.CWD != "/srv/dsh-project" || endpoint.scope.PaneID != "w1:p1" {
+				t.Fatalf("selected reader escaped server-owned scope: %+v", endpoint.scope)
+			}
+			endpoint.snapshot = agentPane(agent, "/srv/fallback", "")
+			requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "source=dsh"), "", nil, 200)
+			if endpoint.scope.CWD != "/srv/fallback" {
+				t.Fatalf("selected reader lost cwd fallback: %+v", endpoint.scope)
+			}
+		})
+	}
+}
+
+func TestTranscriptSourceRejectsConflictsAndArbitraryValues(t *testing.T) {
+	for _, agent := range []string{agentlog.AgentClaude, agentlog.AgentCodex} {
+		t.Run(agent, func(t *testing.T) {
+			endpoint := &transcriptTestEndpoint{snapshot: agentPane(agent, "/srv/project", "")}
+			fixture := newTranscriptFixture(t, endpoint)
+			requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "source=dsh"), "", nil, 400)
+			if endpoint.calls != 0 {
+				t.Fatal("conflicting source reached the log reader")
+			}
+		})
+	}
+	for _, source := range []string{"claude", "codex", "../../etc", "DSH", "dsh&source=dsh"} {
+		t.Run(source, func(t *testing.T) {
+			endpoint := &transcriptTestEndpoint{snapshot: agentPane("", "/srv/project", "")}
+			fixture := newTranscriptFixture(t, endpoint)
+			requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "source="+source), "", nil, 400)
+			if fixture.pool.opened != 0 || endpoint.calls != 0 {
+				t.Fatal("invalid source reached host connection")
+			}
+		})
+	}
+}
+
 func TestTranscriptScopeComesFromServerSidePaneFacts(t *testing.T) {
 	endpoint := &transcriptTestEndpoint{
 		snapshot: agentPane(agentlog.AgentClaude, "/srv/fallback", "/srv/foreground"),
@@ -286,6 +330,8 @@ func TestTranscriptIsOwnerScoped(t *testing.T) {
 	missing := strings.Replace(fixture.url("w1:p1", ""), fixture.host.ID, "no-such-host", 1)
 	requestJSON(t, fixture.client, "GET", other, "", nil, 404)
 	requestJSON(t, fixture.client, "GET", missing, "", nil, 404)
+	requestJSON(t, fixture.client, "GET", other+"?source=dsh", "", nil, 404)
+	requestJSON(t, fixture.client, "GET", missing+"?source=dsh", "", nil, 404)
 	if fixture.pool.opened != 0 {
 		t.Fatal("non-owner request opened a host connection")
 	}

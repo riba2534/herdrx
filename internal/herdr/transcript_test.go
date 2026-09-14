@@ -800,26 +800,50 @@ func TestTranscriptSessionTokenIsOpaqueAndUnforgeable(t *testing.T) {
 
 func TestTranscriptRelAllowedShape(t *testing.T) {
 	cases := []struct {
-		agent string
-		rel   string
-		want  bool
+		agent   string
+		cwd     string
+		session string
+		rel     string
+		want    bool
 	}{
-		{agentlog.AgentClaude, "-srv-proj/0f3a.jsonl", true},
-		{agentlog.AgentClaude, "0f3a.jsonl", false},
-		{agentlog.AgentClaude, "-srv-proj/a/b.jsonl", false},
-		{agentlog.AgentClaude, "-srv-proj/../secret.jsonl", false},
-		{agentlog.AgentClaude, "/-srv-proj/0f3a.jsonl", false},
-		{agentlog.AgentClaude, "-srv-proj/0f3a.txt", false},
-		{agentlog.AgentClaude, "-srv-proj/.hidden.jsonl", false},
-		{agentlog.AgentCodex, "2026/09/13/rollout-1.jsonl", true},
-		{agentlog.AgentCodex, "rollout-1.jsonl", true},
-		{agentlog.AgentCodex, "2026/09/13/abc.jsonl", false},
-		{agentlog.AgentCodex, "a/b/c/d/e/f/rollout-1.jsonl", false},
-		{agentlog.AgentCodex, "2026/09/13/../rollout-1.jsonl", false},
+		{agent: agentlog.AgentClaude, rel: "-srv-proj/0f3a.jsonl", want: true},
+		{agent: agentlog.AgentClaude, rel: "0f3a.jsonl", want: false},
+		{agent: agentlog.AgentClaude, rel: "-srv-proj/a/b.jsonl", want: false},
+		{agent: agentlog.AgentClaude, rel: "-srv-proj/../secret.jsonl", want: false},
+		{agent: agentlog.AgentClaude, rel: "/-srv-proj/0f3a.jsonl", want: false},
+		{agent: agentlog.AgentClaude, rel: "-srv-proj/0f3a.txt", want: false},
+		{agent: agentlog.AgentClaude, rel: "-srv-proj/.hidden.jsonl", want: false},
+		{agent: agentlog.AgentCodex, rel: "2026/09/13/rollout-1.jsonl", want: true},
+		{agent: agentlog.AgentCodex, rel: "rollout-1.jsonl", want: true},
+		{agent: agentlog.AgentCodex, rel: "2026/09/13/abc.jsonl", want: false},
+		{agent: agentlog.AgentCodex, rel: "a/b/c/d/e/f/rollout-1.jsonl", want: false},
+		{agent: agentlog.AgentCodex, rel: "2026/09/13/../rollout-1.jsonl", want: false},
+
+		// DSH：三段路径必须逐字等于「cwd 的项目目录 + 会话 id 的规范编码 + 受支持文件名」。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/session.v3.jsonl", want: true},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/session.v3.jsonl.zstd", want: true},
+		// 其它代际不是本期支持的产物。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/session.v2.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/session.jsonl", want: false},
+		// 项目目录必须就是 cwd 的编码：换一个目录就是越界。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-other--/sess-1/session.v3.jsonl", want: false},
+		// 会话目录段必须是这个 session id 的规范编码（防线之一，归属仍由 header 判定）。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-2/session.v3.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/..%2F/session.v3.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/../session.v3.jsonl", want: false},
+		// 层数必须恰好三层。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/sub/session.v3.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--//session.v3.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "--srv-app--/sess-1/other.jsonl", want: false},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "sess-1", rel: "/--srv-app--/sess-1/session.v3.jsonl", want: false},
+		// 需要转义的会话 id：编码后仍必须能被对拍回去。
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "a/b", rel: "--srv-app--/a~002Fb/session.v3.jsonl.zstd", want: true},
+		{agent: agentlog.AgentDSH, cwd: "/srv/app", session: "a/b", rel: "--srv-app--/a/b/session.v3.jsonl.zstd", want: false},
 	}
 	for _, testCase := range cases {
-		if got := transcriptRelAllowed(testCase.agent, testCase.rel); got != testCase.want {
-			t.Fatalf("transcriptRelAllowed(%q, %q) = %v, want %v", testCase.agent, testCase.rel, got, testCase.want)
+		if got := transcriptRelAllowed(testCase.agent, testCase.cwd, testCase.session, testCase.rel); got != testCase.want {
+			t.Fatalf("transcriptRelAllowed(%q, %q, %q, %q) = %v, want %v", testCase.agent, testCase.cwd, testCase.session, testCase.rel, got, testCase.want)
 		}
 	}
 }

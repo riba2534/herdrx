@@ -65,6 +65,7 @@ const (
 	ChatReasonNoSessionCandidates  = "no_session_candidates"
 	ChatReasonReadDenied           = "read_denied"
 	ChatReasonUnrecognizedFormat   = "unrecognized_format"
+	ChatReasonReadLimitExceeded    = "read_limit_exceeded"
 	ChatReasonInternalError        = "internal_error"
 )
 
@@ -175,19 +176,27 @@ func (c transcriptCodec) open(token string, count int) ([]string, bool) {
 
 // ── 受限文件访问 ──
 //
-// 进程内（本机）与远端（SSH）实现共用同一套语义：两个固定日志根、严格子路径、
+// 进程内（本机）与远端（SSH）实现共用同一套语义：固定日志根、严格子路径、
 // 拒绝符号链接、有界读取。读取方只负责「取字节」，解析与判定全在 agentlog 与这里。
+//
+// 日志根是三个固定值：Claude 的 `<HOME>/.claude/projects`、Codex 的
+// `<HOME>/.codex/sessions` 与 DSH 的 `<HOME>/.dsh/sessions`
+// （上游 `dsh-base/cordis.patch.yml` 的 `dshHomePath('sessions')`）。调用方永远不传路径。
 
 type transcriptRootKind string
 
 const (
 	transcriptRootClaude transcriptRootKind = "claude"
 	transcriptRootCodex  transcriptRootKind = "codex"
+	transcriptRootDSH    transcriptRootKind = "dsh"
 )
 
 func transcriptRootFor(agent string) transcriptRootKind {
-	if agent == agentlog.AgentCodex {
+	switch agent {
+	case agentlog.AgentCodex:
 		return transcriptRootCodex
+	case agentlog.AgentDSH:
+		return transcriptRootDSH
 	}
 	return transcriptRootClaude
 }
@@ -257,7 +266,12 @@ func transcriptRelParts(rel string) ([]string, error) {
 //
 // 客户端传回的只是不透明 id，服务端把它解析回**自己已经认定过的那一个文件**；这一步确认
 // 解析结果仍是该 agent 日志根下的合法会话文件，因此 id 不是任意路径许可。
-func transcriptRelAllowed(agent, rel string) bool {
+//
+// DSH 的检查最严：三段路径必须**逐字**等于「cwd 的项目目录 + 会话 id 的规范编码 + 受支持
+// 的文件名」。项目目录编码是有损的（分隔符折叠、截断），所以它只用来缩小范围；
+// 真正证明归属的仍然是 header 里 cwd/id 的精确相等，在那个检查之前这里的对拍只是一道
+// 闸门 —— 它保证客户端拿到的 token 不可能被改写成指向另一个会话。
+func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	parts, err := transcriptRelParts(rel)
 	if err != nil || len(parts) == 0 {
 		return false
@@ -270,6 +284,16 @@ func transcriptRelAllowed(agent, rel string) bool {
 	case agentlog.AgentCodex:
 		// `YYYY/MM/DD/rollout-*.jsonl`：层数有界，不做递归通配。
 		return len(parts) >= 1 && len(parts) <= transcriptMaxCodexDepth+1 && agentlog.CodexSessionFile(name)
+	case agentlog.AgentDSH:
+		// `<项目目录>/<会话目录>/session.v3.jsonl[.zstd]`：恰好三层。
+		if len(parts) != 3 {
+			return false
+		}
+		if !agentlog.DSHSessionFile(name) && !agentlog.DSHCompressedSessionFile(name) {
+			return false
+		}
+		expected, ok := dshRelForSession(cwd, sessionID, name)
+		return ok && expected == rel
 	}
 	return false
 }
@@ -296,7 +320,7 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return transcriptCandidates(ctx, files, codec, agent, cwd)
 	}
 	parts, ok := codec.open(request.Session, 3)
-	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, parts[2]) {
+	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, cwd, parts[1], parts[2]) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	return transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request)
@@ -321,12 +345,18 @@ func transcriptDegradeFromError(err error, agent string) TranscriptPage {
 
 // transcriptCandidates 只列候选，绝不返回消息，也绝不自动认领其中一个。
 func transcriptCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string) TranscriptPage {
-	candidates, err := collectCandidates(ctx, files, codec, agent, cwd)
+	candidates, foreign, err := collectCandidates(ctx, files, codec, agent, cwd)
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
 	}
 	page := TranscriptPage{Supported: true, Agent: agent, Candidates: candidates, Messages: []agentlog.Record{}}
-	if len(candidates) == 0 {
+	switch {
+	case len(candidates) > 0:
+	case foreign:
+		// 这个 cwd 下**确实有**会话目录，只是没有本实现支持的产物代际。如实说读不了，
+		// 不能含糊成「这里没有会话」。
+		page.Reason = ChatReasonUnrecognizedFormat
+	default:
 		page.Reason = ChatReasonNoSessionCandidates
 	}
 	return page
@@ -345,35 +375,59 @@ func transcriptSessionLost(ctx context.Context, files transcriptFS, codec transc
 
 // ── 候选扫描 ──
 
-func collectCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string) ([]agentlog.Candidate, error) {
+// collectCandidates 列出当前 cwd 的候选会话。第二个返回值表示「找到了会话目录，但没有
+// 本实现支持的产物代际」——调用方据此区分「这里没有会话」与「这里的会话读不了」。
+func collectCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string) ([]agentlog.Candidate, bool, error) {
 	root := transcriptRootFor(agent)
 	var (
 		entries []transcriptEntry
 		err     error
 	)
-	if agent == agentlog.AgentClaude {
+	switch agent {
+	case agentlog.AgentClaude:
 		// 目录名编码只能**缩小搜索范围**：编码是有损的（`/a-b` 与 `/a/b` 同码），
 		// 所以这里只列出与当前 cwd 编码同名的那一个目录，归属仍由记录内容判定。
 		entries, err = files.List(ctx, root, agentlog.ClaudeProjectDir(cwd), 1)
 		if errors.Is(err, errTranscriptNotFound) {
-			return nil, nil
+			return nil, false, nil
 		}
-	} else {
+	case agentlog.AgentDSH:
+		// `projectKey` 同样只能缩小范围（分隔符折叠 + 截断都有损），而且目录下还有一层
+		// 会话目录，所以按两层列。归属仍由 header 里 cwd 的精确相等判定。
+		project, ok := dshProjectDir(cwd)
+		if !ok {
+			return nil, false, nil
+		}
+		entries, err = files.List(ctx, root, project, 2)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
+	default:
 		entries, err = files.List(ctx, root, "", transcriptMaxCodexDepth)
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	files_ := make([]transcriptEntry, 0, len(entries))
+	foreign := false
 	for _, entry := range entries {
 		if entry.Dir || entry.Link {
 			continue
 		}
-		if agent == agentlog.AgentClaude {
-			if !agentlog.ClaudeSessionFile(baseName(entry.Rel)) {
-				continue
+		name := baseName(entry.Rel)
+		keep := false
+		switch agent {
+		case agentlog.AgentClaude:
+			keep = agentlog.ClaudeSessionFile(name)
+		case agentlog.AgentDSH:
+			keep = agentlog.DSHSessionFile(name) || agentlog.DSHCompressedSessionFile(name)
+			if !keep && dshForeignGeneration(name) {
+				foreign = true
 			}
-		} else if !agentlog.CodexSessionFile(baseName(entry.Rel)) {
+		default:
+			keep = agentlog.CodexSessionFile(name)
+		}
+		if !keep {
 			continue
 		}
 		files_ = append(files_, entry)
@@ -386,7 +440,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 		files_ = files_[:transcriptMaxCandidates]
 	}
 	if len(files_) == 0 {
-		return nil, nil
+		return nil, foreign, nil
 	}
 
 	rels := make([]string, 0, len(files_))
@@ -395,7 +449,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 	}
 	shapes, results, err := transcriptShapes(ctx, files, root, agent, rels)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	candidates := make([]agentlog.Candidate, 0, len(files_))
 	for position, entry := range files_ {
@@ -412,12 +466,27 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			continue
 		}
 		sessionID := shape.SessionID
-		if agent == agentlog.AgentClaude || sessionID == "" {
+		switch agent {
+		case agentlog.AgentClaude:
 			sessionID = agentlog.SessionStem(baseName(entry.Rel))
+		case agentlog.AgentDSH:
+			// 会话 id 只认 header；同时要求目录段**逐字**等于该 id 的规范编码 ——
+			// 这是「严格 canonical 目录规则」的一半，另一半由归属判定给出。
+			if sessionID == "" || shape.DSHVersion != agentlog.DSHFormatVersion {
+				foreign = true
+				continue
+			}
+			if encoded, ok := dshEncodeSegment(sessionID); !ok || encoded != baseName(parentDir(entry.Rel)) {
+				continue
+			}
+		default:
+			if sessionID == "" {
+				sessionID = agentlog.SessionStem(baseName(entry.Rel))
+			}
 		}
 		id, err := codec.seal(agent, sessionID, entry.Rel)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		candidates = append(candidates, agentlog.Candidate{
 			ID:        id,
@@ -426,7 +495,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			UpdatedAt: entry.Modified.UTC().Format(time.RFC3339),
 		})
 	}
-	return candidates, nil
+	return candidates, foreign, nil
 }
 
 func baseName(rel string) string {
@@ -434,6 +503,14 @@ func baseName(rel string) string {
 		return rel[index+1:]
 	}
 	return rel
+}
+
+// parentDir 返回相对路径的父目录（没有分隔符时返回空串）。
+func parentDir(rel string) string {
+	if index := strings.LastIndexByte(rel, '/'); index >= 0 {
+		return rel[:index]
+	}
+	return ""
 }
 
 // transcriptShapes 读取并解析若干文件的会话身份。
@@ -469,8 +546,10 @@ func transcriptShapes(ctx context.Context, files transcriptFS, root transcriptRo
 			if result.Err != nil || !result.Exists {
 				continue
 			}
-			shapes[index] = agentlog.ReadFileShape(agent, result.Data)
-			if shapeSettled(agent, shapes[index]) || int64(len(result.Data)) < length || length >= transcriptShapeMaxBytes {
+			shape, decoded := transcriptShapeFromWindow(agent, rels[index], result.Data)
+			shapes[index] = shape
+			// decoded=false 表示窗口里还得不出结论（例如首帧还没读完），值得再扩大窗口。
+			if (decoded && shapeSettled(agent, shape)) || int64(len(result.Data)) < length || length >= transcriptShapeMaxBytes {
 				continue
 			}
 			grown = append(grown, index)
@@ -484,6 +563,12 @@ func transcriptShapes(ctx context.Context, files transcriptFS, root transcriptRo
 // shapeSettled 报告窗口里是否已经拿到足以判定归属的身份。取不到就继续扩大窗口，
 // 直到上限；到上限仍然取不到就按「不匹配」处理，绝不猜。
 func shapeSettled(agent string, shape agentlog.FileShape) bool {
+	if agent == agentlog.AgentDSH {
+		// DSH 的归属字段只在本实现支持的代际上给出，所以：
+		//   - 已经报出代际（无论是否支持）就是结论，不必再扩大窗口；
+		//   - 什么都没解出来说明 header 行还没读全，继续扩大窗口。
+		return shape.DSHVersion != 0 || shape.CWD != "" || shape.SessionID != ""
+	}
 	if shape.CWD == "" {
 		return false
 	}
@@ -493,9 +578,43 @@ func shapeSettled(agent string, shape agentlog.FileShape) bool {
 	return true
 }
 
+// transcriptShapeFromWindow 从读取窗口里解出会话身份。
+//
+// 明文 provider 直接交给 agentlog 逐行找；DSH 的 zstd 代际要先**只扫首帧**再解压它：
+// 列目录时绝不能为了拿一个 header 就把整份会话正文解压出来。第二个返回值表示
+// 「这个窗口已经足以给出结论」——false 只表示首帧还没读完，调用方应扩大窗口。
+func transcriptShapeFromWindow(agent, rel string, data []byte) (agentlog.FileShape, bool) {
+	if agent != agentlog.AgentDSH || !agentlog.DSHCompressedSessionFile(baseName(rel)) {
+		return agentlog.ReadFileShape(agent, data), true
+	}
+	frames, _, err := dshScanFrames(data, 0, 1)
+	if err != nil {
+		// 帧结构已经坏了：再扩大窗口也只会看到同样的错误。
+		return agentlog.FileShape{}, true
+	}
+	if len(frames) == 0 {
+		return agentlog.FileShape{}, false
+	}
+	decoder, err := newDSHDecoder(transcriptHeadBytes)
+	if err != nil {
+		return agentlog.FileShape{}, true
+	}
+	defer decoder.Close()
+	plain, err := decoder.decode(data[frames[0].Start:frames[0].End])
+	if err != nil {
+		return agentlog.FileShape{}, true
+	}
+	return agentlog.ReadFileShape(agent, plain), true
+}
+
 // ── 消息分页 ──
 
 func transcriptMessages(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd, sessionID, rel string, request TranscriptRequest) TranscriptPage {
+	// DSH 的 zstd 代际不能按字节切页：压缩文件里的行偏移不是可用的读取起点，只有帧边界是。
+	// 明文代际（session.v3.jsonl）没有这个问题，继续走通用引擎。
+	if agent == agentlog.AgentDSH && agentlog.DSHCompressedSessionFile(baseName(rel)) {
+		return transcriptDSHCompressedMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
+	}
 	root := transcriptRootFor(agent)
 	shapes, heads, err := transcriptShapes(ctx, files, root, agent, []string{rel})
 	if err != nil {
@@ -516,10 +635,20 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 但只要文件里已经有完整记录，cwd 就必须精确相等 —— 这是归属的唯一证明。
 	empty := len(head.Data) == 0 || !hasCompleteLine(head.Data)
 	if !empty {
+		if agent == agentlog.AgentDSH && shape.DSHVersion != agentlog.DSHFormatVersion {
+			// 文件在名义上是 v3 产物，header 却不是本实现支持的代际：明确说不支持，
+			// 不能按当前代际硬解。
+			return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
+		}
+		if agent == agentlog.AgentDSH && !dshHeaderAdmitted(agent, sessionID, head.Data, 0) {
+			// header 行本身不被准入（例如 isSeeded 的会话）：明确失败，不发布任何记录。
+			// 分页通常只读尾部窗口，header 行不在其中，所以这个检查不能省。
+			return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
+		}
 		if shape.CWD != cwd {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
-		if agent == agentlog.AgentCodex && shape.SessionID != "" && shape.SessionID != sessionID {
+		if (agent == agentlog.AgentCodex || agent == agentlog.AgentDSH) && shape.SessionID != "" && shape.SessionID != sessionID {
 			// 请求里的 session 与文件里解析出的会话 id 不再对应同一个文件。
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
@@ -611,6 +740,11 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			body.Data[from:to],
 			trueStart,
 		)
+	}
+	// Failure 是「按格式必须理解、却无法安全理解」的内容：从同一偏移重读只会得到同一个
+	// Failure，继续分页只会把一份不完整的对话发布成完整的样子。所以它是终止条件。
+	if decoded.Failure != nil {
+		return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 	}
 
 	// 切页：只切在**完整记录**边界上，绝不为了凑上限截断成半条记录。

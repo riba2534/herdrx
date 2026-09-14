@@ -8,12 +8,15 @@ import {
   groupChatTurns,
   mergeChatRecords,
   normalizeStructuredChatResponse,
+  paneAgentRejectsReadSource,
   prependStructuredChatPage,
+  readPaneReadSource,
+  rememberPaneReadSource,
   shortSessionID,
   structuredChatPath,
   StructuredChatSession,
 } from './structuredChat'
-import { EMPTY_STRUCTURED_CHAT_STATE, type ChatRecord, type StructuredChatResponse, type StructuredChatState } from './structuredChatTypes'
+import { EMPTY_STRUCTURED_CHAT_STATE, type ChatRecord, type ChatSource, type StructuredChatResponse, type StructuredChatState } from './structuredChatTypes'
 
 const user = { id: 'user', email: 'user@example.test', role: 'user', display_name: 'User' }
 
@@ -55,6 +58,32 @@ describe('structuredChatPath', () => {
     const path = structuredChatPath('host', 'pane', {})
     expect(path).not.toContain('cwd')
     expect(path).not.toContain('agent')
+  })
+
+  it('carries the explicit DSH read source as source= and never as agent=', () => {
+    expect(structuredChatPath('host', 'pane', { source: 'dsh' })).toBe('/api/hosts/host/panes/pane/transcript?source=dsh')
+    const bound = structuredChatPath('host', 'pane', { session: 'c1', cursor: 'cur', source: 'dsh' })
+    expect(bound).toBe('/api/hosts/host/panes/pane/transcript?session=c1&cursor=cur&source=dsh')
+    expect(bound).not.toContain('agent=')
+    expect(bound).not.toContain('cwd=')
+  })
+
+  it('drops a read source outside the closed set instead of forwarding it', () => {
+    const path = structuredChatPath('host', 'pane', { source: 'claude' as ChatSource })
+    expect(path).toBe('/api/hosts/host/panes/pane/transcript')
+  })
+})
+
+describe('paneAgentRejectsReadSource', () => {
+  it('rejects an explicit DSH source only for recognized non-DSH agents', () => {
+    // 已识别的 claude / codex：服务端不接受客户端覆盖读取源。
+    expect(paneAgentRejectsReadSource('claude')).toBe(true)
+    expect(paneAgentRejectsReadSource(' codex ')).toBe(true)
+    // 未识别 / 未知 / 本来就是 dsh：都允许用户显式选择 DSH。
+    expect(paneAgentRejectsReadSource('')).toBe(false)
+    expect(paneAgentRejectsReadSource(undefined)).toBe(false)
+    expect(paneAgentRejectsReadSource('gemini')).toBe(false)
+    expect(paneAgentRejectsReadSource('dsh')).toBe(false)
   })
 })
 
@@ -110,6 +139,23 @@ describe('normalizeStructuredChatResponse', () => {
     })
     expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3'])
     expect(normalized.reason).toBeUndefined()
+  })
+
+  it('accepts dsh as an agent and read_limit_exceeded as a reason', () => {
+    const normalized = normalizeStructuredChatResponse({
+      supported: true,
+      candidates: [
+        { id: 'c1', agent: 'dsh', session_id: 's1', updated_at: '2026-09-13T04:00:00Z' },
+        { id: 'c2', agent: 'dsh-shell', session_id: 's2', updated_at: '' },
+      ],
+      messages: [],
+    })
+    expect(normalized.candidates?.map((item) => item.agent)).toEqual(['dsh'])
+
+    const limited = normalizeStructuredChatResponse({ supported: false, reason: 'read_limit_exceeded', messages: [] })
+    expect(limited.reason).toBe('read_limit_exceeded')
+    expect(limited.supported).toBe(false)
+    expect(limited.messages).toEqual([])
   })
 })
 
@@ -191,6 +237,23 @@ describe('page merging', () => {
     expect(next.previousCursor).toBe('p1')
   })
 
+  it('keeps the explicit read source across pages and degradation', () => {
+    const bound = applyStructuredChatPage(state({ session: 'c1', source: 'dsh' }), page({
+      agent: 'dsh',
+      messages: [textRecord('a', 'user', '问')],
+      binding: 'selected',
+    }))
+    expect(bound.source).toBe('dsh')
+    const limited = applyStructuredChatPage(state({ session: 'c1', source: 'dsh' }), page({ reason: 'read_limit_exceeded' }))
+    expect(limited.reason).toBe('read_limit_exceeded')
+    expect(limited.source).toBe('dsh')
+    // 绑定会话时的降级原因不能被吞掉，否则"读不下"会显示成"这个会话没有记录"。
+    expect(limited.status).toBe('empty')
+    const unavailable = applyStructuredChatPage(state({ source: 'dsh' }), page({ supported: false, reason: 'no_agent' }))
+    expect(unavailable.reason).toBe('no_agent')
+    expect(unavailable.source).toBe('dsh')
+  })
+
   it('accumulates skipped records and bounds status by content', () => {
     const withRecords = applyStructuredChatPage(state({ session: 'c1' }), page({ messages: [textRecord('a', 'user', '问')], binding: 'selected', skipped: 2 }))
     expect(withRecords.status).toBe('ready')
@@ -251,7 +314,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-type FetchCall = { session?: string; cursor?: string; before?: string; signal?: AbortSignal }
+type FetchCall = { session?: string; cursor?: string; before?: string; source?: ChatSource; signal?: AbortSignal }
 
 function recorder(handler: (call: FetchCall, index: number) => StructuredChatResponse | Promise<StructuredChatResponse>) {
   const calls: FetchCall[] = []
@@ -262,8 +325,8 @@ function recorder(handler: (call: FetchCall, index: number) => StructuredChatRes
   return { calls, fetchPage }
 }
 
-function candidate(id: string) {
-  return { id, agent: 'claude' as const, session_id: `session-${id}`, updated_at: '2026-09-13T04:00:00Z' }
+function candidate(id: string, agent: 'claude' | 'codex' | 'dsh' = 'claude') {
+  return { id, agent, session_id: `session-${id}`, updated_at: '2026-09-13T04:00:00Z' }
 }
 
 describe('StructuredChatSession', () => {
@@ -441,6 +504,149 @@ describe('StructuredChatSession', () => {
     await vi.advanceTimersByTimeAsync(1000)
     expect(session.getSnapshot().error).toBe('无法读取会话记录，请检查网络后重试')
     expect(session.getSnapshot().state.messages).toHaveLength(1)
+    session.stop()
+  })
+
+  it('only sends source=dsh after the user asks for it and still never auto-binds', async () => {
+    const { calls, fetchPage } = recorder((call) => call.source === 'dsh'
+      ? page({ agent: 'dsh', candidates: [candidate('only', 'dsh')] })
+      : page({ candidates: [] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 1000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls[0].source).toBeUndefined()
+
+    session.setReadSource('dsh')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.at(-1)).toMatchObject({ source: 'dsh' })
+    expect(calls.at(-1)?.session).toBeUndefined()
+    expect(calls.at(-1)?.cursor).toBeUndefined()
+    expect(session.getSnapshot().state.source).toBe('dsh')
+    // 只有一个候选也不能自动认领。
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    expect(session.getSnapshot().state.messages).toEqual([])
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['only'])
+    session.stop()
+  })
+
+  it('clears selection, cursors and candidates when the read source switches', async () => {
+    const { calls, fetchPage } = recorder((call) => {
+      if (call.source === 'dsh') return page({ agent: 'dsh', candidates: [candidate('dsh1', 'dsh')] })
+      if (!call.session) return page({ candidates: [candidate('c1')] })
+      return page({ messages: [textRecord('1', 'user', '问')], binding: 'selected', session_id: 's1', next_cursor: 'cur', previous_cursor: 'prev' })
+    })
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 100000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    session.select('c1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state.nextCursor).toBe('cur')
+
+    session.setReadSource('dsh')
+    await vi.advanceTimersByTimeAsync(0)
+    const switched = session.getSnapshot().state
+    expect(switched.source).toBe('dsh')
+    expect(switched.session).toBeUndefined()
+    expect(switched.sessionID).toBeUndefined()
+    expect(switched.binding).toBeUndefined()
+    expect(switched.messages).toEqual([])
+    expect(switched.nextCursor).toBeUndefined()
+    expect(switched.previousCursor).toBeUndefined()
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['dsh1'])
+    expect(calls.at(-1)).toMatchObject({ source: 'dsh' })
+    expect(calls.at(-1)?.session).toBeUndefined()
+
+    // 切回默认读取源同样重建，且不再带 source。
+    session.clearReadSource()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state.source).toBeUndefined()
+    expect(calls.at(-1)?.source).toBeUndefined()
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['c1'])
+    session.stop()
+  })
+
+  it('remembers the read source per pane only and forgets it when the login identity changes', async () => {
+    await login('pane-session')
+    const first = recorder(() => page({ candidates: [] }))
+    const paneA = new StructuredChatSession({ hostID: 'host', paneID: 'a', fetchPage: first.fetchPage, pollMs: 1000 })
+    paneA.start()
+    await vi.advanceTimersByTimeAsync(0)
+    paneA.setReadSource('dsh')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(first.calls.map((call) => call.source)).toEqual([undefined, 'dsh'])
+    paneA.stop()
+
+    // 同一个 pane 重新挂载：沿用用户显式选过的读取源。
+    const second = recorder(() => page({ candidates: [] }))
+    const reopened = new StructuredChatSession({ hostID: 'host', paneID: 'a', fetchPage: second.fetchPage, pollMs: 1000 })
+    reopened.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(second.calls[0].source).toBe('dsh')
+    reopened.stop()
+
+    // 另一个 pane / 另一台主机都不继承。
+    const other = recorder(() => page({ candidates: [] }))
+    const paneB = new StructuredChatSession({ hostID: 'host', paneID: 'b', fetchPage: other.fetchPage, pollMs: 1000 })
+    paneB.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(other.calls[0].source).toBeUndefined()
+    expect(readPaneReadSource('host', 'a')).toBe('dsh')
+    expect(readPaneReadSource('host', 'b')).toBeUndefined()
+    expect(readPaneReadSource('other-host', 'a')).toBeUndefined()
+    paneB.stop()
+
+    // 换一个登录身份后不再复用，也不能被直接写进别的 pane。
+    rememberPaneReadSource('host', 'b', 'dsh')
+    expect(readPaneReadSource('host', 'b')).toBe('dsh')
+    await login('another-session')
+    expect(readPaneReadSource('host', 'a')).toBeUndefined()
+    expect(readPaneReadSource('host', 'b')).toBeUndefined()
+  })
+
+  it('drops a remembered DSH source before the first request when the pane is already recognized', async () => {
+    await login('pane-session')
+    const first = recorder(() => page({ candidates: [] }))
+    const warmup = new StructuredChatSession({ hostID: 'host', paneID: 'a', fetchPage: first.fetchPage, pollMs: 1000 })
+    warmup.start()
+    await vi.advanceTimersByTimeAsync(0)
+    warmup.setReadSource('dsh')
+    await vi.advanceTimersByTimeAsync(0)
+    warmup.stop()
+    expect(readPaneReadSource('host', 'a')).toBe('dsh')
+
+    // 重新挂载时 pane 已经被识别成 claude：先放弃读取源，再开始取数，一次被拒的请求都不发。
+    const plain = recorder(() => page({ candidates: [] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'a', fetchPage: plain.fetchPage, pollMs: 1000 })
+    session.setReadSource(undefined)
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(plain.calls.map((call) => call.source)).toEqual([undefined])
+    expect(session.getSnapshot().state.source).toBeUndefined()
+    expect(readPaneReadSource('host', 'a')).toBeUndefined()
+    session.stop()
+  })
+
+  it('aborts a pending DSH request and resets when the source is dropped', async () => {
+    const pending = deferred<StructuredChatResponse>()
+    const { fetchPage } = recorder((call) => (call.source === 'dsh'
+      ? pending.promise
+      : page({ candidates: [candidate('c1')] })))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 1000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    session.setReadSource('dsh')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state.status).toBe('loading')
+
+    session.setReadSource(undefined)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state.source).toBeUndefined()
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['c1'])
+    // 迟到的 DSH 响应属于上一个读取源，必须被丢弃。
+    pending.resolve(page({ agent: 'dsh', candidates: [candidate('dsh1', 'dsh')] }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state.source).toBeUndefined()
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['c1'])
     session.stop()
   })
 
