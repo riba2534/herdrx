@@ -25,6 +25,9 @@
 .chat-head-session { display: inline-flex; align-items: baseline; gap: 4px; min-width: 0; max-width: 40vw; overflow: hidden; color: var(--muted); font-size: 11px; }
 .chat-head-session code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .chat-head-session small { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+/* 显式读取源徽标：只在用户选过 DSH 读取源时出现，提示当前数据的来源。 */
+.chat-head-source { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 0 5px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted); font-size: 10px; letter-spacing: 0.04em; }
+.chat-candidates .chat-state-actions { justify-content: flex-start; }
 
 /* 记录区：整列文档流，用户靠右、助手靠左。 */
 .chat-view .chat-log { overflow-x: hidden; scrollbar-gutter: stable; }
@@ -109,6 +112,8 @@
 .chat-load-earlier { min-height: 28px; font-size: 12px; }
 .chat-skipped { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .chat-waiting { margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+/* 受限读取超限提示：与"这个会话没有记录"区分开，说明是读不下而不是没有内容。 */
+.chat-limit { margin: 0; color: var(--blocked); font-size: 11px; overflow-wrap: anywhere; }
 .chat-state-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 
 /* 窄 pane：消息与按钮不越界，头部按钮换行而不是把标题挤没。 */
@@ -122,6 +127,7 @@
 
 @container chat-view (max-width: 320px) {
   .chat-head-session { display: none; }
+  .chat-head-source { display: none; }
   .chat-candidate-time { display: none; }
   .chat-view .chat-head-actions .tool-button { padding: 0 4px; }
 }

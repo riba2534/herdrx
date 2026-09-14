@@ -10,7 +10,7 @@ package herdr
 // 远端没有 python3 时**明确返回不支持**，绝不退回不安全的读法。
 const transcriptReaderSource = `import base64, errno, json, os, stat, sys
 
-ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions"}
+ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "dsh": ".dsh/sessions"}
 CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0) | CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | CLOEXEC

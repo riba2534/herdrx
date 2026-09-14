@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { zstdCompressSync, constants as zlibConstants } from 'node:zlib'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const binary = resolve(process.argv[2] || join(repoRoot, 'bin/herdrx-server'))
@@ -109,7 +110,12 @@ const MOCK_HERDR_DAEMON = `#!/usr/bin/env node
 import { createServer } from 'node:net'
 import { appendFileSync, readFileSync } from 'node:fs'
 const [socketPath, callsFile, snapshotPath] = process.argv.slice(2)
-const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'))
+const initialSnapshot = JSON.parse(readFileSync(snapshotPath, 'utf8'))
+// 每次都重读文件：验收脚本会在运行中改写 snapshot（例如把 pane 的 agent 换成未识别的
+// DSH），启动时读一次会让后续阶段永远看到旧快照。读失败时回退到启动时那一份。
+const snapshotNow = () => {
+  try { return JSON.parse(readFileSync(snapshotPath, 'utf8')) } catch { return initialSnapshot }
+}
 const record = (entry) => appendFileSync(callsFile, JSON.stringify(entry) + '\\n')
 const server = createServer((conn) => {
   let buffer = ''
@@ -125,7 +131,7 @@ const server = createServer((conn) => {
       const method = String(request?.method ?? '')
       record({ kind: 'call', method, params: request?.params ?? null })
       let result = { type: 'ok' }
-      if (method === 'session.snapshot') result = { type: 'ok', snapshot }
+      if (method === 'session.snapshot') result = { type: 'ok', snapshot: snapshotNow() }
       else if (method === 'pane.read') result = { type: 'pane_read', read: { text: '${TERMINAL_MARKER}\\\\n' } }
       conn.write(JSON.stringify({ id: request?.id ?? 'herdrx', result }) + '\\n')
     }
@@ -335,6 +341,18 @@ async function main() {
   await page.locator('.xterm-rows').first().filter({ hasText: TERMINAL_MARKER }).waitFor()
 
   const spawnCount = async () => (await callLines(spawnFile)).filter((entry) => entry.kind === 'spawn').length
+  // 整页重载会让**每个** pane 各自重开一次终端流，两次 spawn 之间有随机间隔。要断言
+  // 「后续操作不再 spawn」，基线必须等计数稳定后再取，否则会把迟到的重连算到被测操作头上。
+  const settledSpawnCount = async () => {
+    let previous = -1
+    let current = await spawnCount()
+    for (let attempt = 0; attempt < 40 && current !== previous; attempt++) {
+      previous = current
+      await page.waitForTimeout(250)
+      current = await spawnCount()
+    }
+    return current
+  }
   const callMethods = async () => (await callLines(callsFile)).map((entry) => entry.method)
   await expect.poll(spawnCount, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
   const spawnsOnTerminal = await spawnCount()
@@ -554,8 +572,49 @@ async function main() {
   const anonymous = await fetch(`${base}/api/hosts/${host.id}/panes/p1/transcript`)
   assert.equal(anonymous.status, 401, 'an anonymous transcript read must be rejected')
 
+  // 15) 未识别的 DSH：显式选读取源，真实压缩日志经 Go/HTTP 呈现，不冒充 Shell。
+  const dshID = '01J8ZQ4T7K3M9P2R5V6W7X8Y9Z'
+  const dshDir = join(home, '.dsh', 'sessions', '--srv-app--', dshID)
+  await mkdir(dshDir, { recursive: true })
+  const dshHeader = { type: 'session', version: 3, id: dshID, createdAt: 1757742303000, isSeeded: false, delegationDepth: 0, cwd: CWD }
+  const dshEvents = [
+    { type: 'user/message', seq: 0, time: 1757742304000, data: { id: 'dsh-u', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'DSH 合成问题：运行测试' }] }, surfaceOp: 'append' },
+    { type: 'assistant/message', seq: 1, time: 1757742305000, data: { turn: 1, step: 1, message: { id: 'dsh-a', role: 'assistant', source: { kind: 'model', provider: 'deepseek', model: 'deepseek-chat' }, content: [{ type: 'reasoning', text: 'DSH-PRIVATE-REASONING' }, { type: 'text', text: 'DSH 合成回答：正在运行。' }] } }, surfaceOp: 'append' },
+    { type: 'tool/call', seq: 2, time: 1757742306000, data: { turn: 1, step: 1, callId: 'dsh-call', name: 'bash', arguments: '{"command":"pnpm test"}' } },
+    { type: 'tool/result', seq: 3, time: 1757742307000, data: { turn: 1, step: 1, message: { id: 'dsh-t', role: 'user', source: { kind: 'tool', callId: 'dsh-call' }, content: [{ type: 'tool-result', toolCallId: 'dsh-call', content: [{ type: 'text', text: 'DSH 42 passed' }], isError: false }] } }, surfaceOp: 'append', sourceEventSeqs: [2] },
+  ]
+  const compressFrame = (body) => zstdCompressSync(Buffer.from(body), { params: { [zlibConstants.ZSTD_c_checksumFlag]: 1 } })
+  const dshFile = join(dshDir, 'session.v3.jsonl.zstd')
+  await writeFile(dshFile, Buffer.concat([compressFrame(line(dshHeader)), compressFrame(dshEvents.map(line).join(''))]))
+  const dshSnapshot = snapshotFixture({ width: 160 })
+  dshSnapshot.panes[0].agent = ''
+  dshSnapshot.panes[0].label = 'DeepSeek Harness'
+  await writeFile(snapshotPath, JSON.stringify(dshSnapshot))
+  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+  await page.goto(`${base}/h/${host.id}`)
+  const dshSwitch = page.getByRole('switch', { name: '对话视图' }).first()
+  await expect(dshSwitch).toBeVisible()
+  await expect.poll(spawnCount).toBeGreaterThan(spawnsOnTerminal)
+  const beforeDshOpen = await settledSpawnCount()
+  await dshSwitch.click()
+  const dshChat = page.getByRole('region', { name: '对话视图' }).first()
+  await expect(dshChat.getByRole('button', { name: '读取 DSH 会话记录', exact: true })).toBeVisible()
+  await expect(dshChat).not.toContainText('这是普通 Shell')
+  await dshChat.getByRole('button', { name: '读取 DSH 会话记录', exact: true }).click()
+  await expect(dshChat.locator('.chat-candidate')).toHaveCount(1)
+  await expect(dshChat.locator('.chat-message')).toHaveCount(0)
+  await dshChat.locator('.chat-candidate').click()
+  await expect(dshChat).toContainText('DSH 合成问题：运行测试')
+  await expect(dshChat).toContainText('DSH 合成回答：正在运行。')
+  await expect(dshChat).not.toContainText('DSH-PRIVATE-REASONING')
+  await expect(dshChat.locator('.chat-message-user')).toHaveCount(1)
+  await expect(dshChat.locator('.chat-message-tool')).toHaveCount(1)
+  assert.equal(await spawnCount(), beforeDshOpen, 'DSH source selection reopened the terminal')
+  await dshSwitch.click()
+  assert.equal(await spawnCount(), beforeDshOpen, 'leaving DSH view reopened the terminal')
+
   assert.deepEqual(pageErrors, [], 'the page logged uncaught errors')
-  console.log(`structured chat end-to-end passed: candidates=2 rounds=3 paging=${page1.body.messages.length}+ messages, screenshots in ${artifacts}`)
+  console.log(`structured chat end-to-end passed: candidates=2 rounds=3 paging=${page1.body.messages.length}+ messages, DSH zstd source selection, screenshots in ${artifacts}`)
 
   /** 走真实 HTTP（浏览器 cookie + CSRF 由同源请求携带）读一页结构化记录。 */
   async function transcriptAPI(targetPage, hostID) {

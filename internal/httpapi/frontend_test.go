@@ -130,6 +130,14 @@ func TestFrontendServesPrecompressedAssets(t *testing.T) {
 	if !strings.Contains(csp, wantHash) || !strings.Contains(csp, "script-src 'self'") {
 		t.Fatalf("CSP missing inline script hash: %s", csp)
 	}
+	if !strings.Contains(csp, "img-src 'self' data: blob:;") {
+		t.Fatalf("CSP blocks local attachment previews: %s", csp)
+	}
+	for _, directive := range strings.Split(csp, ";") {
+		if strings.HasPrefix(strings.TrimSpace(directive), "script-src ") && strings.Contains(directive, "blob:") {
+			t.Fatalf("image previews must not relax script sources: %s", csp)
+		}
+	}
 }
 
 func TestNegotiateAssetEncoding(t *testing.T) {

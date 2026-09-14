@@ -11,6 +11,7 @@
 //
 //   GET /api/hosts/{hostID}/panes/{paneID}/transcript
 //       ?session=<opaqueCandidateId>&cursor=<opaqueCursor>&before=<opaqueBefore>
+//       &source=<explicitReadSource>
 //
 // 完整语义（候选、显式绑定、游标、分页、半行、rotation、受限读取边界、不支持时的文案）
 // 见 `docs/design/structured-chat-contract.md`。改这里的字段等于改契约，必须先改文档。
@@ -19,9 +20,26 @@
  * 支持结构化记录的 Agent，闭集合。
  * 其余 Agent（含与 claude/codex 同格式族的 openclaude / grok / omp）在各自的 decoder、
  * 日志根目录与 cwd 匹配规则被真实会话日志验证之前，一律 `supported: false`，不猜、不通配。
+ *
+ * `dsh`（DeepSeek Harness）与上面两类不同：它的会话日志是项目目录/会话目录下的 JSONL
+ * （压缩时是 zstd 帧），首行 header 带精确 `cwd` 与 session `id`。它进入这个闭集合**不代表**
+ * 可以直接从窗口标题推断 pane 正在运行 DSH——见 `CHAT_SOURCES`。
  */
-export const CHAT_AGENTS = ['claude', 'codex'] as const
+export const CHAT_AGENTS = ['claude', 'codex', 'dsh'] as const
 export type ChatAgent = (typeof CHAT_AGENTS)[number]
+
+/**
+ * 显式读取源，闭集合。**这不是 agent 字段**：客户端只能声明"请按哪一种读取器去读"，
+ * 不能声明 pane 正在运行什么。
+ *
+ * 现行契约只接受 `source=dsh`，且只在 snapshot 的 `pane.agent` 为空或不认识时才会生效
+ * （已识别的 claude / codex 不允许被客户端覆盖）。省略该参数 = 按服务端从 snapshot 得到的
+ * agent 读取。请求里**永远不允许**出现 `agent=` 之类的客户端声明。
+ *
+ * 客户端不得据此推断 Agent 身份：读取源只是用户对"读哪一类日志"的显式选择。
+ */
+export const CHAT_SOURCES = ['dsh'] as const
+export type ChatSource = (typeof CHAT_SOURCES)[number]
 
 /**
  * 记录角色。
@@ -119,7 +137,9 @@ export type ChatBinding = (typeof CHAT_BINDINGS)[number]
  * 降级原因，闭集合。`supported` 的真假与 `reason` 的取值必须一一对应，不允许自造字符串。
  *
  * - `unsupported_agent`      pane 的 agent 不在 `CHAT_AGENTS` 内。
- * - `no_agent`               pane 上没有 agent（普通 Shell）。
+ * - `no_agent`               snapshot 里该 pane 没有可识别的 agent。它**不等于**"普通 Shell"：
+ *                            也可能是没被识别出来的程序。文案只能说明"未识别出程序"，
+ *                            不得据此断言没有对话、也不得因此改变输入目标。
  * - `unsupported_transport`  当前接入方式拿不到受限文件读取能力。
  * - `cwd_unavailable`        snapshot 里该 pane 既没有 `foreground_cwd` 也没有 `cwd`。
  * - `log_root_unavailable`   远端日志根不存在、不可读，或取不到 `$HOME`。
@@ -127,6 +147,8 @@ export type ChatBinding = (typeof CHAT_BINDINGS)[number]
  * - `no_session_candidates`  supported 成立，但当前 pane agent + 精确 cwd 下没有候选。
  * - `read_denied`            路径逃逸、符号链接、非普通文件被拒。
  * - `unrecognized_format`    文件存在但不是可识别的会话日志（字段形状全不匹配）。
+ * - `read_limit_exceeded`    受限读取超出预算（压缩输入 / 解压输出 / 单文件大小超限）。
+ *                            它是明确的"读不下"，**不是**空日志，也**不是**格式错误。
  * - `internal_error`         服务端内部错误；客户端按可重试处理。
  */
 export const CHAT_REASONS = [
@@ -139,6 +161,7 @@ export const CHAT_REASONS = [
   'no_session_candidates',
   'read_denied',
   'unrecognized_format',
+  'read_limit_exceeded',
   'internal_error'
 ] as const
 export type ChatReason = (typeof CHAT_REASONS)[number]
@@ -155,6 +178,14 @@ export type StructuredChatQuery = {
   cursor?: string
   /** 反向游标：取更早的一页。与 `cursor` 互斥；同时出现时服务端以 `before` 为准。 */
   before?: string
+  /**
+   * 显式读取源（`source=dsh`）。**只在用户点过"读取 DSH 会话记录"之后出现**，
+   * 绝不从窗口标题、进程名或候选文件自动推断。服务端只在 snapshot 的 agent 为空 /
+   * 不认识时采用它；已识别的 claude / codex 不接受客户端覆盖。
+   *
+   * 该参数不改变当前终端运行的程序，也不改变输入的目标：它只决定"读哪一类会话日志"。
+   */
+  source?: ChatSource
 }
 
 /**
@@ -229,6 +260,11 @@ export type StructuredChatState = {
   status: ChatLoadStatus
   reason?: ChatReason
   agent?: ChatAgent
+  /**
+   * 当前数据来自哪个显式读取源（用户选择，不是 Agent 身份推断）；未选择时为 undefined。
+   * 切换它等于换数据源：必须清空 `session` / `sessionID` / 游标 / 候选与已累积记录。
+   */
+  source?: ChatSource
   /** 用户显式选中的候选 id；未选择时为 undefined。 */
   session?: string
   sessionID?: string

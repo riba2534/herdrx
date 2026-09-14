@@ -1,15 +1,14 @@
 # 结构化对话记录契约（structured chat contract）
 
-日期：2026-09-13。状态：**已冻结，待实现**。本文是实现前的契约，不代表已实现或已验收。
+日期：2026-09-13。状态：结构化 Chat 契约；DSH 扩展按本文与两端类型共同更新，实际验收以对应测试结果为准。
 
 本契约定义 Chat 视图真正需要的**带 role 的逐轮问答数据层**：数据来自 Agent 自己写的
 append-only 会话日志，经 owner 认证的 HTTP 端点按游标增量读取，前端按 role 分列渲染。
 类型与常量的唯一正文是 [`web/src/lib/structuredChatTypes.ts`](../../web/src/lib/structuredChatTypes.ts)；
 本文只解释语义，不重复字段定义。
 
-现有 Chat 视图（`web/src/components/ChatView.tsx`）渲染的是"本页内存用户气泡 + 整块
-`pane.read` 终端文本"，没有角色、没有轮次、没有增量。**本文定义的契约就是替换那整块终端文本的
-数据源。** 在契约落地之前，现状不被视为满足要求。
+Chat 视图（`web/src/components/ChatView.tsx`）按本契约读取结构化记录，不使用
+`pane.read` 终端文本冒充逐轮对话。Terminal 保留独立的终端观察流。
 
 ---
 
@@ -40,7 +39,9 @@ GET /api/hosts/{hostID}/panes/{paneID}/transcript
 
 - 挂在 `internal/httpapi/hosts.go` 的 `hostRoutes` 内、`authenticate` 之后，沿用 `ownedHost`
   owner 校验；非 owner 一律 404。
-- 客户端**只传** `hostID` / `paneID` / 三个不透明参数。**绝不接受** agent、cwd 或路径。
+- 客户端传 `hostID` / `paneID` / 三个不透明参数，可另显式选择 `source=dsh`；**绝不接受**客户端 agent、cwd 或路径作为事实。
+- `source` 只接受空值或单个 `dsh`。默认读取源来自服务端 `pane.agent`；只有程序未识别、未支持或本来就是 DSH 时允许显式选择 DSH，不能覆盖已识别的 Claude/Codex。非法/重复/冲突 source 返回 400 `invalid_source`。
+- 读取源选择不证明当前终端程序身份，不改变输入目标，也不自动选定某个会话。所有请求仍重新检查 owner、pane 与 snapshot cwd。
 - 真实 `pane.agent` 与 cwd 由服务端调 `endpoint.Snapshot(ctx)` 现取（`Pane.Agent` /
   `Pane.ForegroundCWD`，回退 `Pane.CWD`）。取不到就是 `cwd_unavailable`，不比目录名、不猜。
 - 降级情形同样返回 **HTTP 200**，形状见 §4；只有这样前端才能渲染诚实的空态而不是网络错误。
@@ -55,7 +56,7 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 ### 3.1 无 `session` 时只列候选
 
 无 `session` 参数时，服务端返回 `candidates`，`messages: []`。候选集合已被
-**当前 pane 的 agent** 与**精确 cwd** 两个条件限定，每个候选只含
+**当前 pane 的默认或用户显式选定的读取源**与**精确 cwd**两个条件限定，每个候选只含
 `{id, agent, session_id, updated_at}`：
 
 - **不返回完整文件路径**，也不返回 cwd 原文；
@@ -121,11 +122,25 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
 | Agent | id 规则 | 重复时 |
 |---|---|---|
 | Claude | source record 的 `uuid` | 同 uuid = 同一条记录被重发（内容可能已更新）→ **原地更新**，不丢弃、不追加第二条 |
+| DSH v3 | `<session_id>:<seq>` | 以源事件 seq 保持稳定身份，重读同 seq 原地更新；只支持已明确实现的事件语义 |
 | Codex | `<session_id>:<源文件字节 offset>` | offset 天然唯一 → 同源重复内容得到两条记录，**两条都保留** |
 
 **禁止用 `role + 归一化文本` 的 hash 充当 id 或同源去重键。** 那样会把同源出现的两次相同
 prompt 吞成一条，正好丢掉用户真实问过的第二次。跨源合并（将来若加入 hook / scrape）才允许按
 turn 合并，且必须显式比较来源优先级；本期只有单一磁盘源，不存在跨源合并。
+
+#### DSH v3 人类对话来源
+
+DSH v3 的 `user/message` 只有 `source.kind == 'user'` 记为用户输入，注入上下文记为
+system；`assistant/message` 只取可见正文，reasoning/attempt/request 不下发；工具记录按
+`callId` 关联。采用 DSH 的 append 人类 transcript 语义，不把模型上下文 surface 的
+replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable` 事件必须明确报告格式不支持，
+不能返回看似完整的空白或局部对话。仅当前 v3 代际通过严格准入；其它版本不猜测迁移。
+首版对 `isSeeded:true` 的继承会话明确报告不支持，不将 inherited prefix 冒充当前用户输入。
+
+被跳过的模型侧 surface 改写（replace 检查点、裁剪副本）**不单独计数上报**：响应只有 `skipped`
+一个计数，用于无法识别的记录。因此"读取的是 append 人类 transcript、模型侧改写未被应用"是
+读取语义本身，而不是一个用户可见的提示；不要在 UI 上声称会话与模型当前上下文完全一致。
 
 ### 5.3 Codex 双记形态（`event_msg` / `response_item`）
 
@@ -184,7 +199,8 @@ turn 合并，且必须显式比较来源优先级；本期只有单一磁盘源
 | 情形 | 文案要点 |
 |---|---|
 | `unsupported_agent` | 该终端运行的 `<agent>` 暂无结构化会话记录，可切回终端查看完整界面 |
-| `no_agent` | 这是普通 Shell，没有对话记录；发送内容会作为命令执行 |
+| `no_agent` | 未识别当前终端程序，可显式选择 DSH 日志源或切回终端；发送仍进入当前终端 |
+| `read_limit_exceeded` | 会话记录超过安全读取预算，暂不能完整读取；切回终端查看 |
 | `unsupported_transport` | 当前接入方式暂不支持读取会话记录，已保留完整终端视图 |
 | `cwd_unavailable` / `log_root_unavailable` | 暂时无法定位这个终端的会话记录；已开始自动重试 |
 | `no_session_candidates` | 尚未找到这个终端的会话记录（Agent 刚启动时可能还没写盘） |
@@ -200,13 +216,20 @@ turn 合并，且必须显式比较来源优先级；本期只有单一磁盘源
 这是本契约唯一新增的能力，必须显式约束，且**只经 owner 认证的 HTTP**：
 
 1. **客户端永不提供路径**：路径只能由「agent 白名单表 + 服务端自己取到的 pane cwd」推导。
-2. **日志根固定且只有两个**：Claude 的 `<远端 $HOME>/.claude/projects/` 与 Codex 的
-   `<远端 $HOME>/.codex/sessions/`。`$HOME` 用一次受限命令取回，并要求以 `/` 开头且非空。
+2. **日志根固定**：Claude 的 `<远端 $HOME>/.claude/projects/`、Codex 的
+   `<远端 $HOME>/.codex/sessions/`、DSH 的 `<远端 $HOME>/.dsh/sessions/`。
+   `$HOME` 用受限命令取回，并要求以 `/` 开头且非空；不接受浏览器指定根目录。
+   DSH 自定义 `DSH_HOME` / root 暂不自动发现。
    不使用通配（如 `~/.claude/projects/*`）跨目录收集。
 3. **路径逃逸拒绝**：拼接后 `Clean`，必须是白名单根的严格子路径；拒绝任何含 `..` 的段；
    `lstat` 拒绝符号链接（本地读用 `O_NOFOLLOW`；远端先判 `-L` 再读）。
 4. **文件名与深度严格**：Claude 只收 `<编码目录>/<uuid>.jsonl` 直属文件；
-   Codex 只收 `sessions` 下的 `rollout-*.jsonl`。不做递归通配。
+   Codex 只收 `sessions` 下的 `rollout-*.jsonl`。DSH 只收
+   `<projectKey>/<encodedSessionID>/session.v3.jsonl[.zstd]`；header 的版本、id、绝对 cwd
+   必须匹配。目录名只用于缩小搜索范围，不做递归通配。
+   DSH zstd 由工作台 Go 解压，远端不安装解压工具；验证帧边界和校验，未写完的尾帧等待续读。
+   单次压缩输入预算 8 MiB、解压总预算 32 MiB，响应仍受原记录数和字节预算约束；超限明确返回
+   `read_limit_exceeded`。候选发现只读取首帧 header，不读取会话正文。
 5. **读取上限**：单次响应 ≤ 256 KiB，单块 ≤ 64 KiB，游标必须落在 `0 ≤ cursor ≤ fileSize`
    且行对齐。远端命令等价于 `tail -c +<N> | head -c <cap>`。
 6. **owner 校验**：沿用 `ownedHost`；非 owner 返回 404，不泄露 host 是否存在。
@@ -260,6 +283,13 @@ turn 合并，且必须显式比较来源优先级；本期只有单一磁盘源
 4. **`session.snapshot` 是否稳定提供 `foreground_cwd`**——字段存在，但对无头 / 前台切换场景的
    实际填充未逐例核验；为空时回退 `cwd`，两者都空即 `cwd_unavailable`。
 5. **候选 id 的派生方式**——只约定"不透明、服务端派生、不含路径、不可伪造"，具体算法由实现决定。
+6. **DSH 的 zstd 产物未对真实会话验证**——帧、header、目录编码均取自已安装包的源码与在
+   node 下执行的参考实现，端到端只用合成产物。压缩产物超过 8 MiB 时返回
+   `read_limit_exceeded`（长会话在首版不可读）；只有旧代际（如 v2）产物时按
+   `unrecognized_format` 报告，不按版本名区分。
+7. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
+   一律拒绝；"未 seeded 的 header 却带继承标记"只有读完所有帧才能发现，与有界读取预算冲突，
+   **未强制**。不得声称该不变式已完整验证。
 
 在这些点被真实隔离会话验证之前，正确行为是返回 §4 的降级形状，而不是返回看起来合理的假记录。
 

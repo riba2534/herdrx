@@ -414,6 +414,145 @@ describe('candidate selection', () => {
   })
 })
 
+describe('explicit DSH read source', () => {
+  const dshPane: Pane = { ...basePane, agent: '' }
+  const dshCandidate = { id: 'cand-dsh', agent: 'dsh' as const, session_id: 'dsh-aaaa1111', updated_at: '2026-09-13T04:00:00Z' }
+
+  function dshServer(handler: (url: string) => unknown) {
+    return transcriptServer((url) => handler(url))
+  }
+
+  it('offers the DSH source for an unidentified program and never claims a plain shell', async () => {
+    const mock = dshServer((url) => (url.includes('source=dsh')
+      ? { supported: true, agent: 'dsh', candidates: [], reason: 'no_session_candidates', messages: [] }
+      : { supported: false, reason: 'no_agent', messages: [] }))
+    render(<ChatView {...props({ pane: dshPane })}/>)
+
+    expect(await screen.findByText('暂不支持结构化会话记录')).toBeVisible()
+    expect(screen.getByText(/未识别出这个终端里运行的程序/)).toBeVisible()
+    expect(screen.getByText(/输入仍会发送到当前终端/)).toBeVisible()
+    expect(screen.queryByText(/普通 Shell/)).toBeNull()
+
+    // 在用户点击之前，客户端从不主动声明读取源，也从不猜 DSH。
+    expect(mock.mock.calls.every(([url]) => !String(url).includes('source='))).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: '读取 DSH 会话记录' }))
+    await waitFor(() => expect(mock.mock.calls.some(([url]) => String(url) === '/api/hosts/host/panes/p1/transcript?source=dsh')).toBe(true))
+    // 只列候选：一个 session 参数都不许出现。
+    expect(mock.mock.calls.every(([url]) => !String(url).includes('session='))).toBe(true)
+    expect(await screen.findByText(/在 DSH 的会话目录/)).toBeVisible()
+  })
+
+  it('requires an explicit candidate click with exactly one DSH candidate and keeps the binding selected', async () => {
+    const mock = dshServer((url) => {
+      if (!url.includes('source=dsh')) return { supported: false, reason: 'no_agent', messages: [] }
+      if (!url.includes('session=')) return { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
+      return { supported: true, agent: 'dsh', session_id: dshCandidate.session_id, binding: 'selected', messages: [text('u1', 'user', 'DSH 里的问题')] }
+    })
+    render(<ChatView {...props({ pane: dshPane })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: '读取 DSH 会话记录' }))
+    const candidate = await screen.findByRole('button', { name: /dsh-aaaa/ })
+    expect(document.querySelectorAll('.chat-message')).toHaveLength(0)
+    expect(mock.mock.calls.every(([url]) => !String(url).includes('session='))).toBe(true)
+
+    fireEvent.click(candidate)
+    await screen.findByText('DSH 里的问题')
+    const bound = mock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes('session='))
+    expect(bound[0]).toBe('/api/hosts/host/panes/p1/transcript?session=cand-dsh&source=dsh')
+    // 绑定来源就是用户显式选择，界面不升级、不暗示服务端已自动确认归属。
+    expect(screen.getByRole('button', { name: '重新选择会话记录' })).toBeVisible()
+    expect(screen.getByText('DSH')).toBeVisible()
+    expect(screen.queryByText(/已自动/)).toBeNull()
+  })
+
+  it('rebuilds the view on a source switch and keeps the submit target and count unchanged', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const client = createClient()
+    let plain = 0
+    const mock = dshServer((url) => {
+      if (url.includes('source=dsh')) {
+        if (url.includes('session=')) return { supported: true, agent: 'dsh', session_id: dshCandidate.session_id, binding: 'selected', previous_cursor: 'dsh-prev', messages: [text('u1', 'user', 'DSH 里的问题')] }
+        return { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
+      }
+      // 默认读取源先说"没识别出程序"，用户才会看到 DSH 入口；切回来之后按 claude 列候选。
+      return plain++ === 0 ? { supported: false, reason: 'no_agent', messages: [] } : candidatesPage
+    })
+    render(<ChatView {...props({ submit, client, pane: dshPane })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: '读取 DSH 会话记录' }))
+    fireEvent.click(await screen.findByRole('button', { name: /dsh-aaaa/ }))
+    await screen.findByText('DSH 里的问题')
+    expect(screen.getByRole('button', { name: '加载更早的记录' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '恢复默认读取源' }))
+    await waitFor(() => expect(screen.queryByText('DSH 里的问题')).toBeNull())
+    // 选择 / 游标 / 候选一起重建：不残留上一个读取源的会话与分页锚点。
+    expect(screen.queryByRole('button', { name: '加载更早的记录' })).toBeNull()
+    expect(await screen.findByRole('button', { name: /aaaa1111/ })).toBeVisible()
+
+    // 切换读取源不发送、不重放任何输入；发送目标仍是这个 pane。
+    expect(submit).not.toHaveBeenCalled()
+    const input = screen.getByRole('textbox', { name: '对话输入内容' })
+    fireEvent.change(input, { target: { value: '继续' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '继续')
+    expect(client.call).not.toHaveBeenCalled()
+    expect(mock.mock.calls.every(([url]) => !String(url).includes('agent='))).toBe(true)
+  })
+
+  it('drops the DSH source when the pane turns into a recognized agent without touching the draft', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const mock = dshServer((url) => (url.includes('source=dsh')
+      ? { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
+      : { supported: false, reason: 'no_agent', messages: [] }))
+    const view = render(<ChatView {...props({ submit, pane: { ...basePane, pane_id: 'p1', agent: '' } })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: '读取 DSH 会话记录' }))
+    await screen.findByRole('button', { name: /dsh-aaaa/ })
+
+    fireEvent.change(screen.getByRole('textbox', { name: '对话输入内容' }), { target: { value: '草稿要保留' } })
+
+    // pane 现在被识别成 claude：服务端会拒绝 source=dsh，客户端必须立刻放弃它。
+    const before = mock.mock.calls.length
+    view.rerender(<ChatView {...props({ submit, pane: { ...basePane, pane_id: 'p1', agent: 'claude' } })}/>)
+    await waitFor(() => expect(mock.mock.calls.slice(before).some(([url]) => String(url) === '/api/hosts/host/panes/p1/transcript')).toBe(true))
+    expect(mock.mock.calls.slice(before).every(([url]) => !String(url).includes('source='))).toBe(true)
+    expect(screen.queryByText('DSH')).toBeNull()
+    expect(screen.queryByRole('button', { name: '恢复默认读取源' })).toBeNull()
+
+    // 草稿与发送目标都不受影响。
+    const input = screen.getByRole('textbox', { name: '对话输入内容' })
+    expect(input).toHaveValue('草稿要保留')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '草稿要保留')
+  })
+
+  it('scopes the remembered source and the send target per pane', async () => {
+    const submit = vi.fn().mockResolvedValue(undefined)
+    const mock = dshServer((url) => (url.includes('source=dsh')
+      ? { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
+      : { supported: false, reason: 'no_agent', messages: [] }))
+    const view = render(<ChatView {...props({ submit, pane: { ...basePane, pane_id: 'p1', agent: '' } })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: '读取 DSH 会话记录' }))
+    await waitFor(() => expect(mock.mock.calls.some(([url]) => String(url) === '/api/hosts/host/panes/p1/transcript?source=dsh')).toBe(true))
+
+    // 另一个 pane 不继承这个选择，也不会把记录读成别人的。
+    view.rerender(<ChatView {...props({ submit, pane: { ...basePane, pane_id: 'p2', agent: '' } })}/>)
+    await waitFor(() => expect(mock.mock.calls.some(([url]) => String(url) === '/api/hosts/host/panes/p2/transcript')).toBe(true))
+    const p2 = mock.mock.calls.map(([url]) => String(url)).filter((url) => url.includes('/panes/p2/'))
+    expect(p2.every((url) => !url.includes('source='))).toBe(true)
+
+    // 回到原 pane：这个 pane 上显式选过的读取源仍然生效。
+    view.rerender(<ChatView {...props({ submit, pane: { ...basePane, pane_id: 'p1', agent: '' } })}/>)
+    await waitFor(() => expect(mock.mock.calls.some(([url]) => String(url) === '/api/hosts/host/panes/p1/transcript?source=dsh')).toBe(true))
+
+    const input = screen.getByRole('textbox', { name: '对话输入内容' })
+    fireEvent.change(input, { target: { value: '给 p1 的命令' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenCalledWith('p1', '给 p1 的命令')
+  })
+})
+
 describe('degraded states', () => {
   it('explains an unsupported agent and offers to switch back to the terminal', async () => {
     const onSwitchToTerminal = vi.fn()
@@ -430,6 +569,24 @@ describe('degraded states', () => {
     render(<ChatView {...props()}/>)
     expect(await screen.findByText(/尚未找到这个终端的会话记录/)).toBeVisible()
     expect(document.querySelectorAll('.chat-message')).toHaveLength(0)
+  })
+
+  it('reports a read limit instead of pretending the log is empty or corrupt', async () => {
+    transcriptServer(sequence({ supported: false, reason: 'read_limit_exceeded', messages: [] }))
+    render(<ChatView {...props()}/>)
+    expect(await screen.findByText(/超出受限读取上限/)).toBeVisible()
+    expect(screen.queryByText(/格式无法识别/)).toBeNull()
+    // 读不下是这次读取的结果，不是"没识别出程序"，因此不提供 DSH 入口。
+    expect(screen.queryByRole('button', { name: '读取 DSH 会话记录' })).toBeNull()
+  })
+
+  it('keeps the selected session on a read limit and does not call it empty', async () => {
+    transcriptServer(sequence(candidatesPage,
+      { supported: true, agent: 'claude', session_id: 'aaaa1111bbbb', binding: 'selected', reason: 'read_limit_exceeded', messages: [] }))
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    expect(await screen.findByText(/超出受限读取上限/)).toBeVisible()
+    expect(screen.queryByText('这个会话还没有记录')).toBeNull()
   })
 
   it('reports a transport failure with a retry action', async () => {

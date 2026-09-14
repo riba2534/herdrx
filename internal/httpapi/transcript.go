@@ -47,9 +47,10 @@ type transcriptResponse struct {
 
 // readTranscript 是结构化会话记录的读取端点。
 //
-// 客户端只传 hostID / paneID / 三个不透明参数；agent 与 cwd 一律由服务端调
-// `endpoint.Snapshot` 现取（`foreground_cwd` 回退 `cwd`），取不到就是 `cwd_unavailable`。
-// 路径永远由「agent 白名单 + 服务端自己取到的 cwd」推导，不接受客户端提供的任何路径。
+// 客户端只传 hostID / paneID / 三个不透明参数，可显式选择白名单 source=dsh。
+// cwd 一律由服务端 `endpoint.Snapshot` 现取；默认 reader 来自 pane.agent，
+// 未识别的程序允许用户选择 DSH 日志源，但不宣称验证了终端程序或会话绑定。
+// 路径永远由「reader 白名单 + 服务端自己取到的 cwd」推导，不接受客户端路径。
 func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) {
 	host, err := a.ownedHost(request)
 	if err != nil {
@@ -67,6 +68,11 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 	}
 
 	query := request.URL.Query()
+	source := query.Get("source")
+	if len(query["source"]) > 1 || (source != "" && source != "dsh") {
+		writeError(writer, http.StatusBadRequest, "invalid_source", "unsupported transcript source")
+		return
+	}
 	read := herdr.TranscriptRequest{Session: query.Get("session"), Cursor: query.Get("cursor"), Before: query.Get("before")}
 	for name, value := range map[string]string{"session": read.Session, "cursor": read.Cursor, "before": read.Before} {
 		if value != "" && (len(value) > transcriptTokenMaxBytes || !transcriptToken.MatchString(value)) {
@@ -96,6 +102,15 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	agent := pane.Agent
+	if source != "" {
+		if agentlog.Supported(agent) && agent != source {
+			writeError(writer, http.StatusBadRequest, "invalid_source", "transcript source conflicts with detected agent")
+			return
+		}
+		agent = source
+	}
+
 	page := herdr.TranscriptPage{Supported: false, Reason: herdr.ChatReasonUnsupportedTransport, Messages: []agentlog.Record{}}
 	detail := ""
 	if reader, ok := herdr.AsTranscriptEndpoint(endpoint); ok {
@@ -106,7 +121,7 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 		if cwd == "" {
 			cwd = strings.TrimSpace(pane.CWD)
 		}
-		scope := herdr.TranscriptScope{PaneID: paneID, Agent: pane.Agent, CWD: cwd}
+		scope := herdr.TranscriptScope{PaneID: paneID, Agent: agent, CWD: cwd}
 		value, callErr := reader.Transcript(ctx, scope, read)
 		if callErr != nil {
 			writeError(writer, http.StatusBadGateway, "transcript_unavailable", callErr.Error())

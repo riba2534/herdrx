@@ -1,11 +1,14 @@
 // Package agentlog 把 Agent 自己写下的 append-only 会话日志解析成带角色的对话记录。
 //
 // 权威数据源是磁盘上的 JSONL 文件 —— Claude Code 的
-// `~/.claude/projects/<编码 cwd>/<session>.jsonl` 与 Codex 的
-// `~/.codex/sessions/**/rollout-*.jsonl` —— 既不是 Herdr 协议的 RPC，也不是终端屏幕文本。
+// `~/.claude/projects/<编码 cwd>/<session>.jsonl`、Codex 的
+// `~/.codex/sessions/**/rollout-*.jsonl`，以及 DeepSeek Harness（DSH）的
+// `<root>/<项目目录>/<会话目录>/session.v3.jsonl[.zstd]` —— 既不是 Herdr 协议的 RPC，
+// 也不是终端屏幕文本。
 //
 // 本包只做「一行 JSONL → 一条记录」的纯函数转换：不碰文件系统、不碰网络、不认识 Herdr，
 // 因此可以用离线 fixture 完整测试，也便于对照上游 provider 的真实形状核对。
+// DSH 的 zstd 帧由调用方（herdr 传输层）有界解压成明文字节后喂进来，本包不参与解压。
 //
 // 输出形状与冻结契约 `web/src/lib/structuredChatTypes.ts` 一一对应：
 // 角色闭集合是 `user|assistant|tool|system`（**没有 reasoning**），块只有
@@ -13,6 +16,7 @@
 // `stablyai/orca@e86cba888b2eb88241a9c12dc019962f9c74307e` 的
 // `transcript-line-decoders-{claude,codex}.ts` 与 `transcript-record-blocks.ts`，
 // 但按本仓库契约做了两处收紧：不输出 image-ref / edit patch，不产生 reasoning 角色。
+// DSH 的形状对照本机安装的 `@deepseek-ai/dsh@0.1.5-rc.2` 源码读出，见 dsh.go。
 package agentlog
 
 import (
@@ -28,11 +32,13 @@ import (
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
+	// AgentDSH 是 DeepSeek Harness。只支持 v3 会话格式代际，见 DSHFormatVersion。
+	AgentDSH = "dsh"
 )
 
 // Supported 报告该 agent 是否在本期支持范围内。
 func Supported(agent string) bool {
-	return agent == AgentClaude || agent == AgentCodex
+	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH
 }
 
 // 记录角色，闭集合。`tool` 不是 provider 的原生角色，而是派生角色：

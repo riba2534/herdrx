@@ -7,8 +7,8 @@ import { api } from '../lib/api'
 import { readComposerDraft, readComposerSend, runComposerSend, writeComposerDraft } from '../lib/composerDrafts'
 import { voiceTransport } from '../lib/voiceClient'
 import type { VoiceInputState } from '../lib/chatMediaTypes'
-import { collectToolCalls, formatChatTime, groupChatTurns, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
-import type { ChatReason } from '../lib/structuredChatTypes'
+import { collectToolCalls, formatChatTime, groupChatTurns, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
+import type { ChatReason, ChatSource } from '../lib/structuredChatTypes'
 import { ChatMessage } from './chat/ChatMessage'
 import { agentStatusLabel, paneDisplayName } from '../lib/labels'
 import type { WorkbenchClient } from '../lib/workbench'
@@ -132,6 +132,14 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const turns = useMemo(() => groupChatTurns(state.messages), [state.messages])
   const tools = useMemo(() => collectToolCalls(state.messages), [state.messages])
 
+  // pane 变成已识别的 claude / codex 之后，服务端会拒绝 `source=dsh`（snapshot 每次现取）。
+  // 这里在开始取数**之前**先放弃显式读取源：作废在途请求并清空选择 / 游标 / 候选，不继续发
+  // 注定被拒的请求。草稿与发送目标都不受影响（它们不属于会话状态）。
+  useEffect(() => {
+    if (!paneAgentRejectsReadSource(pane.agent)) return
+    session.setReadSource(undefined)
+  }, [session, pane.agent, state.source])
+
   useEffect(() => {
     session.start()
     return () => session.stop()
@@ -177,6 +185,14 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const name = paneDisplayName(pane)
   const status = pane.agent_status || 'unknown'
   const bound = state.session !== undefined
+  // 读取源只来自用户在本 pane 的显式选择，绝不从窗口标题、进程名或候选文件名推断。
+  const dshSelected = state.source === 'dsh'
+  // 只有"没识别出程序"或"识别出的程序不支持"时才提供 DSH 入口；已知的 claude / codex 不给。
+  const canOfferDsh = !bound && !dshSelected && (state.reason === 'no_agent' || state.reason === 'unsupported_agent')
+  // 显式读取源只有一个入口动作，文案与 tooltip 在一处定义，避免两处写法漂移。
+  const dshOffer = (
+    <Button className="button-secondary chat-dsh-source" aria-label="读取 DSH 会话记录" data-tooltip="按 DSH 的会话目录（默认 ~/.dsh/sessions）读取记录；只用于读取，不改变终端里运行的程序，也不改变输入目标" onClick={() => session.setReadSource('dsh')}>读取 DSH 会话记录</Button>
+  )
 
   return <section className="chat-view" role="region" aria-label="对话视图" onPointerDown={onFocus}>
     <header className="chat-head">
@@ -184,15 +200,17 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         <StatusDot status={status}/><strong>{name}</strong><small>{agentStatusLabel(status)}</small>
       </span>
       <span className="chat-head-actions">
+        {dshSelected && <span className="chat-head-source" data-tooltip="当前读取源：DSH 会话记录（只读，不改变终端里的程序）">DSH</span>}
         {bound && <span className="chat-head-session" data-tooltip="当前读取的会话记录"><code>{shortSessionID(state.sessionID || '')}</code>{state.agent && <small>{state.agent}</small>}</span>}
         {bound && <Button className="tool-button chat-reselect" aria-label="重新选择会话记录" data-tooltip="回到候选列表，重新选择读取哪一个会话记录" onClick={() => session.reselect()}>重选</Button>}
+        {dshSelected && <Button className="tool-button chat-source-reset" aria-label="恢复默认读取源" data-tooltip="停止按 DSH 读取，改回按当前 Agent 写下的记录读取（会清空当前选择）" onClick={() => session.clearReadSource()}>默认源</Button>}
         <Button className="tool-button" aria-label="刷新会话记录" data-tooltip="立即重新读取会话记录" onClick={() => session.refresh()}><RefreshCw size={14}/></Button>
         <Button className="tool-button" aria-label="显示终端" data-tooltip="切换回终端视图（终端不中断）" onClick={onSwitchToTerminal}><SquareTerminal size={14}/></Button>
       </span>
     </header>
     <p className="chat-notice" role="note">
       <MessageSquare size={13} aria-hidden="true"/>
-      <span>这里的回答来自 Agent 写下的会话记录；输入会发送到<strong>当前终端</strong>（不会新建或恢复会话）。{bound ? '所选会话只用于读取，输入不会写入它。' : '请选择此终端的会话记录后再查看逐轮对话。'}</span>
+      <span>这里的回答来自 Agent 写下的会话记录；输入会发送到<strong>当前终端</strong>（不会新建或恢复会话）。{dshSelected ? '当前按你选择的 DSH 读取源读取，只用于查看，不改变终端里运行的程序。' : ''}{bound ? '所选会话只用于读取，输入不会写入它。' : '请选择此终端的会话记录后再查看逐轮对话。'}</span>
     </p>
 
     <div className="chat-log-wrap">
@@ -210,8 +228,11 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         {state.status === 'loading' && !bound && !candidates.length && <div className="chat-state" role="status"><Clock3 size={22} aria-hidden="true"/><strong>正在读取会话记录</strong><span>从该终端所在主机读取 Agent 自己写下的会话记录。</span></div>}
         {state.status === 'unavailable' && <div className="chat-state chat-state-error" role="alert" aria-label="结构化记录不可用">
           <TriangleAlert size={22} aria-hidden="true"/><strong>暂不支持结构化会话记录</strong>
-          <span>{reasonText(state.reason, pane.agent)}</span>
-          <Button className="button-secondary" onClick={onSwitchToTerminal}>切回终端</Button>
+          <span>{reasonText(state.reason, pane.agent, state.source)}</span>
+          <span className="chat-state-actions">
+            {canOfferDsh && dshOffer}
+            <Button className="button-secondary" onClick={onSwitchToTerminal}>切回终端</Button>
+          </span>
         </div>}
         {error && <div className="chat-state chat-state-error" role="alert" aria-label="读取会话记录失败">
           <TriangleAlert size={22} aria-hidden="true"/><strong>读取会话记录失败</strong><span>{error}</span>
@@ -222,8 +243,10 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         </div>}
         {!error && !bound && state.status !== 'unavailable' && state.status !== 'loading' && <>
           <section className="chat-candidates" aria-label="会话记录候选">
-            <h3>选择此终端的会话记录</h3>
-            <p className="chat-candidates-hint">列表只包含该终端目录下由这个 Agent 写下的会话文件，不含其它会话内容。</p>
+            <h3>{dshSelected ? '选择 DSH 会话记录' : '选择此终端的会话记录'}</h3>
+            <p className="chat-candidates-hint">{dshSelected
+              ? '列表只包含 DSH 会话目录（默认 ~/.dsh/sessions）下、header 里 cwd 与该终端一致的会话文件。'
+              : '列表只包含该终端目录下由这个 Agent 写下的会话文件，不含其它会话内容。'}</p>
             {candidates.length
               ? <ul className="chat-candidate-list">
                 {candidates.map((candidate) => <li key={candidate.id}>
@@ -234,18 +257,22 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
                   </button>
                 </li>)}
               </ul>
-              : <p className="chat-candidates-empty">{reasonText(state.reason || 'no_session_candidates', pane.agent)}</p>}
+              : <p className="chat-candidates-empty">{reasonText(state.reason || 'no_session_candidates', pane.agent, state.source)}</p>}
+            {/* 没有候选也可能只是"这个程序我们没识别出来"：给一个显式入口，但不自动读取任何东西。 */}
+            {canOfferDsh && <div className="chat-state-actions">{dshOffer}</div>}
           </section>
         </>}
         {!error && bound && <>
           {state.previousCursor && <div className="chat-earlier"><Button className="button-secondary chat-load-earlier" onClick={() => session.loadEarlier()}>加载更早的记录</Button></div>}
           {state.skipped > 0 && <p className="chat-skipped" role="note">有 {state.skipped} 条记录格式无法识别，可能未完整显示。</p>}
+          {/* 受限读取超限：说清楚"读不下"，而不是让下面的空态冒充"这个会话没有记录"。 */}
+          {state.reason === 'read_limit_exceeded' && <p className="chat-limit" role="alert">{reasonText('read_limit_exceeded', pane.agent, state.source)}</p>}
           {pane.agent && status === 'working' && <p className="chat-waiting" role="status">Agent 正在工作（{agentStatusLabel(status)}），本轮写盘后会自动出现在下方。</p>}
           {turns.map((turn) => <article className="chat-turn" key={turn.key}>
             {turn.user && <div className="chat-turn-user"><ChatMessage record={turn.user} tools={tools}/></div>}
             {turn.responses.map((record) => <ChatMessage key={record.id} record={record} tools={tools}/>)}
           </article>)}
-          {state.status === 'empty' && !state.previousCursor && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
+          {state.status === 'empty' && !state.previousCursor && state.reason !== 'read_limit_exceeded' && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
         </>}
       </div>
       {!atLatest && bound && <button type="button" className="chat-jump" onClick={jumpToLatest}><ChevronUp size={12} aria-hidden="true"/>跳到最新</button>}
@@ -290,26 +317,37 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   </section>
 }
 
-/** 降级文案：说明现状并给出用户下一步能做的事，不推荐未实现的命令。 */
-function reasonText(reason: ChatReason | undefined, agent?: string) {
+/**
+ * 降级文案：说明现状并给出用户下一步能做的事，不推荐未实现的命令。
+ *
+ * 措辞纪律：只描述**已经观察到的事实**。agent 为空只说明"没识别出程序"，
+ * **不能**据此断言它是普通 Shell、也不能断言它没有会话记录。
+ */
+function reasonText(reason: ChatReason | undefined, agent?: string, source?: ChatSource) {
   switch (reason) {
     case 'unsupported_agent':
       return agent ? `该终端运行的 ${agent} 暂无结构化会话记录，可切回终端查看完整界面。` : '该终端运行的 Agent 暂无结构化会话记录，可切回终端查看完整界面。'
     case 'no_agent':
-      return '这是普通 Shell，没有对话记录；发送内容会作为命令执行。'
+      return '未识别出这个终端里运行的程序，因此不知道它有没有会话记录；输入仍会发送到当前终端。'
     case 'unsupported_transport':
       return '当前接入方式或远端环境暂不支持受限读取（例如缺少所需工具），已保留完整终端视图。'
     case 'cwd_unavailable':
     case 'log_root_unavailable':
-      return '暂时无法定位这个终端的会话记录，已开始自动重试。'
+      return source === 'dsh'
+        ? '暂时读不到 DSH 的会话目录（默认 ~/.dsh/sessions），可稍后重试或切回终端查看完整界面。'
+        : '暂时无法定位这个终端的会话记录，已开始自动重试。'
     case 'session_unavailable':
       return '该会话记录已失效，请在上方重新选择。'
     case 'no_session_candidates':
-      return '尚未找到这个终端的会话记录（Agent 刚启动时可能还没写盘），可切回终端查看完整界面。'
+      return source === 'dsh'
+        ? '在 DSH 的会话目录（默认 ~/.dsh/sessions）下没有找到与这个终端目录匹配的会话记录，可切回终端查看完整界面。'
+        : '尚未找到这个终端的会话记录（Agent 刚启动时可能还没写盘），可切回终端查看完整界面。'
     case 'read_denied':
       return '读取会话记录被拒绝（路径越界或文件类型不被允许），可切回终端查看完整界面。'
     case 'unrecognized_format':
       return '会话日志格式无法识别，暂时不能显示逐轮对话，可切回终端查看完整界面。'
+    case 'read_limit_exceeded':
+      return '这个会话记录超出受限读取上限（压缩文件或解压结果过大），没有读取正文；可切回终端查看完整界面。'
     default:
       return '暂时无法显示结构化会话记录，可稍后重试或切回终端查看完整界面。'
   }

@@ -17,6 +17,7 @@ import {
   CHAT_AGENTS,
   CHAT_REASONS,
   CHAT_ROLES,
+  CHAT_SOURCES,
   EMPTY_STRUCTURED_CHAT_STATE,
   STRUCTURED_CHAT_POLL_MS,
   type ChatAgent,
@@ -26,6 +27,7 @@ import {
   type ChatRecord,
   type ChatRole,
   type ChatSessionCandidate,
+  type ChatSource,
   type ChatTurn,
   type StructuredChatFetch,
   type StructuredChatQuery,
@@ -36,12 +38,18 @@ import {
 
 const TRANSCRIPT_PATH_SUFFIX = '/transcript'
 
-/** 请求路径：hostID / paneID 只出现在路径里，三个不透明值只出现在查询串里。 */
+/**
+ * 请求路径：hostID / paneID 只出现在路径里，不透明值与显式读取源只出现在查询串里。
+ *
+ * 查询串里**只有** `session` / `cursor` / `before` / `source` 四个键：客户端绝不发送
+ * `agent=`、`cwd=` 或任何路径，也不发闭集合之外的 source 值。
+ */
 export function structuredChatPath(hostID: string, paneID: string, query: StructuredChatQuery = {}) {
   const params = new URLSearchParams()
   if (query.session) params.set('session', query.session)
   if (query.cursor) params.set('cursor', query.cursor)
   if (query.before) params.set('before', query.before)
+  if (query.source && (CHAT_SOURCES as readonly string[]).includes(query.source)) params.set('source', query.source)
   const search = params.toString()
   return `/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}${TRANSCRIPT_PATH_SUFFIX}${search ? `?${search}` : ''}`
 }
@@ -172,8 +180,14 @@ export const fetchStructuredChat: StructuredChatFetch = async (request: Structur
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) {
     if (response.status === 401) invalidateAuthentication(epoch)
-    const code = record(payload)?.code
-    throw new APIError(response.status, typeof code === 'string' ? code : 'request_failed', apiErrorMessage(payload, '无法读取会话记录，请稍后重试'))
+    const raw = record(payload)?.code
+    const code = typeof raw === 'string' ? raw : 'request_failed'
+    // 服务端拒绝客户端声明的读取源（例如 snapshot 已经识别出 claude/codex）时给出可执行的
+    // 中文说明，不把英文原因直接摊给用户。
+    const message = code === 'invalid_source'
+      ? '当前终端已被识别为其它 Agent，不能改用这个读取源；请用「默认源」恢复。'
+      : apiErrorMessage(payload, '无法读取会话记录，请稍后重试')
+    throw new APIError(response.status, code, message)
   }
   // 请求期间登录会话已经变化（退出或被顶掉）时，结果属于上一身份，直接丢弃。
   if (epoch !== authenticationGeneration()) throw new APIError(409, 'auth_changed', '登录状态已变化，请重试')
@@ -215,6 +229,8 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
       status: 'unavailable',
       reason: page.reason || 'internal_error',
       agent: page.agent,
+      // 读取源是用户选择，不随一页响应改变；降级态也要保留它，用户才能看出"是按哪个源读的"。
+      source: state.source,
       session: undefined,
       sessionID: undefined,
       binding: undefined,
@@ -231,6 +247,7 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
       status: 'idle',
       reason: 'session_unavailable',
       agent: page.agent || state.agent,
+      source: state.source,
       session: undefined,
       sessionID: undefined,
       binding: undefined,
@@ -259,8 +276,11 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
   }
   return {
     status: !bound ? 'idle' : messages.length ? 'ready' : 'empty',
-    reason: bound ? undefined : page.reason,
+    // 服务端给出的降级原因原样保留（包括已绑定会话时的 `read_limit_exceeded`），
+    // 否则"读不下"会被渲染成"这个会话还没有记录"，正好是契约禁止的伪装。
+    reason: page.reason,
     agent: page.agent || state.agent,
+    source: state.source,
     session: state.session,
     sessionID: page.session_id || (bound ? state.sessionID : undefined),
     binding: bound ? page.binding || state.binding || 'selected' : undefined,
@@ -334,6 +354,71 @@ export function shortSessionID(sessionID: string, length = 8) {
   return sessionID.length <= length ? sessionID : `${sessionID.slice(0, length)}…`
 }
 
+// ── 显式读取源的「按 pane」记忆 ─────────────────────────────────────────────────
+//
+// 用户点过"读取 DSH 会话记录"之后，切回终端再切回对话视图不应该悄悄退回默认读取，
+// 否则每次进页面都要重新点一次。这份记忆必须**只按 pane 作用域**存在：
+//
+//   - key = 登录会话身份 + hostID + paneID：跨 pane、跨主机、跨登录身份都不复用；
+//   - 没有任何登录身份时不记忆（转录端点本来就要求 owner 认证）；
+//   - 登录失效立即整表清空，换人登录时丢掉不属于新身份的条目。
+//
+// 它只影响"读哪一类日志"，不改变当前终端运行的程序，也不改变输入目标。
+
+const paneReadSources = new Map<string, ChatSource>()
+let paneReadSourceListenerReady = false
+
+function paneReadSourceKey(hostID: string, paneID: string) {
+  const session = currentSessionID()
+  if (!session || !hostID || !paneID) return ''
+  return `${session}\n${hostID}\n${paneID}`
+}
+
+function ensurePaneReadSourceListener() {
+  if (paneReadSourceListenerReady) return
+  paneReadSourceListenerReady = true
+  onAuthEvent((event) => {
+    if (event.kind === 'expired') {
+      paneReadSources.clear()
+      return
+    }
+    const keep = `${event.sessionID}\n`
+    for (const key of Array.from(paneReadSources.keys())) {
+      if (!key.startsWith(keep)) paneReadSources.delete(key)
+    }
+  })
+}
+
+/** 读取某个 pane 记住的显式读取源；没有（或身份已变）返回 undefined。 */
+export function readPaneReadSource(hostID: string, paneID: string): ChatSource | undefined {
+  ensurePaneReadSourceListener()
+  const key = paneReadSourceKey(hostID, paneID)
+  return key ? paneReadSources.get(key) : undefined
+}
+
+/**
+ * 这个 pane 的 agent 是否已经是一个"已识别、且不是 dsh"的读取源归属。
+ *
+ * 此时服务端会拒绝 `source=dsh`（400 `invalid_source`：snapshot 每次现取，已识别的
+ * claude / codex 不接受客户端覆盖），所以客户端**不能**继续保留显式 DSH 读取源，
+ * 否则会一直发注定被拒的请求。空 agent（未识别）与未知 agent 都不算拒绝：
+ * 那正是"用户可以显式选 DSH"的情形。
+ */
+export function paneAgentRejectsReadSource(agent?: string) {
+  const value = typeof agent === 'string' ? agent.trim() : ''
+  if (!value || value === 'dsh') return false
+  return (CHAT_AGENTS as readonly string[]).includes(value)
+}
+
+/** 记住 / 清除某个 pane 的显式读取源。只写这一个 key，绝不跨 pane 传播。 */
+export function rememberPaneReadSource(hostID: string, paneID: string, source: ChatSource | undefined) {
+  ensurePaneReadSourceListener()
+  const key = paneReadSourceKey(hostID, paneID)
+  if (!key) return
+  if (source) paneReadSources.set(key, source)
+  else paneReadSources.delete(key)
+}
+
 export type StructuredChatSnapshot = {
   /** 契约状态机。未显式选择候选时 `messages` 恒为空。 */
   state: StructuredChatState
@@ -349,6 +434,11 @@ export type StructuredChatSnapshot = {
 export type StructuredChatSessionOptions = {
   hostID: string
   paneID: string
+  /**
+   * 初始显式读取源。省略时取该 pane 上次显式选择过的源（见 `readPaneReadSource`）；
+   * 两者都没有就是"按服务端从 snapshot 得到的 agent 读取"。
+   */
+  source?: ChatSource
   /** 取数实现，测试注入假实现；默认走 owner 认证 HTTP。 */
   fetchPage?: StructuredChatFetch
   /** 轮询间隔，默认契约值。 */
@@ -363,7 +453,8 @@ export type StructuredChatSessionOptions = {
  * - **不自动认领候选**：没有显式 `select()` 之前永不发带 `session` 的请求；
  * - 一次只跑一个请求（不重叠轮询），`cursor` 递增，不重读全量；
  * - 每个异步结果都绑定「host + pane + 登录身份 + 会话代次」，迟到的旧响应直接丢弃；
- * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session。
+ * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session；
+ * - 切换显式读取源等于换数据源：清空选择 / 游标 / 候选后重新列候选，**仍然不自动绑定**。
  */
 export class StructuredChatSession {
   private snapshotValue: StructuredChatSnapshot = { state: { ...EMPTY_STRUCTURED_CHAT_STATE }, candidates: [], error: '' }
@@ -371,6 +462,8 @@ export class StructuredChatSession {
   private readonly fetchPage: StructuredChatFetch
   private readonly pollMs: number
   private readonly maxCatchUpPages: number
+  /** 显式读取源：会话内单一真值来源，`publish` 每次都把它写回状态。 */
+  private source: ChatSource | undefined
   private generation = 0
   private running = false
   private active = true
@@ -384,6 +477,8 @@ export class StructuredChatSession {
     this.fetchPage = options.fetchPage || fetchStructuredChat
     this.pollMs = options.pollMs ?? STRUCTURED_CHAT_POLL_MS
     this.maxCatchUpPages = Math.max(1, options.maxCatchUpPages ?? 8)
+    // 只认"这个 pane 上显式选过的读取源"；绝不由 host / 标题 / 其它 pane 推断。
+    this.source = options.source ?? readPaneReadSource(options.hostID, options.paneID)
   }
 
   getSnapshot = (): StructuredChatSnapshot => this.snapshotValue
@@ -394,8 +489,14 @@ export class StructuredChatSession {
   }
 
   private publish(state: StructuredChatState, error = '', candidates = this.snapshotValue.candidates) {
-    this.snapshotValue = { state, candidates, error }
+    // 读取源永远以会话字段为准写回状态：合并函数不会因为某一页响应而"忘记"用户选过的源。
+    this.snapshotValue = { state: { ...state, source: this.source }, candidates, error }
     for (const listener of this.listeners) listener()
+  }
+
+  /** 空白状态：没有任何选择 / 游标 / 记录，只带上当前读取源。 */
+  private emptyState(status: StructuredChatState['status']): StructuredChatState {
+    return { ...EMPTY_STRUCTURED_CHAT_STATE, status }
   }
 
   /** 挂载：监听登录失效，并立即请求候选列表（不带 `session`，因此不会返回任何消息）。 */
@@ -410,6 +511,31 @@ export class StructuredChatSession {
     })
     this.publish({ ...this.snapshotValue.state, status: 'loading' })
     void this.load({})
+  }
+
+  /**
+   * 用户显式选择读取源（当前只有 `dsh`），或传 `undefined` 放弃它。
+   *
+   * 这不是 Agent 身份声明：服务端只在 snapshot 的 agent 为空 / 不认识时采用它，
+   * 已识别的 claude / codex 不会被覆盖（会返回 400 `invalid_source`）。
+   *
+   * 切换读取源 = 换数据源：作废在途请求，清空选择 / 游标 / 候选 / 已累积记录后重新列候选。
+   * **不自动绑定任何候选**（即使只有一个），也不改变输入目标与当前终端程序。
+   * 还没 `start()` 时只更新会话字段与该 pane 的记忆，不发任何请求（不会先发一次注定被拒的请求）。
+   */
+  setReadSource(source: ChatSource | undefined) {
+    if (this.source === source) return
+    this.source = source
+    rememberPaneReadSource(this.options.hostID, this.options.paneID, source)
+    if (!this.running) return
+    this.invalidate()
+    this.publish(this.emptyState('loading'))
+    void this.load({})
+  }
+
+  /** 放弃显式读取源，回到"服务端按 snapshot agent 推导"的默认读取；同样清空全部状态。 */
+  clearReadSource() {
+    this.setReadSource(undefined)
   }
 
   /** 卸载：作废所有在途请求与定时器。 */
@@ -522,6 +648,8 @@ export class StructuredChatSession {
         const response = await this.fetchPage({
           hostID,
           paneID,
+          // 显式读取源只在用户选过时出现；请求里永远没有 `agent` / `cwd` / 路径。
+          ...(this.source ? { source: this.source } : {}),
           ...(query.session ? { session: query.session } : {}),
           ...(query.before ? { before: query.before } : {}),
           ...(cursor ? { cursor } : {}),

@@ -216,7 +216,7 @@ func (a *API) securityHeaders(next http.Handler) http.Handler {
 		if a.scriptHashes != "" {
 			scriptSrc += " " + a.scriptHashes
 		}
-		writer.Header().Set("Content-Security-Policy", "default-src 'self'; "+scriptSrc+"; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+		writer.Header().Set("Content-Security-Policy", "default-src 'self'; "+scriptSrc+"; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ws: wss:; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 		next.ServeHTTP(writer, request)
 	})
 }
