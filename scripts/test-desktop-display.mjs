@@ -251,6 +251,17 @@ async function zoomIn(page, clicks) {
   await page.getByRole('button', { name: '收起终端工具', exact: true }).click()
 }
 
+async function pollState(read, ok, label, timeout = 15000) {
+  const deadline = Date.now() + timeout
+  let last
+  for (;;) {
+    last = await read()
+    if (ok(last)) return last
+    if (Date.now() > deadline) assert.fail(`${label} did not settle: ${JSON.stringify(last)}`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
 const cases = [
   { name: '1440x900-dpr1', viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   { name: '1920x1080-dpr1', viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 },
@@ -327,21 +338,20 @@ try {
       wideAuto.layouts[0].area = { x: 0, y: 0, width: 145, height: 40 }
       wideAuto.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 145, height: 40 } }]
       const autoFit = await fixture(browser, { viewport: { width: 1440, height: 900 } }, wideAuto)
-      await expect.poll(async () => {
+      const wideSettled = await pollState(async () => {
         const m = await metrics(autoFit.page, 0)
-        const cropped = (await autoFit.page.locator('.pane-crop-badge').count()) > 0
-        return !cropped && m.rowCount === 40 && m.font < 14 && m.font >= 10 && m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1
-      }, { timeout: 15000 }).toBe(true)
+        return { ...m, font: m.font, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+      }, (s) => !s.cropped && s.rowCount === 40 && s.font < 14 && s.font >= 10 && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1, `${name} auto fit at 145 columns`)
+      console.log(`${name}: 145-col auto state ${JSON.stringify(wideSettled)}`)
       assert.equal(resizes(autoFit.messages).length, 0, 'auto fit sent a remote resize')
       await screenshot(autoFit.page, `${name}-auto-fit`)
       // 缩放 is the ceiling for the fit, so raising it must not push the grid
       // past the pane: the same 145 column grid stays complete, not cropped.
       await zoomIn(autoFit.page, 5)
-      await expect.poll(async () => {
+      await pollState(async () => {
         const m = await metrics(autoFit.page, 0)
-        const cropped = (await autoFit.page.locator('.pane-crop-badge').count()) > 0
-        return !cropped && m.font <= 14 && m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1
-      }, { timeout: 15000 }).toBe(true)
+        return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+      }, (s) => !s.cropped && s.font <= 14 && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1, `${name} auto fit at 150% zoom`)
       assert.equal(resizes(autoFit.messages).length, 0, 'auto fit at 150% sent a remote resize')
       await screenshot(autoFit.page, `${name}-auto-fit-zoom150`)
       await autoFit.context.close()
