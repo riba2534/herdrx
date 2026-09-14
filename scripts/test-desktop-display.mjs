@@ -251,6 +251,16 @@ async function zoomIn(page, clicks) {
   await page.getByRole('button', { name: '收起终端工具', exact: true }).click()
 }
 
+// Columns that only fit once the font shrinks below the default but stays
+// readable. Which count that is depends on the cell width this browser
+// actually renders, so derive it from a measured 295-column fixed grid instead
+// of assuming a particular monospace advance.
+function wideGridColumns(state) {
+  const cellWidth = state.screenWidth / 295
+  if (!(cellWidth > 0) || !(state.clientWidth > 0)) return 145
+  return Math.max(20, Math.min(1000, Math.floor(state.clientWidth * 14 / (cellWidth * 12))))
+}
+
 async function pollState(read, ok, label, timeout = 15000) {
   const deadline = Date.now() + timeout
   let last
@@ -333,20 +343,33 @@ try {
 
       // Auto keeps a wide grid readable by shrinking, and falls back to the
       // fixed, scrollable view once fitting would go below the floor.
+      const probe = await fixture(browser, { viewport: { width: 1440, height: 900 } })
+      await setDisplayMode(probe.page, 'fixed')
+      const probeGrid = await pollState(
+        async () => gridState(probe.page),
+        (g) => g.screenWidth > g.clientWidth + 1,
+        `${name} 295-column probe grid`,
+      )
+      await probe.context.close()
+      const wideCols = wideGridColumns(probeGrid)
       const wideAuto = structuredClone(splitSnapshot)
       wideAuto.panes = [{ ...wideAuto.panes[0], scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 40 } }]
-      wideAuto.layouts[0].area = { x: 0, y: 0, width: 145, height: 40 }
-      wideAuto.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 145, height: 40 } }]
+      wideAuto.layouts[0].area = { x: 0, y: 0, width: wideCols, height: 40 }
+      wideAuto.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: wideCols, height: 40 } }]
       const autoFit = await fixture(browser, { viewport: { width: 1440, height: 900 } }, wideAuto)
-      const wideSettled = await pollState(async () => {
-        const m = await metrics(autoFit.page, 0)
-        return { ...m, font: m.font, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
-      }, (s) => !s.cropped && s.rowCount === 40 && s.font < 14 && s.font >= 10 && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1, `${name} auto fit at 145 columns`)
-      console.log(`${name}: 145-col auto state ${JSON.stringify(wideSettled)}`)
+      await pollState(
+        async () => {
+          const m = await metrics(autoFit.page, 0)
+          return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+        },
+        (s) => !s.cropped && s.rowCount === 40 && s.font < 14 && s.font >= 10
+          && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1,
+        `${name} auto fit at ${wideCols} columns`,
+      )
       assert.equal(resizes(autoFit.messages).length, 0, 'auto fit sent a remote resize')
       await screenshot(autoFit.page, `${name}-auto-fit`)
       // 缩放 is the ceiling for the fit, so raising it must not push the grid
-      // past the pane: the same 145 column grid stays complete, not cropped.
+      // past the pane: the same wide grid stays complete, not cropped.
       await zoomIn(autoFit.page, 5)
       await pollState(async () => {
         const m = await metrics(autoFit.page, 0)
