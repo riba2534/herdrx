@@ -15,6 +15,18 @@ function typeLocal(text: string) {
   fireEvent.change(screen.getByRole('textbox', { name: '本地输入内容' }), { target: { value: text } })
 }
 
+/**
+ * 提交分两腿（先整段正文、后单独回车），所以测试要能手握每一腿的完成时机：
+ * `legs[n]` 对应第 n+1 次 `submit` 调用，前一次没有结算时后一腿不会被调用。
+ */
+function deferredSubmit() {
+  const legs: Array<{ resolve: () => void; reject: (error: Error) => void }> = []
+  const submit = vi.fn((_paneID: string, _text: string, _keys: string[]) => new Promise<void>((resolve, reject) => {
+    legs.push({ resolve: () => resolve(), reject })
+  }))
+  return { submit, legs }
+}
+
 const props = {
   visible: true,
   directInput: false,
@@ -92,21 +104,24 @@ describe('Composer', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     rerender(<Composer hostID="host" paneID="p2" {...props} submit={submit}/>)
     typeLocal('另一个终端的草稿')
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '第一行\n中文 🙂')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    // 两腿都钉在点击那一刻的 pane，切换 pane 不会把回车送到别处。
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '第一行\n中文 🙂', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     expect(readComposerDraft('host', 'p2')).toBe('另一个终端的草稿')
     expect(readComposerDraft('host', 'p1')).toBe('')
   })
 
   it('does not clear another pane that has the same draft text as the message just sent', async () => {
-    let finish: () => void = () => {}
-    const submit = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    const { submit, legs } = deferredSubmit()
     const { rerender } = render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
     typeLocal('同一段提示词')
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     rerender(<Composer hostID="host" paneID="p2" {...props} submit={submit}/>)
     typeLocal('同一段提示词')
-    await act(async () => finish())
+    await act(async () => legs[0].resolve())
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    await act(async () => legs[1].resolve())
     await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
     expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('同一段提示词')
     expect(readComposerDraft('host', 'p2')).toBe('同一段提示词')
@@ -114,13 +129,14 @@ describe('Composer', () => {
   })
 
   it('keeps later edits on the sending pane and only clears an untouched matching revision', async () => {
-    let finish: () => void = () => {}
-    const submit = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    const { submit, legs } = deferredSubmit()
     render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
     typeLocal('hello')
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     typeLocal('hello 后续编辑')
-    await act(async () => finish())
+    await act(async () => legs[0].resolve())
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    await act(async () => legs[1].resolve())
     await waitFor(() => expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('hello 后续编辑'))
     expect(readComposerDraft('host', 'p1')).toBe('hello 后续编辑')
   })
@@ -135,7 +151,56 @@ describe('Composer', () => {
     expect(submit).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    // 连点两次也只提交一次：正文一腿、回车一腿。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit.mock.calls.filter((call) => (call[2] as string[]).includes('Enter'))).toHaveLength(1)
+  })
+
+  it('sends the text and the Enter as two legs, and reports an unconfirmed Enter without resending the text', async () => {
+    const { submit, legs } = deferredSubmit()
+    render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
+    typeLocal('分两腿发送')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    // 第一腿只有正文、没有按键：bracketed paste 由 herdr 按 pane 状态决定。
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '分两腿发送', [])
+    await act(async () => legs[0].resolve())
+    // 第二腿只有一次回车，正文不再重发。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await act(async () => legs[1].reject(new Error('连接已关闭')))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('结果未知'))
+    expect(screen.getByRole('status')).toHaveTextContent('正文已送入终端，但提交回车未确认')
+    expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('分两腿发送')
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(submit).toHaveBeenCalledTimes(2)
+  })
+
+  it('never sends the Enter leg when the text leg fails, so a failed send cannot half-submit', async () => {
+    const { submit, legs } = deferredSubmit()
+    render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
+    typeLocal('keep me')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    await act(async () => legs[0].reject(new Error('远端拒绝')))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('发送失败'))
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('keep me')
+  })
+
+  it('clears the draft only after both legs succeed', async () => {
+    const { submit, legs } = deferredSubmit()
+    render(<Composer hostID="host" paneID="p1" {...props} submit={submit}/>)
+    typeLocal('两腿都成功才清空')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    await act(async () => legs[0].resolve())
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(readComposerDraft('host', 'p1')).toBe('两腿都成功才清空')
+    await act(async () => legs[1].resolve())
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已送达'))
+    expect(readComposerDraft('host', 'p1')).toBe('')
   })
 
   it('ignores repeated Enter and repeated Ctrl/Cmd+Enter keydown without sending', async () => {

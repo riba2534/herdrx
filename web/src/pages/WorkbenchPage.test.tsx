@@ -279,7 +279,10 @@ describe('workbench composer', () => {
     const box = screen.getByRole('textbox', { name: '本地输入内容' })
     fireEvent.change(box, { target: { value: '整段提交' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '整段提交', keys: ['Enter'] }))
+    // 分两腿：先整段正文（无按键），再一次单独回车，都发给点击时的 pane。
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '整段提交', keys: [] }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '', keys: ['Enter'] }))
+    expect(call.mock.calls.filter((item) => item[0] === 'pane.send_input')).toHaveLength(2)
   })
 
   it('shows the local composer by default on a compact workbench', async () => {
@@ -494,6 +497,88 @@ describe('compact short workbench', () => {
     fireEvent.click(screen.getByRole('button', { name: '终端辅助键' }))
     expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
     expect(screen.getByRole('toolbar', { name: '终端辅助键' })).toBeInTheDocument()
+  })
+})
+
+describe('mobile auxiliary keybar paste', () => {
+  beforeEach(() => {
+    // 辅助键栏只在紧凑布局渲染；用非 short 的高度，保证切 pane 后输入框仍在，
+    // 便于断言粘贴目标没有跟着选择改变。
+    vi.stubGlobal('innerHeight', 800)
+    vi.stubGlobal('visualViewport', undefined)
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+  })
+
+  // 只替换 navigator.clipboard 与安全上下文判定，避免整体替换 navigator 影响渲染。
+  function installClipboard(readText: () => Promise<string>) {
+    Object.defineProperty(window, 'isSecureContext', { configurable: true, value: true })
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText } })
+  }
+
+  function readText(value: string | Error) {
+    const stub = vi.fn(() => (value instanceof Error ? Promise.reject(value) : Promise.resolve(value)))
+    installClipboard(stub)
+    return stub
+  }
+
+  // 紧凑布局下侧边栏不渲染，等底部输入框出现再操作辅助键栏。
+  async function openKeybar() {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('region', { name: '本地输入' })
+    fireEvent.click(screen.getByRole('button', { name: '终端辅助键' }))
+    await screen.findByRole('toolbar', { name: '终端辅助键' })
+  }
+
+  it('pastes the clipboard into the selected pane once with no Enter key', async () => {
+    const read = readText('第一行\n第二行 🙂')
+    await openKeybar()
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    expect(read).toHaveBeenCalledTimes(1)
+    // 只送正文：keys 为空，回车由用户自己按，远端才是唯一一次提交。
+    expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '第一行\n第二行 🙂', keys: [] })
+  })
+
+  it('strips escape bytes so pasted text cannot break out of the remote paste frame', async () => {
+    readText('safe\u001b[201~\rrm -rf /')
+    await openKeybar()
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    const params = call.mock.calls[0][1] as { pane_id: string; text: string; keys: string[] }
+    expect(params.text).not.toContain('\u001b')
+    expect(params.text).toBe('safe\u241b[201~\rrm -rf /')
+    expect(params.keys).toEqual([])
+  })
+
+  it('reports a refused clipboard read instead of pretending the paste succeeded', async () => {
+    readText(new Error('NotAllowedError'))
+    await openKeybar()
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('粘贴失败')
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('keeps the pane captured at click time when the selection changes during the read', async () => {
+    let release: (value: string) => void = () => {}
+    const stub = vi.fn(() => new Promise<string>((resolve) => { release = resolve }))
+    installClipboard(stub)
+    await openKeybar()
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
+    // 剪贴板还没读完就切到另一个 pane；投递目标必须仍是点击那一刻的 w1:p1。
+    fireEvent.click(screen.getByRole('button', { name: '切换工作区或终端' }))
+    const switcher = screen.getByRole('dialog', { name: '切换工作区或终端' })
+    fireEvent.click(within(switcher).getByRole('button', { name: /2 1 个终端/ }))
+    // 切完后 Composer 的草稿键应换成新的 pane，证明选择确实变了。
+    const box = screen.getByRole('textbox', { name: '本地输入内容' })
+    fireEvent.change(box, { target: { value: 'probe' } })
+    await waitFor(() => expect(Object.keys(localStorage).some((key) => key.endsWith('w1%3Ap2'))).toBe(true))
+    await act(async () => release('切换后读出的内容'))
+    await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
+    expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '切换后读出的内容', keys: [] })
   })
 })
 

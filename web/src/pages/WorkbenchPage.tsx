@@ -161,6 +161,29 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     }
   }
   const pasteImages = (files: File[]) => pasteImagesTo(paneID, files)
+
+  // 粘贴按钮把剪贴板正文整段送进点击那一刻选中的终端，**不追加回车**。
+  // 分帧由 herdr 的 pane.send_input 按目标 pane 当前的 bracketed-paste 状态决定
+  // （与图片粘贴同一条路径），本地 xterm 的粘贴模式可能与远端不同步，所以客户端
+  // 绝不自己包 \x1b[200~；正文里的 ESC 会提前结束粘贴框架并可能注入按键，替换掉。
+  const pasteClipboardToTerminal = async () => {
+    const target = paneID
+    if (!target) return
+    if (!window.isSecureContext || !navigator.clipboard?.readText) {
+      setActionError('当前页面不能使用剪贴板。请改用 HTTPS 或 localhost，或直接在终端里粘贴。')
+      return
+    }
+    try {
+      // 只读一次；之后固定投递给这里的 target，用户在两腿之间切换 pane 也不会误投。
+      const text = await navigator.clipboard.readText()
+      if (!text) return
+      await client.call('pane.send_input', { pane_id: target, text: text.replaceAll('\u001b', '\u241b'), keys: [] })
+      setActionError('')
+    } catch (error) {
+      // 剪贴板被拒绝或远端拒收都如实报错，不伪装成功。
+      setActionError(error instanceof Error ? `粘贴失败：${error.message}` : '粘贴失败')
+    }
+  }
   const handleImageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
@@ -864,10 +887,23 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {!chatOpen && (composerOpen || mobile) && <div className="workbench-dock" ref={dockRef}>
-      <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text) => client.call('pane.send_input', composerSubmitParams(targetPane, text))} onPasteImages={(files) => void pasteImages(files)}/>
+      <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>
       {mobile && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
-        ['Enter', '\r'], ['Esc', '\u001b'], ['Tab', '\t'], ['Ctrl+C', '\u0003'], ['Ctrl+D', '\u0004'], ['↑', '\u001b[A'], ['↓', '\u001b[B'], ['←', '\u001b[D'], ['→', '\u001b[C'], ['-', '-'], ['/', '/'], ['|', '|'], ['~', '~'],
-      ].map(([label, data]) => <button key={label} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}<button className={prefix ? 'key-active' : ''} onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}
+        ['Enter', '\r', '回车键'],
+        ['Esc', '\u001b', 'Esc 键'],
+        ['Tab', '\t', 'Tab 键'],
+        ['Ctrl+C', '\u0003', '中断 Ctrl+C'],
+        ['Ctrl+D', '\u0004', '结束输入 Ctrl+D'],
+        ['↑', '\u001b[A', '方向键上'],
+        ['↓', '\u001b[B', '方向键下'],
+        ['←', '\u001b[D', '方向键左'],
+        ['→', '\u001b[C', '方向键右'],
+        ['-', '-', '减号'],
+        ['/', '/', '斜杠'],
+        ['|', '|', '竖线'],
+        ['~', '~', '波浪号'],
+      ].map(([label, data, aria]) => <button key={label} aria-label={aria} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}
+      <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}
       </div>}
       <Input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} onChange={(event) => void handleImageUpload(event)} />
     </main>

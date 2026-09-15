@@ -150,8 +150,12 @@ export function clearComposerDrafts() {
   notify()
 }
 
-export function composerSubmitParams(paneID: string, text: string) {
-  return { pane_id: paneID, text, keys: ['Enter'] }
+/**
+ * `keys` 必填：两腿各自的按键集合必须由调用方显式给出，避免任何一处悄悄退回
+ * “正文 + 回车一次发完”的旧形态（那正是回车被当粘贴内容吞掉的形态）。
+ */
+export function composerSubmitParams(paneID: string, text: string, keys: string[]) {
+  return { pane_id: paneID, text, keys }
 }
 
 export function composerOutcome(error: unknown): 'failed' | 'unknown' {
@@ -187,7 +191,27 @@ export function composerStatusText(state: ComposerSendState, compact = false) {
   return compact ? '本地编辑，发送后整段提交一次。' : '编辑仅在本地进行，点击发送后整段提交一次。'
 }
 
-export async function runComposerSend(hostID: string, paneID: string, submit: (paneID: string, text: string) => Promise<void>) {
+/**
+ * 提交分**两腿**发送，而不是一次 `{text, keys:['Enter']}`。
+ *
+ *  - 第一腿只送正文（`keys: []`）。是否包 `\x1b[200~…\x1b[201~` 完全由 herdr 按目标 pane
+ *    当前的 bracketed-paste 状态决定，客户端绝不自己再包一层。
+ *  - 第二腿只送一次回车（`text: ''`, `keys: ['Enter']`）。
+ *
+ * 依据（herdr 0.9.0 + Claude Code 2.1.272，裸 PTY 记录每次 `read()` 的分块）：
+ * 单次 `{text, keys:['Enter']}` 把 `\x1b[200~正文\x1b[201~\r` 作为**同一个 chunk** 送达
+ * （正文 500 字节时一次 `read()` 就是 n=613），粘贴结束符与回车落在同一次 `read()`；
+ * 而拆成两次 RPC 后，正文与 `\r` 各自成为独立 chunk（n=612 与 n=1），
+ * **两次调用之间不做任何等待也依然分开**——分隔来自两次 RPC 往返本身，因此不需要固定 sleep。
+ * 目标程序于是总能看到"先整段粘贴、后单独回车"，回车不会被当成粘贴内容吞掉。
+ */
+export type ComposerSubmit = (paneID: string, text: string, keys: string[]) => Promise<void>
+
+function sendErrorText(error: unknown) {
+  return error instanceof Error ? error.message : '发送失败'
+}
+
+export async function runComposerSend(hostID: string, paneID: string, submit: ComposerSubmit) {
   ensureAuthListener()
   const sessionID = currentSessionID()
   const key = liveKey(hostID, paneID)
@@ -199,21 +223,37 @@ export async function runComposerSend(hostID: string, paneID: string, submit: (p
   sends.set(key, { status: 'sending', error: '', revision })
   notify()
   try {
-    await submit(paneID, text)
+    // 第一腿：整段正文。失败时正文没有送达，保留草稿，可安全手动重试。
+    try {
+      await submit(paneID, text, [])
+    } catch (error) {
+      if (!inflight.has(key)) return
+      sends.set(key, { status: composerOutcome(error), error: sendErrorText(error), revision })
+      notify()
+      return
+    }
     if (!inflight.has(key)) return
+    // 第二腿：只发一次回车。目标固定为第一腿的 `paneID`——这里不读取当前选中项，
+    // 用户在两腿之间切换 pane 不会把回车送到别的终端；失败也不重放正文。
+    try {
+      await submit(paneID, '', ['Enter'])
+    } catch (error) {
+      if (!inflight.has(key)) return
+      sends.set(key, {
+        status: 'unknown',
+        error: `正文已送入终端，但提交回车未确认（${sendErrorText(error)}）`,
+        revision,
+      })
+      notify()
+      return
+    }
+    if (!inflight.has(key)) return
+    // 只有两腿都成功才算送达并清空草稿；草稿在两腿之间被改写则保留用户的新内容。
     const latest = drafts.get(key)
     if (latest && latest.revision === revision && latest.text === text) {
       persistDraft(key, sessionID, hostID, paneID, { text: '', revision })
     }
     sends.set(key, { status: 'delivered', error: '', revision })
-    notify()
-  } catch (error) {
-    if (!inflight.has(key)) return
-    sends.set(key, {
-      status: composerOutcome(error),
-      error: error instanceof Error ? error.message : '发送失败',
-      revision,
-    })
     notify()
   } finally {
     inflight.delete(key)

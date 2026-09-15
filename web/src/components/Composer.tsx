@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { ChevronUp, Keyboard, SquareTerminal } from 'lucide-react'
 import { Button } from './ui'
 import { clipboardImages } from '../lib/imagePaste'
-import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerSend, subscribeComposer, writeComposerDraft, type ComposerSendState } from '../lib/composerDrafts'
+import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerSend, subscribeComposer, writeComposerDraft, type ComposerSendState, type ComposerSubmit } from '../lib/composerDrafts'
 import type { ComposerMediaHost } from '../lib/chatMediaTypes'
 import './Composer.css'
 
@@ -105,7 +105,7 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
   placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
-  submit: (paneID: string, text: string) => Promise<void>
+  submit: ComposerSubmit
   onPasteImages?: (files: File[]) => void
   /**
    * 可选的媒体层接线点（图片附件）。缺席时本组件行为与接线前**逐字节一致**：

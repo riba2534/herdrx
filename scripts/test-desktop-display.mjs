@@ -397,7 +397,13 @@ try {
       await expect(roundtrip.page.locator('.composer')).toBeVisible()
       await roundtrip.page.getByRole('textbox', { name: '本地输入内容' }).fill('keep-desktop-draft')
       await roundtrip.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => roundtrip.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input').length).toBe(1)
+      // 提交分两腿：先整段正文（无按键），再单独一次回车。
+      const roundtripSends = () => roundtrip.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
+      await expect.poll(() => roundtripSends().length).toBe(2)
+      assert.deepEqual(roundtripSends().map((item) => item.params), [
+        { pane_id: 'p1', text: 'keep-desktop-draft', keys: [] },
+        { pane_id: 'p1', text: '', keys: ['Enter'] },
+      ])
       assert.deepEqual(roundtrip.errors, [])
       await roundtrip.context.close()
 
@@ -406,7 +412,12 @@ try {
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()
       await mobile.page.getByRole('textbox', { name: '本地输入内容' }).fill('mobile-once')
       await mobile.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => mobile.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input').length).toBe(1)
+      const mobileSends = () => mobile.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
+      await expect.poll(() => mobileSends().length).toBe(2)
+      assert.deepEqual(mobileSends().map((item) => item.params), [
+        { pane_id: 'p1', text: 'mobile-once', keys: [] },
+        { pane_id: 'p1', text: '', keys: ['Enter'] },
+      ])
       await mobile.page.setViewportSize({ width: 844, height: 390 })
       await expect(mobile.page.locator('.terminal-pane')).toHaveCount(1)
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()

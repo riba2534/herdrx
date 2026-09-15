@@ -2,7 +2,9 @@ package herdr
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +100,11 @@ func TestInputWithRealHerdr(t *testing.T) {
 	t.Fatal("detaching input removed the remote pane")
 }
 
+// Pins herdr's framing contract for a single `pane.send_input` call: the paste
+// markers wrap the text and the Enter is appended inside the same write. The
+// composer no longer sends text and Enter together (see the two-leg test below);
+// its first leg relies on exactly this framing, and its second leg relies on an
+// empty text with `keys: ['Enter']` producing a bare carriage return.
 func TestComposerSendInputWithRealHerdr(t *testing.T) {
 	binary := os.Getenv("HERDRX_TEST_HERDR")
 	if binary == "" {
@@ -163,4 +170,248 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 		data, _ := os.ReadFile(filepath.Join(dir, "received"))
 		return string(data) == expected
 	})
+
+}
+
+// A chat-like target owns the pane: it keeps a draft, treats bracketed-paste
+// content as text, and treats a carriage return outside a paste as one submit.
+// It also records every raw read() so a test can see whether the paste-end and
+// the Enter arrived in one PTY chunk or in two. The byte stream decides the
+// outcome, so this fixture fails when the text never arrives, when the Enter
+// leg is dropped or swallowed by the paste, when the draft submits twice, or
+// when the text is mangled.
+const chatFixture = `import json, os, tty
+tty.setraw(0)
+os.write(1, b'\x1b[?2004h')
+open('ready', 'w').close()
+chunks = open('chunks.jsonl', 'a', buffering=1)
+submits = open('submissions.jsonl', 'a', buffering=1)
+draft = ''
+in_paste = False
+pending = ''
+for data in iter(lambda: os.read(0, 65536), b''):
+    chunks.write(json.dumps(data.hex()) + '\n')
+    pending += data.decode('utf-8', 'replace')
+    while pending:
+        if pending.startswith('\x1b[200~'):
+            in_paste, pending = True, pending[6:]
+            continue
+        if pending.startswith('\x1b[201~'):
+            in_paste, pending = False, pending[6:]
+            continue
+        ch, pending = pending[0], pending[1:]
+        if ch == '\x1b':
+            # Unknown escape: wait for the rest of the sequence before deciding.
+            if pending and (pending[0].isalpha() or pending[0] == '\x1b' and len(pending) < 2):
+                continue
+            if not pending:
+                pending = ch
+                break
+            continue
+        if ch == '\r' and not in_paste:
+            submits.write(json.dumps({'text': draft}) + '\n')
+            draft = ''
+        elif ch == '\n' or ch == '\t' or ch >= ' ':
+            draft += ch
+`
+
+// jsonLines splits an append-only JSONL file. A writer may be mid-append, so
+// callers tolerate an unparsable last line instead of failing the test.
+func jsonLines(body string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(body, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			lines = append(lines, trimmed)
+		}
+	}
+	return lines
+}
+
+// chatChunks returns the raw bytes of every read() the target recorded, in
+// order, so a test can assert which bytes shared one PTY read.
+func chatChunks(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "chunks.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	chunks := []string{}
+	lines := jsonLines(string(data))
+	for index, line := range lines {
+		var encoded string
+		if err := json.Unmarshal([]byte(line), &encoded); err != nil {
+			// The target is still appending; a half-written trailing line is not a failure.
+			if index == len(lines)-1 {
+				break
+			}
+			t.Fatalf("decode chunk %q: %v", line, err)
+		}
+		decoded, err := hex.DecodeString(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, string(decoded))
+	}
+	return chunks
+}
+
+func chatChunkIndexes(t *testing.T, dir string, needles ...string) map[string][]int {
+	t.Helper()
+	found := map[string][]int{}
+	for _, needle := range needles {
+		for index, chunk := range chatChunks(t, dir) {
+			if strings.Contains(chunk, needle) {
+				found[needle] = append(found[needle], index)
+			}
+		}
+	}
+	return found
+}
+
+func chatSubmissions(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, "submissions.jsonl"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatal(err)
+	}
+	out := []string{}
+	lines := jsonLines(string(data))
+	for index, line := range lines {
+		var record struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			if index == len(lines)-1 {
+				break
+			}
+			t.Fatalf("decode submission %q: %v", line, err)
+		}
+		out = append(out, record.Text)
+	}
+	return out
+}
+
+// The composer submits in two legs: the whole text first (keys empty, so herdr
+// owns the bracketed-paste framing), then one Enter on its own. This asserts on
+// the target side that the paste-end and the Enter land in *different* PTY
+// reads, that the text leg alone never submits, and that the Enter leg submits
+// exactly once with the exact text. Collapsing the two legs back into a single
+// `{text, keys:['Enter']}` call makes the paste-end and the Enter share one
+// read again, which is the state that swallows the Enter on a chat target.
+func TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr(t *testing.T) {
+	binary := os.Getenv("HERDRX_TEST_HERDR")
+	if binary == "" {
+		t.Skip("HERDRX_TEST_HERDR is not set")
+	}
+	// Keep the Unix socket path below the platform limit despite the long test name.
+	dir, err := os.MkdirTemp("", "herdr-twoleg-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HERDR_CONFIG_PATH", filepath.Join(dir, "config.toml"))
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("onboarding = false\n[terminal]\ndefault_shell = \"/bin/sh\"\nshell_mode = \"non_login\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Generous headroom: this test spawns a server, a PTY and a fixture, and the
+	// whole suite runs under load in CI.
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	// Unique per process so parallel runs in one checkout never share a session.
+	session := fmt.Sprintf("twoleg-%d", os.Getpid())
+	server := exec.CommandContext(ctx, binary, "--session", session, "server")
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command(binary, "--session", session, "server", "stop").Run()
+		_ = server.Process.Kill()
+		_ = server.Wait()
+	})
+	endpoint, err := NewLocalEndpoint(binary, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := func(what string, check func() bool) {
+		t.Helper()
+		for !check() {
+			select {
+			case <-ctx.Done():
+				t.Fatalf("isolated chat PTY timed out waiting for %s", what)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	until("the isolated herdr server", func() bool { _, err := endpoint.Snapshot(ctx); return err == nil })
+	created, err := endpoint.Call(ctx, "workspace.create", map[string]any{"cwd": dir, "label": "composer-two-leg", "focus": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		RootPane Pane `json:"root_pane"`
+	}
+	if err := json.Unmarshal(created, &result); err != nil || result.RootPane.ID == "" {
+		t.Fatalf("create fixture: %s, %v", created, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "chat.py"), []byte(chatFixture), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := endpoint.Call(ctx, "pane.send_text", map[string]any{"pane_id": result.RootPane.ID, "text": "python3 chat.py\r"}); err != nil {
+		t.Fatal(err)
+	}
+	until("the chat fixture", func() bool { _, err := os.Stat(filepath.Join(dir, "ready")); return err == nil })
+
+	text := "第一行\n中文 🙂\n第三行"
+	framed := "\x1b[200~" + text + "\x1b[201~"
+
+	// First leg: the text alone. Nothing may be submitted yet, otherwise a later
+	// Enter leg would be the second submit.
+	if _, err := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": result.RootPane.ID, "text": text, "keys": []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	until("the framed paste", func() bool { return len(chatChunkIndexes(t, dir, "\x1b[201~")["\x1b[201~"]) > 0 })
+	if got := chatSubmissions(t, dir); len(got) != 0 {
+		t.Fatalf("text leg submitted on its own: %q", got)
+	}
+
+	// Second leg: one bare Enter, no text.
+	if _, err := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": result.RootPane.ID, "text": "", "keys": []string{"Enter"}}); err != nil {
+		t.Fatal(err)
+	}
+	until("the chat target to submit", func() bool { return len(chatSubmissions(t, dir)) > 0 })
+	if got := chatSubmissions(t, dir); len(got) != 1 || got[0] != text {
+		t.Fatalf("expected exactly one submit with the exact text, got %q", got)
+	}
+
+	// The whole point of the split: the paste-end and the Enter are separate reads.
+	found := chatChunkIndexes(t, dir, "\x1b[201~", "\r")
+	pasteEnd, enter := found["\x1b[201~"], found["\r"]
+	if len(pasteEnd) != 1 || len(enter) != 1 {
+		t.Fatalf("expected one paste-end chunk and one Enter chunk, got %v", found)
+	}
+	if pasteEnd[0] == enter[0] {
+		t.Fatalf("paste-end and Enter shared PTY read %d; the Enter is inside the paste", pasteEnd[0])
+	}
+	if enter[0] < pasteEnd[0] {
+		t.Fatalf("Enter read %d arrived before paste-end read %d", enter[0], pasteEnd[0])
+	}
+	if received := strings.Join(chatChunks(t, dir), ""); !strings.Contains(received, framed) {
+		t.Fatalf("target did not receive a framed paste of the exact text: %q", received)
+	}
+
+	// A failed Enter leg must not redeliver the text: a wrong pane is rejected and
+	// the target keeps exactly one submission.
+	if _, err := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": "w9:p9", "text": "", "keys": []string{"Enter"}}); err == nil {
+		t.Fatal("expected an unknown pane to be rejected")
+	}
+	if got := chatSubmissions(t, dir); len(got) != 1 {
+		t.Fatalf("failed Enter leg replayed the text: %q", got)
+	}
 }

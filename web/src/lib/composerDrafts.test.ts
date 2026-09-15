@@ -52,10 +52,17 @@ describe('composer drafts', () => {
 })
 
 describe('composer submit helpers', () => {
-  it('uses Herdr pane.send_input text plus a single Enter', () => {
-    expect(composerSubmitParams('w1:p2', '第一行\n第二行 🙂')).toEqual({
+  it('builds the text leg without keys and the Enter leg without text', () => {
+    // 第一腿：整段正文、没有按键，bracketed paste 由 herdr 决定。
+    expect(composerSubmitParams('w1:p2', '第一行\n第二行 🙂', [])).toEqual({
       pane_id: 'w1:p2',
       text: '第一行\n第二行 🙂',
+      keys: [],
+    })
+    // 第二腿：只发一次回车。
+    expect(composerSubmitParams('w1:p2', '', ['Enter'])).toEqual({
+      pane_id: 'w1:p2',
+      text: '',
       keys: ['Enter'],
     })
   })
@@ -75,6 +82,57 @@ describe('composer submit helpers', () => {
     expect(composerOutcome(new Error('write herdr request: broken pipe'))).toBe('unknown')
     expect(composerOutcome(new Error('read herdr response: connection reset by peer'))).toBe('unknown')
     expect(composerOutcome(new Error('herdr pane.send_input: invalid_key: unsupported key Enter'))).toBe('failed')
+  })
+})
+
+describe('composer two-leg send', () => {
+  function recordingSubmit() {
+    const calls: Array<{ paneID: string; text: string; keys: string[] }> = []
+    const submit = async (paneID: string, text: string, keys: string[]): Promise<void> => {
+      calls.push({ paneID, text, keys })
+      if (keys.length && keys.includes('Enter') && plan.rejectEnter) throw plan.rejectEnter
+      if (!keys.length && plan.rejectText) throw plan.rejectText
+      if (!keys.length && !plan.rejectEnter) await plan.afterText?.()
+    }
+    const plan: { rejectText?: Error; rejectEnter?: Error; afterText?: () => Promise<void> } = {}
+    return { submit, calls, plan }
+  }
+
+  it('sends the text first, then a bare Enter, bound to the pane the send started on', async () => {
+    const { submit, calls } = recordingSubmit()
+    writeComposerDraft('host', 'p1', '两腿一次提交')
+    await runComposerSend('host', 'p1', submit)
+    expect(calls).toEqual([
+      { paneID: 'p1', text: '两腿一次提交', keys: [] },
+      { paneID: 'p1', text: '', keys: ['Enter'] },
+    ])
+    expect(readComposerSend('host', 'p1').status).toBe('delivered')
+    expect(readComposerDraft('host', 'p1')).toBe('')
+  })
+
+  it('keeps the draft and stays failed when the text leg is rejected, without sending an Enter', async () => {
+    const { submit, calls, plan } = recordingSubmit()
+    plan.rejectText = new Error('远端拒绝')
+    writeComposerDraft('host', 'p1', 'keep me')
+    await runComposerSend('host', 'p1', submit)
+    expect(calls).toEqual([{ paneID: 'p1', text: 'keep me', keys: [] }])
+    expect(readComposerSend('host', 'p1').status).toBe('failed')
+    expect(readComposerDraft('host', 'p1')).toBe('keep me')
+  })
+
+  it('reports an unconfirmed Enter as unknown and never replays the text', async () => {
+    const { submit, calls, plan } = recordingSubmit()
+    plan.rejectEnter = new Error('连接已关闭')
+    writeComposerDraft('host', 'p1', '正文已进终端')
+    await runComposerSend('host', 'p1', submit)
+    expect(calls).toEqual([
+      { paneID: 'p1', text: '正文已进终端', keys: [] },
+      { paneID: 'p1', text: '', keys: ['Enter'] },
+    ])
+    const state = readComposerSend('host', 'p1')
+    expect(state.status).toBe('unknown')
+    expect(state.error).toContain('正文已送入终端，但提交回车未确认')
+    expect(readComposerDraft('host', 'p1')).toBe('正文已进终端')
   })
 })
 
