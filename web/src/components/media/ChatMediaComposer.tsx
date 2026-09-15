@@ -73,9 +73,10 @@ export function ChatMediaComposer(props: ChatMediaComposerProps) {
    * （唯一一条合成路径，见契约 §8.3）。这里只保留一道防御性守卫：
    * 图片仍在上传时，宁可抛中文错误，也不静默丢掉用户刚加上的图片。
    */
-  const submit = useCallback(async (targetPane: string, text: string) => {
+  // 两腿提交：正文与回车分别调用，pane 固定为本次提交开始时选中的终端。
+  const submit = useCallback(async (targetPane: string, text: string, keys: string[]) => {
     if (store.busy(hostID, paneID)) throw new Error('图片仍在上传，请稍候再发送')
-    await submitRef.current(targetPane, text)
+    await submitRef.current(targetPane, text, keys)
   }, [store, hostID, paneID])
 
   /**

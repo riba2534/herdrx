@@ -249,7 +249,8 @@ async function touchAndKeyboardChecks(context, page) {
   await showAuxiliaryKeys(page)
   await clickPaneTool(page, '聚焦终端输入')
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
-  await page.getByRole('button', { name: 'Enter', exact: true }).click()
+  // 辅助键栏的按钮文字是符号，无障碍名走 aria-label；这里按当前名称取回车键。
+  await page.getByRole('button', { name: '回车键', exact: true }).click()
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
   await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeLessThan(100)
 

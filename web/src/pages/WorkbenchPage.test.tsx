@@ -4,14 +4,17 @@ import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
+import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS } from '../lib/terminalKeys'
 import { clearPaneViewModes, readPaneViewMode } from '../lib/paneViewMode'
 import { resetWorkbenchSessionCache } from '../lib/workbenchSession'
 
-const { call, connection, retryNow, snapshotListeners } = vi.hoisted(() => ({
+const { call, connection, retryNow, snapshotListeners, paneInput } = vi.hoisted(() => ({
   call: vi.fn().mockResolvedValue({}),
   connection: { state: 'ready' as string, message: '', retryAt: 0 },
   retryNow: vi.fn(),
   snapshotListeners: [] as Array<(value: Snapshot) => void>,
+  // 辅助键栏把字节交给终端面板注册进来的发送函数；这里替身记录收到的原始字节。
+  paneInput: [] as string[],
 }))
 const snapshot: Snapshot = {
   version: 'test', protocol: 1,
@@ -64,13 +67,14 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
     data-active={props.active ? 'true' : 'false'}
   >
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
+    <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
     <button aria-label={`${props.pane.pane_id} 切到对话视图`} aria-pressed={props.viewMode === 'chat'} onClick={() => props.onViewModeChange('chat')}>对话</button>
     <button aria-label={`${props.pane.pane_id} 切回终端视图`} aria-pressed={props.viewMode === 'terminal'} onClick={() => props.onViewModeChange('terminal')}>终端</button>
   </div>,
@@ -507,6 +511,13 @@ describe('mobile auxiliary keybar paste', () => {
     vi.stubGlobal('innerHeight', 800)
     vi.stubGlobal('visualViewport', undefined)
     vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    // 辅助键要交给终端面板注册的发送函数，所以这里必须真的渲染 pane 与布局。
+    snapshot.layouts = [{
+      workspace_id: 'w1', tab_id: 'w1:t1', focused_pane_id: 'w1:p1', zoomed: false,
+      area: { x: 0, y: 0, width: 100, height: 40 },
+      panes: [{ pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 100, height: 40 } }],
+      splits: [],
+    }]
   })
 
   // 只替换 navigator.clipboard 与安全上下文判定，避免整体替换 navigator 影响渲染。
@@ -559,6 +570,90 @@ describe('mobile auxiliary keybar paste', () => {
     fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('粘贴失败')
     expect(call).not.toHaveBeenCalled()
+  })
+
+  it('refuses an oversized paste instead of silently sending half a command', async () => {
+    readText('a'.repeat(256 * 1024 + 1))
+    await openKeybar()
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '粘贴到终端，不自动回车' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('256 KiB')
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  it('offers the orca key set in the orca order so muscle memory carries over', async () => {
+    readText('unused')
+    await openKeybar()
+    const labels = within(screen.getByRole('toolbar', { name: '终端辅助键' })).getAllByRole('button').map((button) => button.textContent || '')
+    // 常用编辑键在前、控制键在后；herdrx 额外的符号键留在最后。
+    expect(labels.slice(0, 5)).toEqual(['Esc', 'Tab', 'Enter', 'Shift+Tab', 'Space'])
+    expect(labels.indexOf('⌫')).toBeLessThan(labels.indexOf('↑'))
+    expect(labels.indexOf('↑')).toBeLessThan(labels.indexOf('Ctrl+C'))
+    expect(labels.indexOf('Ctrl+C')).toBeLessThan(labels.indexOf('-'))
+  })
+
+  it('sends each key byte on tap and keeps repeats off the non-repeatable keys', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    const toolbar = screen.getByRole('toolbar', { name: '终端辅助键' })
+    // Shift+Tab 在一次性按键里：点一下发一次 ESC [ Z。
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Shift 加 Tab 反向切换' }))
+    fireEvent.click(within(toolbar).getByRole('button', { name: '中断 Ctrl+C' }))
+    expect(paneInput).toEqual(['\x1b[Z', '\x03'])
+  })
+
+  it('sends a repeatable key on keyboard activation too, since it has no click handler', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    const backspace = within(screen.getByRole('toolbar', { name: '终端辅助键' })).getByRole('button', { name: '退格键' })
+    // 长按键走 onPointerDown，没有 onClick；键盘和读屏必须另有一条通路。
+    fireEvent.keyDown(backspace, { key: 'Enter' })
+    fireEvent.keyDown(backspace, { key: ' ' })
+    fireEvent.keyDown(backspace, { key: 'a' })
+    expect(paneInput).toEqual(['\x7f', '\x7f'])
+  })
+
+  it('repeats a held backspace but stops on release, and does not repeat Enter', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    const toolbar = screen.getByRole('toolbar', { name: '终端辅助键' })
+    vi.useFakeTimers()
+    try {
+      // 长按退格：按下先发一次，停住一段时间后开始连发。
+      fireEvent.pointerDown(within(toolbar).getByRole('button', { name: '退格键' }))
+      expect(paneInput).toEqual(['\x7f'])
+      await act(async () => { await vi.advanceTimersByTimeAsync(KEY_REPEAT_DELAY_MS + KEY_REPEAT_INTERVAL_MS * 2) })
+      expect(paneInput.length).toBeGreaterThan(1)
+      const held = paneInput.length
+      fireEvent.pointerUp(within(toolbar).getByRole('button', { name: '退格键' }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(KEY_REPEAT_INTERVAL_MS * 4) })
+      expect(paneInput.length).toBe(held)
+      // 回车不是可重复键：按住也只发一次。
+      const enter = within(toolbar).getByRole('button', { name: '回车键' })
+      fireEvent.pointerDown(enter)
+      fireEvent.click(enter)
+      await act(async () => { await vi.advanceTimersByTimeAsync(KEY_REPEAT_DELAY_MS + KEY_REPEAT_INTERVAL_MS * 2) })
+      // 按一下只发一次：pointerdown 对不可重复键没有副作用，click 才是那一次。
+      expect(paneInput.slice(held)).toEqual(['\r'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends nothing from the keybar until the terminal registers its input channel', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    const toolbar = screen.getByRole('toolbar', { name: '终端辅助键' })
+    expect(within(toolbar).getByRole('button', { name: '回车键' })).toBeDisabled()
+    fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
+    expect(paneInput).toEqual([])
   })
 
   it('keeps the pane captured at click time when the selection changes during the read', async () => {

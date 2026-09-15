@@ -62,7 +62,10 @@ const server = createServer(async (req, res) => {
     if (transcriptMode === 'unsupported') return sendJSON(res, 200, { supported: false, reason: 'unsupported_transport', messages: [] })
     if (!query.session) return sendJSON(res, 200, { supported: true, agent: AGENTS[pane], candidates: candidatesFor(pane), messages: [] })
     // 终端里刚发出去的文本，模拟成 Agent 下一轮写盘后被增量游标读到的新记录。
-    const echoed = sentTexts.map((item, index) => ({ id: `sent-${index + 1}`, role: 'user', at: '2026-09-13T05:00:09.000Z', blocks: [{ type: 'text', text: item.text }] }))
+    // 提交是两腿，只有带正文的那一腿会被记成一条用户消息；回车腿 text 为空，
+    // 若也照抄成一条记录就会凭空多出一个空气泡（真实记录里不存在这种条目）。
+    const submitted = sentTexts.filter((item) => item.text)
+    const echoed = submitted.map((item, index) => ({ id: `sent-${index + 1}`, role: 'user', at: '2026-09-13T05:00:09.000Z', blocks: [{ type: 'text', text: item.text }] }))
     return sendJSON(res, 200, { supported: true, agent: AGENTS[pane], session_id: SESSIONS[pane], binding: 'selected', messages: QA.concat(echoed), skipped: 0, has_more: false })
   }
   const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'chat-user', email: 'chat@example.test', display_name: 'Chat', role: 'admin' }, csrf_token: 'chat-fixture', session_id: 'chat-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/chat-test/' ? { host } : null
@@ -117,7 +120,7 @@ async function fixture(browser, options, { mode = 'ok', sendDelayMs = 300, fixtu
         // 对话视图不该走这条路；这里仍给出应答，好让「有没有发生」能被断言出来。
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: { read: { text: 'chat-read-line-1\nchat-read-line-2\n构建完成' } } }))
       } else if (message.t === 'call' && message.method === 'pane.send_input') {
-        sentTexts.push({ pane: message.params?.pane_id, text: message.params?.text })
+        sentTexts.push({ pane: message.params?.pane_id, text: message.params?.text, keys: message.params?.keys })
         setTimeout(() => ws.send(JSON.stringify({ t: 'result', id: message.id, result: { type: 'ok' } })), sendDelayMs)
       } else if (message.t === 'call') {
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: {} }))
@@ -262,12 +265,19 @@ try {
 
         // 工作台底部的本地输入框在对话视图下隐藏，避免两个输入框。
         await expect(desk.page.locator('.workbench-dock')).toHaveCount(0)
-        // 对话里的输入框仍可发送，一次一段；发送只走 pane.send_input，不注入按键。
+        // 对话里的输入框仍可发送；发送只走 pane.send_input（正文 + 回车两腿），不注入按键。
         const box = chat.getByRole('textbox', { name: '对话输入内容' })
         await box.fill('请运行测试')
         await box.press('Enter')
-        await expect.poll(() => calls(desk.messages, 'pane.send_input').length).toBe(1)
-        assert.deepEqual(calls(desk.messages, 'pane.send_input')[0].params, { pane_id: 'p1', text: '请运行测试', keys: ['Enter'] })
+        // 两腿提交：正文与回车必须**分别**成两次调用，否则目标会把回车当粘贴内容吞掉。
+        await expect.poll(() => calls(desk.messages, 'pane.send_input').length).toBe(2)
+        const legs = calls(desk.messages, 'pane.send_input').map((call) => call.params)
+        assert.deepEqual(legs, [
+          { pane_id: 'p1', text: '请运行测试', keys: [] },
+          { pane_id: 'p1', text: '', keys: ['Enter'] },
+        ], '提交没有拆成「正文」「回车」两腿')
+        assert.equal(legs[0].keys.length, 0, '正文腿带了按键，回车会重新落进粘贴框架')
+        assert.equal(legs[1].text, '', '回车腿带了正文，正文会被重发')
         assert.equal(calls(desk.messages, 'pane.send_keys').length, 0, 'chat view injected raw keys into the terminal')
         // 送达 ≠ 远端已执行：状态文案必须说清楚。
         await expect(chat.getByText(/不代表远端程序已执行成功/).first()).toBeVisible()
@@ -452,7 +462,12 @@ try {
         await expect(phone.page.getByRole('switch', { name: '对话视图' }).first()).toHaveAttribute('aria-checked', 'true')
         await phoneChat.getByRole('textbox', { name: '对话输入内容' }).fill('手机发送')
         await phoneChat.getByRole('button', { name: '发送', exact: true }).click()
-        await expect.poll(() => calls(phone.messages, 'pane.send_input').length).toBe(1)
+        // 手机端同样必须是两腿：只数到第一条就放过，等于没验证回车腿真的发出。
+        await expect.poll(() => calls(phone.messages, 'pane.send_input').length).toBe(2)
+        assert.deepEqual(calls(phone.messages, 'pane.send_input').map((call) => call.params), [
+          { pane_id: 'p1', text: '手机发送', keys: [] },
+          { pane_id: 'p1', text: '', keys: ['Enter'] },
+        ], '手机端提交没有拆成「正文」「回车」两腿')
         const phoneOverflow = await phone.page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
         assert.ok(phoneOverflow.scroll <= phoneOverflow.client + 1, `mobile chat view overflows horizontally: ${phoneOverflow.scroll} > ${phoneOverflow.client}`)
         await screenshot(phone.page, `${name}-mobile-chat`)

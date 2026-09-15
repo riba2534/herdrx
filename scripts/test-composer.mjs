@@ -247,6 +247,27 @@ try {
         await clipboard.context.close()
       }
 
+      // 手机辅助键栏：按键必须真的把字节送进终端，而不只是渲染出按钮。
+      // 这里断言的是 OP_INPUT 帧的内容——辅助键走本地终端输入通道，不是 RPC。
+      if (name === 'chromium' && browser.version) {
+        const keys = await fixture(browser, { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+        await showAuxiliaryKeys(keys.page)
+        const before = keys.messages.length
+        const toolbar = keys.page.getByRole('toolbar', { name: '终端辅助键', exact: true })
+        // 键栏只有在终端注册了发送通道后才可用；按钮禁用就说明通道没接上。
+        const shiftTabButton = toolbar.getByRole('button', { name: 'Shift 加 Tab 反向切换', exact: true })
+        await expect(shiftTabButton).toBeEnabled()
+        await shiftTabButton.click()
+        await toolbar.getByRole('button', { name: '中断 Ctrl+C', exact: true }).click()
+        await toolbar.getByRole('button', { name: '回车键', exact: true }).click()
+        await expect.poll(() => inputFrames(keys.messages.slice(before)).length).toBe(3)
+        assert.deepEqual(inputFrames(keys.messages.slice(before)).map((item) => item.bytes), ['\x1b[Z', '\x03', '\r'])
+        // 键栏不该走 RPC：那是粘贴按钮和提交的通道。
+        assert.equal(sendCalls(keys.messages).length, 0, 'keybar keys were sent as composer submits')
+        assert.deepEqual(keys.errors, [])
+        await keys.context.close()
+      }
+
       for (const [width, height] of [[320, 720], [390, 844], [479, 847], [844, 390]]) {
         const view = await fixture(browser, { viewport: { width, height }, hasTouch: true, ...(name !== 'firefox' ? { isMobile: true } : {}) })
         await expect(view.page.locator('.keybar')).toHaveCount(0)

@@ -438,7 +438,9 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .composer { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); }
   .composer-modes > button { min-height: 44px; }
   .keybar { flex: 0 0 auto; min-height: 52px; padding: 4px 6px; display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
-  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; }
+  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 8px; white-space: nowrap; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; }
+  /* 与 orca 一致：长按连发的键需要能压下系统长按菜单，否则中文输入法会抢走手势。 */
+  .keybar button { -webkit-touch-callout: none; touch-action: manipulation; }
   .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
   .mode-bar { left: 5px; right: 5px; bottom: calc(var(--dock-height, 0px) + 8px); overflow-x: auto; white-space: nowrap; }
   .context-menu-item { min-height: 44px; font-size: 14px; }

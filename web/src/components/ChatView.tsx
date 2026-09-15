@@ -21,7 +21,7 @@ export type ChatViewProps = {
   client: WorkbenchClient
   compact: boolean
   connected: boolean
-  submit: (paneID: string, text: string) => Promise<void>
+  submit: (paneID: string, text: string, keys: string[]) => Promise<void>
   onSwitchToTerminal: () => void
   /**
    * 终端视图的整页拖放入口（`inject=true`，会把路径打进终端）。对话视图**不再使用**它：

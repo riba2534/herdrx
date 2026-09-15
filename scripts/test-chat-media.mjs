@@ -216,6 +216,19 @@ async function screenshot(page, name) {
 }
 
 const calls = (messages, method) => messages.filter((item) => item.t === 'call' && item.method === method)
+
+// 提交是**两腿**：先整段正文（keys: []），再单独一次回车（text: ''）。两腿之间还有
+// 一段 settle，所以断言按「第几次提交」而非「第几条调用」来数，避免把两次调用错配成一次。
+const settleCalls = (messages) => calls(messages, 'pane.send_input')
+const submitLegs = (messages, index) => settleCalls(messages).slice(index * 2, index * 2 + 2).map((item) => item.params)
+const waitSubmits = async (messages, count) => {
+  await expect.poll(() => settleCalls(messages).length).toBe(count * 2)
+  const legs = submitLegs(messages, count - 1)
+  assert.equal(legs[0].keys.length, 0, '正文腿带了按键，回车会重新落进粘贴框架')
+  assert.equal(legs[1].text, '', '回车腿带了正文，正文会被重发')
+  assert.deepEqual(legs[1].keys, ['Enter'], '第二腿必须是单独的一次回车')
+  return legs
+}
 const binaryFrames = (messages) => messages.filter((item) => typeof item.op === 'number')
 const chatRegion = (page, index = 0) => page.getByRole('region', { name: '对话视图' }).nth(index)
 const pickButton = (chat) => chat.getByRole('button', { name: '添加图片' })
@@ -362,9 +375,11 @@ try {
         // 图片 + 文本：Enter 只提交一次，文本与引用合成同一段，附件随后清空。
         await input(chat).fill('看这两张图')
         await input(chat).press('Enter')
-        await expect.poll(() => calls(f.messages, 'pane.send_input').length).toBe(1)
-        const sent = calls(f.messages, 'pane.send_input')[0].params
-        assert.deepEqual(sent, { pane_id: 'p1', text: '看这两张图\n/remote/staged/picked.png\n/remote/staged/pasted.png', keys: ['Enter'] }, '文本与图片引用没有合成一次提交')
+        const sentLegs = await waitSubmits(f.messages, 1)
+        assert.deepEqual(sentLegs, [
+          { pane_id: 'p1', text: '看这两张图\n/remote/staged/picked.png\n/remote/staged/pasted.png', keys: [] },
+          { pane_id: 'p1', text: '', keys: ['Enter'] },
+        ], '文本与图片引用没有合成一次提交')
         await expect(tray(chat)).toHaveCount(0)
         await expect(input(chat)).toHaveValue('')
 
@@ -373,8 +388,10 @@ try {
         await waitStaged(chat, 1)
         await expect(sendButton(chat)).toBeEnabled()
         await sendButton(chat).click()
-        await expect.poll(() => calls(f.messages, 'pane.send_input').length).toBe(2)
-        assert.deepEqual(calls(f.messages, 'pane.send_input')[1].params, { pane_id: 'p1', text: '/remote/staged/only.png', keys: ['Enter'] }, '仅图片（空正文）没有发送提交文本')
+        assert.deepEqual(await waitSubmits(f.messages, 2), [
+          { pane_id: 'p1', text: '/remote/staged/only.png', keys: [] },
+          { pane_id: 'p1', text: '', keys: ['Enter'] },
+        ], '仅图片（空正文）没有发送提交文本')
         await expect(tray(chat)).toHaveCount(0)
         await screenshot(f.page, `${name}-media-sent`)
         assert.deepEqual(f.errors, [])
@@ -415,9 +432,10 @@ try {
         // 手动补文字后发送：只发文本，失败的图片绝不作为路径混进去，也不会自动重放。
         await input(chat).fill('失败的图不算')
         await input(chat).press('Enter')
-        await expect.poll(() => calls(f.messages, 'pane.send_input').length).toBe(1)
-        const sent = calls(f.messages, 'pane.send_input')[0].params
-        assert.deepEqual(sent, { pane_id: 'p1', text: '失败的图不算', keys: ['Enter'] }, '失败的图片被当成引用发进了终端')
+        assert.deepEqual(await waitSubmits(f.messages, 1), [
+          { pane_id: 'p1', text: '失败的图不算', keys: [] },
+          { pane_id: 'p1', text: '', keys: ['Enter'] },
+        ], '失败的图片被当成引用发进了终端')
         assert.equal(imageLog.length, 2, '上传失败后自动重放了上传')
         await expect(tray(chat).locator('.chat-media-item-failed')).toHaveCount(1)
         assert.deepEqual(f.errors, [])
@@ -438,8 +456,10 @@ try {
         await expect(second.getByText('iso.png')).toHaveCount(0)
         await input(second).fill('第二个 pane 的消息')
         await input(second).press('Enter')
-        await expect.poll(() => calls(f.messages, 'pane.send_input').length).toBe(1)
-        assert.deepEqual(calls(f.messages, 'pane.send_input')[0].params, { pane_id: 'p2', text: '第二个 pane 的消息', keys: ['Enter'] }, '另一个 pane 的图片引用串进了提交文本')
+        assert.deepEqual(await waitSubmits(f.messages, 1), [
+          { pane_id: 'p2', text: '第二个 pane 的消息', keys: [] },
+          { pane_id: 'p2', text: '', keys: ['Enter'] },
+        ], '另一个 pane 的图片引用串进了提交文本')
         // 第一个 pane 的附件仍然完好，且没有被这次发送清掉。
         await expect(tray(first).locator('.chat-media-item')).toHaveCount(1)
         await expect(tray(first).locator('.chat-media-item-staged')).toHaveCount(1)

@@ -3,7 +3,7 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Bell, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
@@ -17,6 +17,7 @@ import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferen
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
 import { composerSubmitParams } from '../lib/composerDrafts'
+import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, pasteTextTooLarge, sanitizePasteText, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
 import { WorkbenchClient } from '../lib/workbench'
@@ -145,7 +146,47 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [gitWorkspaces, setGitWorkspaces] = useState<Record<string, boolean>>({})
   const previousStatuses = useRef(new Map<string, string>())
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
-  const handleControlReady = useCallback((send: ((data: string) => void) | null) => setTerminalInput(send ? () => send : null), [])
+  // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
+  const terminalInputRef = useRef<((data: string) => void) | null>(null)
+  const repeatTimersRef = useRef<{ delay: number; tick: number } | null>(null)
+  const handleControlReady = useCallback((send: ((data: string) => void) | null) => {
+    // `send` 是函数，直接塞进 state 会被 React 当成 updater 调用，所以 state 里存一层包装；
+    // ref 存的必须是 `send` 本身，长按重复和键盘激活都直接调用它。
+    terminalInputRef.current = send
+    setTerminalInput(send ? () => send : null)
+  }, [])
+  const stopKeyRepeat = useCallback(() => {
+    const timers = repeatTimersRef.current
+    if (!timers) return
+    window.clearTimeout(timers.delay)
+    window.clearInterval(timers.tick)
+    repeatTimersRef.current = null
+  }, [])
+  // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
+  const repeatOnHold = (data: string) => ({
+    onPointerDown: () => {
+      const send = terminalInputRef.current
+      if (!send) return
+      stopKeyRepeat()
+      send(data)
+      const delay = window.setTimeout(() => {
+        const tick = window.setInterval(() => terminalInputRef.current?.(data), KEY_REPEAT_INTERVAL_MS)
+        if (repeatTimersRef.current) repeatTimersRef.current.tick = tick
+      }, KEY_REPEAT_DELAY_MS)
+      repeatTimersRef.current = { delay, tick: 0 }
+    },
+    onPointerUp: stopKeyRepeat,
+    onPointerLeave: stopKeyRepeat,
+    onPointerCancel: stopKeyRepeat,
+    // 长按键没有 onClick（按下时已经发过一次），键盘激活要单独补上，
+    // 否则用键盘/读屏操作时这几个键会完全失灵。
+    onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return
+      event.preventDefault()
+      terminalInputRef.current?.(data)
+    },
+  })
+  useEffect(() => stopKeyRepeat, [stopKeyRepeat])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const pasteImagesTo = async (targetPaneID: string, files: File[]) => {
     if (!host || !targetPaneID || !files.length) return
@@ -165,7 +206,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   // 粘贴按钮把剪贴板正文整段送进点击那一刻选中的终端，**不追加回车**。
   // 分帧由 herdr 的 pane.send_input 按目标 pane 当前的 bracketed-paste 状态决定
   // （与图片粘贴同一条路径），本地 xterm 的粘贴模式可能与远端不同步，所以客户端
-  // 绝不自己包 \x1b[200~；正文里的 ESC 会提前结束粘贴框架并可能注入按键，替换掉。
+  // 绝不自己包 \x1b[200~；正文里的 ESC 由 sanitizePasteText 统一替换掉，防止提前结束粘贴框架。
   const pasteClipboardToTerminal = async () => {
     const target = paneID
     if (!target) return
@@ -177,7 +218,12 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       // 只读一次；之后固定投递给这里的 target，用户在两腿之间切换 pane 也不会误投。
       const text = await navigator.clipboard.readText()
       if (!text) return
-      await client.call('pane.send_input', { pane_id: target, text: text.replaceAll('\u001b', '\u241b'), keys: [] })
+      // 超限如实报错，不静默截断：半截命令被回车提交和粘错一样危险。
+      if (pasteTextTooLarge(text)) {
+        setActionError('粘贴内容超过 256 KiB。请改用文件传输，或分几次粘贴到终端。')
+        return
+      }
+      await client.call('pane.send_input', { pane_id: target, text: sanitizePasteText(text), keys: [] })
       setActionError('')
     } catch (error) {
       // 剪贴板被拒绝或远端拒收都如实报错，不伪装成功。
@@ -886,24 +932,12 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {resizeMode && <div className="mode-bar"><strong>调整分屏 RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
-      {!chatOpen && (composerOpen || mobile) && <div className="workbench-dock" ref={dockRef}>
-      <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>
-      {mobile && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">{[
-        ['Enter', '\r', '回车键'],
-        ['Esc', '\u001b', 'Esc 键'],
-        ['Tab', '\t', 'Tab 键'],
-        ['Ctrl+C', '\u0003', '中断 Ctrl+C'],
-        ['Ctrl+D', '\u0004', '结束输入 Ctrl+D'],
-        ['↑', '\u001b[A', '方向键上'],
-        ['↓', '\u001b[B', '方向键下'],
-        ['←', '\u001b[D', '方向键左'],
-        ['→', '\u001b[C', '方向键右'],
-        ['-', '-', '减号'],
-        ['/', '/', '斜杠'],
-        ['|', '|', '竖线'],
-        ['~', '~', '波浪号'],
-      ].map(([label, data, aria]) => <button key={label} aria-label={aria} disabled={!terminalInput} onClick={() => terminalInput?.(data)}>{label}</button>)}
-      <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button></div>}
+      {((!chatOpen && (composerOpen || mobile)) || (mobile && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
+      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
+      {mobile && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
+        {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <button key={key.id} aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(key.bytes)} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>)}
+        <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button>
+      </div>}
       </div>}
       <Input ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} onChange={(event) => void handleImageUpload(event)} />
     </main>

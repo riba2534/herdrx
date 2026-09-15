@@ -212,10 +212,11 @@ describe('Composer', () => {
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true, repeat: true })
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true, repeat: true })
     expect(submit).not.toHaveBeenCalled()
-    // Ctrl+Enter 的单次按键仍然按既有语义发送。
+    // Ctrl+Enter 的单次按键仍然按既有语义发送：一次逻辑发送 = 两腿。
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '长按产生的内容')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '长按产生的内容', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 
   it('shows a disconnected placeholder while the host cannot send', () => {
@@ -316,9 +317,11 @@ describe('Composer media host', () => {
     expect(button).toBeEnabled()
 
     fireEvent.click(button)
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    // 一次逻辑发送 = 两腿：先正文、后一次单独回车。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
     expect(host.compose).toHaveBeenCalledWith('')
-    expect(submit).toHaveBeenCalledWith('p1', '/remote/a.png')
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '/remote/a.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     await waitFor(() => expect(host.onSettled).toHaveBeenCalledWith('delivered'))
   })
 
@@ -338,8 +341,10 @@ describe('Composer media host', () => {
 
     fireEvent.change(box, { target: { value: '看这张图' } })
     fireEvent.keyDown(box, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '看这张图\n/remote/a.png')
+    // 正文与引用合成**一次**提交，这次提交同样分两腿送出。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 
   it('abandons the send when the media host refuses to compose', async () => {
@@ -381,12 +386,14 @@ describe('Composer chat variant', () => {
     expect(submit).not.toHaveBeenCalled()
 
     fireEvent.keyDown(box, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '第一行')
+    // 「发送一次」= 两腿：整段正文、再单独一次回车，且两腿都钉在同一个 pane。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '第一行', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     // 发送后草稿清空，重复按键不会再发一次。
     await waitFor(() => expect(box).toHaveValue(''))
     fireEvent.keyDown(box, { key: 'Enter' })
-    expect(submit).toHaveBeenCalledTimes(1)
+    expect(submit).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the chat draft and never sends while the host is disconnected', () => {
@@ -411,13 +418,15 @@ describe('Composer chat variant', () => {
     fireEvent.keyDown(box, { key: 'Enter', shiftKey: true, altKey: true })
     expect(submit).not.toHaveBeenCalled()
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '第一行')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '第一行', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     await waitFor(() => expect(box).toHaveValue(''))
     fireEvent.change(box, { target: { value: '第二行' } })
     fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenLastCalledWith('p1', '第二行')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(4))
+    expect(submit).toHaveBeenNthCalledWith(3, 'p1', '第二行', [])
+    expect(submit).toHaveBeenNthCalledWith(4, 'p1', '', ['Enter'])
   })
 
   it('ignores repeated Enter keydown and presses on an empty draft', async () => {
@@ -435,13 +444,13 @@ describe('Composer chat variant', () => {
     fireEvent.keyDown(box, { key: 'Enter', repeat: true })
     expect(submit).not.toHaveBeenCalled()
     fireEvent.keyDown(box, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '长按')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '长按', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 
   it('does not send twice while a chat message is still in flight', async () => {
-    let finish: () => void = () => {}
-    const submit = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finish = resolve }))
+    const { submit, legs } = deferredSubmit()
     render(<Composer hostID="host" paneID="p1" {...props} variant="chat" submit={submit}/>)
     const box = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(box, { target: { value: '发送中的内容' } })
@@ -449,9 +458,15 @@ describe('Composer chat variant', () => {
     fireEvent.keyDown(box, { key: 'Enter' })
     fireEvent.keyDown(box, { key: 'Enter', ctrlKey: true })
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('发送中'))
+    // 第一腿还在飞：后续按键不会开出第二次逻辑发送。
     expect(submit).toHaveBeenCalledTimes(1)
-    await act(async () => finish())
+    await act(async () => legs[0].resolve())
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    // 第二腿还在飞时同样不重入。
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(submit).toHaveBeenCalledTimes(2)
+    await act(async () => legs[1].resolve())
     await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
-    expect(submit).toHaveBeenCalledTimes(1)
+    expect(submit).toHaveBeenCalledTimes(2)
   })
 })

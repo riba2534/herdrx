@@ -149,8 +149,10 @@ describe('ChatMediaComposer 图片附件', () => {
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
 
     fireEvent.click(sendButton())
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '看这两张图\n/remote/a.png\n/remote/b.png')
+    // 一次逻辑发送 = 两腿：第一腿整段正文（含引用行），第二腿只补一次回车。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这两张图\n/remote/a.png\n/remote/b.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
     expect(readComposerDraft('host', 'p1')).toBe('')
   })
@@ -177,20 +179,24 @@ describe('ChatMediaComposer 图片附件', () => {
   it('失败后手动重试只重发同一条提交文本，引用不会被追加第二遍', async () => {
     const submit = vi.fn()
       .mockRejectedValueOnce(new Error('连接已断开'))
-      .mockResolvedValueOnce(undefined)
+      .mockResolvedValue(undefined)
     const { wrapper } = renderComposer({ submit })
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
 
     fireEvent.click(sendButton())
+    // 第一腿（正文）被拒：本次发送到此为止，第二腿的回车绝不补发。
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenLastCalledWith('p1', '看这张图\n/remote/a.png')
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
     expect(screen.getByText('已就绪')).toBeInTheDocument()
 
     fireEvent.click(sendButton())
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenLastCalledWith('p1', '看这张图\n/remote/a.png')
+    // 手动重试重发的是同一条提交文本：第一腿逐字节相同（引用行没有被追加第二遍），
+    // 只有第一腿成功之后才补第二腿的回车。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(3))
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '看这张图\n/remote/a.png', [])
+    expect(submit).toHaveBeenNthCalledWith(3, 'p1', '', ['Enter'])
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
   })
 
@@ -244,8 +250,10 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(sendButton()).toBeEnabled()
 
     fireEvent.click(sendButton())
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '/remote/a.png')
+    // 提交文本就是引用行本身，仍然按两腿发：正文腿 + 回车腿。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '/remote/a.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     expect(readComposerDraft('host', 'p1')).toBe('')
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
   })
@@ -262,8 +270,9 @@ describe('ChatMediaComposer 图片附件', () => {
   })
 
   it('发送期间新加的图片不会被本次成功结算清掉', async () => {
-    let finish: () => void = () => {}
-    const submit = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    // 两腿各占一个 deferred：放行第一腿后才会发出第二腿，逐腿控制时序。
+    const legs: Array<() => void> = []
+    const submit = vi.fn(() => new Promise<void>((resolve) => { legs.push(resolve) }))
     const stageImage = vi.fn(async (_host: string, _pane: string, file: File) => ({ path: `/remote/${file.name}` }))
     const { wrapper } = renderComposer({ submit, stageImage })
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
@@ -272,11 +281,16 @@ describe('ChatMediaComposer 图片附件', () => {
 
     fireEvent.click(sendButton())
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
     // 发送在飞时又加了一张：它不属于本次提交快照。
     fireEvent.drop(wrapper, dropData([imageFile('b.png')]))
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
 
-    await act(async () => finish())
+    // 两腿都放行才算送达；中间新加的 b.png 不参与本次提交。
+    await act(async () => { legs[0]() })
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await act(async () => { legs[1]() })
     await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
     // 只清掉本次提交过的那张，发送期间新加的仍然在。
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(1))

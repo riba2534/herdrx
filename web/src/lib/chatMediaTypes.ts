@@ -10,6 +10,7 @@
  */
 
 import type { ReactNode } from 'react'
+import type { ComposerSubmit } from './composerDrafts'
 import type { ComposerSendStatus } from './composerDrafts'
 
 /* ────────────────────────────── 图片附件 ────────────────────────────── */
@@ -226,8 +227,8 @@ export type ChatMediaComposerProps = {
   placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
-  /** 单次输入；必须沿用 Composer 的提交事务。 */
-  submit: (paneID: string, text: string) => Promise<void>
+  /** 单次输入；必须沿用 Composer 的提交事务（两腿：先正文、后单独回车）。 */
+  submit: ComposerSubmit
   /**
    * 图片 stage-only 上传，返回远端路径。
    * 生产实现固定为 `api.pasteImage(hostID, paneID, file, false)`——
@@ -235,7 +236,7 @@ export type ChatMediaComposerProps = {
    */
   stageImage: (hostID: string, paneID: string, file: File) => Promise<{ path: string }>
   /** 发送事务；默认 `runComposerSend`。 */
-  send: (hostID: string, paneID: string, submit: (paneID: string, text: string) => Promise<void>) => Promise<void>
+  send: (hostID: string, paneID: string, submit: ComposerSubmit) => Promise<void>
   /** 读取发送状态，默认 `readComposerSend`。 */
   readSend: (hostID: string, paneID: string) => { status: ComposerSendStatus }
   /** 可选语音槽位；由调用方决定是否渲染 VoiceInput。 */

@@ -493,8 +493,10 @@ describe('explicit DSH read source', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(input, { target: { value: '继续' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '继续')
+    // 一次发送 = 两腿，不多不少：正文一腿 + 单独回车一腿，目标固定为这个 pane。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '继续', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     expect(client.call).not.toHaveBeenCalled()
     expect(mock.mock.calls.every(([url]) => !String(url).includes('agent='))).toBe(true)
   })
@@ -522,8 +524,9 @@ describe('explicit DSH read source', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     expect(input).toHaveValue('草稿要保留')
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '草稿要保留')
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '草稿要保留', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 
   it('scopes the remembered source and the send target per pane', async () => {
@@ -548,8 +551,10 @@ describe('explicit DSH read source', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(input, { target: { value: '给 p1 的命令' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '给 p1 的命令')
+    // 两腿都发往 p1：pane 切换既不继承读取源，也不会把回车送到别的终端。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '给 p1 的命令', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 })
 
@@ -623,8 +628,10 @@ describe('sending', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(input, { target: { value: '继续' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledWith('p1', '继续'))
-    expect(submit).toHaveBeenCalledTimes(1)
+    // 一次逻辑发送只有两腿：正文（不带键）与单独一次回车；正文里绝不含隐式回车。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '继续', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     // 不追加乐观气泡：盘上的权威记录到了才显示。
     expect(document.querySelectorAll('.chat-message-user')).toHaveLength(before)
   })
@@ -666,8 +673,10 @@ describe('media and voice wiring', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(input, { target: { value: '看这张图' } })
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '看这张图\n/remote/shot.png')
+    // 正文与图片引用合成为第一腿的正文，回车仍单独走第二腿。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/shot.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     expect(client.call).not.toHaveBeenCalled()
   })
 
@@ -680,8 +689,10 @@ describe('media and voice wiring', () => {
     fireEvent.drop(document.querySelector('.chat-media-composer') as HTMLElement, dropData([imageFile('only.png')]))
     await screen.findByText('已就绪')
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenCalledWith('p1', '/remote/only.png')
+    // 没有正文时第一腿只送引用行，第二腿照旧只送一次回车。
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
+    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '/remote/only.png', [])
+    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
   })
 
   it('appends the final voice transcript to the draft and never sends it', async () => {

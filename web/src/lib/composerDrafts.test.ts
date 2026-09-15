@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, invalidateAuthentication } from './api'
-import { clearComposerDrafts, composerInFlight, composerOutcome, composerSubmitParams, idleComposerSend, readComposerDraft, readComposerSend, retainComposerDrafts, runComposerSend, writeComposerDraft } from './composerDrafts'
+import { COMPOSER_SUBMIT_SETTLE_MS, clearComposerDrafts, composerInFlight, composerOutcome, composerSubmitParams, idleComposerSend, readComposerDraft, readComposerSend, retainComposerDrafts, runComposerSend, writeComposerDraft } from './composerDrafts'
 
 const user = { id: 'user', email: 'user@example.test', role: 'user', display_name: 'User' }
 
@@ -108,6 +108,29 @@ describe('composer two-leg send', () => {
     ])
     expect(readComposerSend('host', 'p1').status).toBe('delivered')
     expect(readComposerDraft('host', 'p1')).toBe('')
+  })
+
+  // 两腿之间有 settle，回车腿不能与正文腿挤在同一个 tick：PTY 没有消息边界，
+  // 目标来不及 read 时内核会把两腿合并成一次 read，字节流退化成单次调用、
+  // 回车重新落进粘贴框架——正是本次修复要消除的形态。
+  it('leaves a settle gap before the Enter leg so the target can read the paste', async () => {
+    vi.useFakeTimers()
+    try {
+      const { submit, calls } = recordingSubmit()
+      writeComposerDraft('host', 'p1', '两腿之间要留间隔')
+      const pending = runComposerSend('host', 'p1', submit)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toEqual([{ paneID: 'p1', text: '两腿之间要留间隔', keys: [] }])
+      await vi.advanceTimersByTimeAsync(COMPOSER_SUBMIT_SETTLE_MS)
+      await pending
+      expect(calls).toEqual([
+        { paneID: 'p1', text: '两腿之间要留间隔', keys: [] },
+        { paneID: 'p1', text: '', keys: ['Enter'] },
+      ])
+      expect(readComposerSend('host', 'p1').status).toBe('delivered')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps the draft and stays failed when the text leg is rejected, without sending an Enter', async () => {

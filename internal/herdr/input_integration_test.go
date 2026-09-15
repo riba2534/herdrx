@@ -173,18 +173,21 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 
 }
 
-// A chat-like target owns the pane: it keeps a draft, treats bracketed-paste
-// content as text, and treats a carriage return outside a paste as one submit.
-// It also records every raw read() so a test can see whether the paste-end and
-// the Enter arrived in one PTY chunk or in two. The byte stream decides the
-// outcome, so this fixture fails when the text never arrives, when the Enter
-// leg is dropped or swallowed by the paste, when the draft submits twice, or
-// when the text is mangled.
-const chatFixture = `import json, os, tty
+// Prologue: raw mode, bracketed paste on, then a ready marker. The target reads
+// stdin in a tight loop from the moment it writes `ready`.
+const chatFixtureHead = `import json, os, tty
 tty.setraw(0)
 os.write(1, b'\x1b[?2004h')
 open('ready', 'w').close()
-chunks = open('chunks.jsonl', 'a', buffering=1)
+`
+
+// The reader loop shared by every chat fixture below: it records the raw bytes of
+// each read(), keeps a draft, treats bracketed-paste content as text, and treats a
+// carriage return outside a paste as one submit. The byte stream decides the
+// outcome, so a fixture fails when the text never arrives, when the Enter leg is
+// dropped or swallowed by the paste, when the draft submits twice, or when the
+// text is mangled.
+const chatFixtureTail = `chunks = open('chunks.jsonl', 'a', buffering=1)
 submits = open('submissions.jsonl', 'a', buffering=1)
 draft = ''
 in_paste = False
@@ -214,6 +217,9 @@ for data in iter(lambda: os.read(0, 65536), b''):
         elif ch == '\n' or ch == '\t' or ch >= ' ':
             draft += ch
 `
+
+// A chat-like target that is reading stdin the whole time.
+const chatFixture = chatFixtureHead + chatFixtureTail
 
 // jsonLines splits an append-only JSONL file. A writer may be mid-append, so
 // callers tolerate an unparsable last line instead of failing the test.
@@ -413,5 +419,162 @@ func TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr(t *testing.T) {
 	}
 	if got := chatSubmissions(t, dir); len(got) != 1 {
 		t.Fatalf("failed Enter leg replayed the text: %q", got)
+	}
+}
+
+// Same parsing contract as chatFixture, but the target does **not** read stdin
+// until a `release` file appears. That models a TUI that is mid-render: its
+// stdin buffer collects whatever herdr writes, and its next read() returns all
+// of it at once. The handshake makes the timing deterministic instead of
+// dependent on how loaded the machine is.
+const busyChatFixture = `import json, os, time, tty
+tty.setraw(0)
+os.write(1, b'\x1b[?2004h')
+open('ready', 'w').close()
+while not os.path.exists('release'):
+    time.sleep(0.005)
+` + chatFixtureTail
+
+// The two-leg split is not self-guaranteeing: a PTY has no message boundaries,
+// so the legs only land in different read() calls if the target actually reads
+// the text in between. This pins both halves of that contract against a busy
+// target, which is the exact state the client-side settle exists for.
+//
+//   - merged: both legs written while the target is busy -> the target sees one
+//     read() holding paste-end and Enter together, i.e. the byte stream that
+//     swallows the Enter. Waiting zero time cannot fix this.
+//   - settled: the Enter is only sent after the target has read the paste ->
+//     the target sees two reads and submits exactly once. This is the outcome the
+//     client settle (`COMPOSER_SUBMIT_SETTLE_MS`) is buying.
+//
+// The waiting here is driven by the target's own recorded chunks rather than by
+// a timer, so the assertion holds regardless of machine load. The client-side
+// delay itself is pinned by web/src/lib/composerDrafts.test.ts.
+func TestComposerTwoLegSplitNeedsTheTargetToReadFirstWithRealHerdr(t *testing.T) {
+	binary := os.Getenv("HERDRX_TEST_HERDR")
+	if binary == "" {
+		t.Skip("HERDRX_TEST_HERDR is not set")
+	}
+	dir, err := os.MkdirTemp("", "herdr-twoleg-busy-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("HERDR_CONFIG_PATH", filepath.Join(dir, "config.toml"))
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("onboarding = false\n[terminal]\ndefault_shell = \"/bin/sh\"\nshell_mode = \"non_login\"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	session := fmt.Sprintf("twolegbusy-%d", os.Getpid())
+	server := exec.CommandContext(ctx, binary, "--session", session, "server")
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command(binary, "--session", session, "server", "stop").Run()
+		_ = server.Process.Kill()
+		_ = server.Wait()
+	})
+	endpoint, err := NewLocalEndpoint(binary, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := func(what string, check func() bool) {
+		t.Helper()
+		for !check() {
+			select {
+			case <-ctx.Done():
+				t.Fatalf("isolated busy PTY timed out waiting for %s", what)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}
+	until("the isolated herdr server", func() bool { _, err := endpoint.Snapshot(ctx); return err == nil })
+
+	// Each phase gets its own workspace so the fixtures never share chunk files.
+	start := func(name string) (string, string) {
+		t.Helper()
+		work := filepath.Join(dir, name)
+		if err := os.MkdirAll(work, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(work, "chat.py"), []byte(busyChatFixture), 0600); err != nil {
+			t.Fatal(err)
+		}
+		created, err := endpoint.Call(ctx, "workspace.create", map[string]any{"cwd": work, "label": name, "focus": false})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			RootPane Pane `json:"root_pane"`
+		}
+		if err := json.Unmarshal(created, &result); err != nil || result.RootPane.ID == "" {
+			t.Fatalf("create %s: %s, %v", name, created, err)
+		}
+		if _, err := endpoint.Call(ctx, "pane.send_text", map[string]any{"pane_id": result.RootPane.ID, "text": "python3 chat.py\r"}); err != nil {
+			t.Fatal(err)
+		}
+		until("the "+name+" fixture", func() bool {
+			_, err := os.Stat(filepath.Join(work, "ready"))
+			return err == nil
+		})
+		return work, result.RootPane.ID
+	}
+	sendLeg := func(pane, text string, keys []string) {
+		t.Helper()
+		if _, err := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": pane, "text": text, "keys": keys}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release := func(work string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(work, "release"), []byte("go"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Phase 1 (negative control): no settle at all. Both legs are already in the
+	// PTY buffer before the busy target reads anything.
+	mergedText := "繁忙目标：第一行\n第二行"
+	mergedWork, mergedPane := start("busy-merged")
+	sendLeg(mergedPane, mergedText, []string{})
+	sendLeg(mergedPane, "", []string{"Enter"})
+	release(mergedWork)
+	until("the busy target to process the merged input", func() bool { return len(chatSubmissions(t, mergedWork)) > 0 })
+	mergedFound := chatChunkIndexes(t, mergedWork, "\x1b[201~", "\r")
+	mergedPaste, mergedEnter := mergedFound["\x1b[201~"], mergedFound["\r"]
+	if len(mergedPaste) != 1 || len(mergedEnter) != 1 || mergedPaste[0] != mergedEnter[0] {
+		t.Fatalf("a busy target did not merge the legs into one read (paste-end %v, Enter %v); the settle rationale is stale", mergedPaste, mergedEnter)
+	}
+	if got := strings.Join(chatChunks(t, mergedWork), ""); !strings.Contains(got, "\x1b[200~"+mergedText+"\x1b[201~\r") {
+		t.Fatalf("merged legs did not reproduce the single-call byte stream: %q", got)
+	}
+
+	// Phase 2: the same target, but the Enter waits until the target has read the
+	// paste. Both legs still separate, and the target submits exactly once.
+	settledText := "繁忙目标：第三行\n第四行"
+	settledWork, settledPane := start("busy-settled")
+	sendLeg(settledPane, settledText, []string{})
+	release(settledWork)
+	until("the busy target to read the paste", func() bool {
+		return len(chatChunkIndexes(t, settledWork, "\x1b[201~")["\x1b[201~"]) > 0
+	})
+	if got := chatSubmissions(t, settledWork); len(got) != 0 {
+		t.Fatalf("text leg submitted on its own: %q", got)
+	}
+	sendLeg(settledPane, "", []string{"Enter"})
+	until("the settled target to submit", func() bool { return len(chatSubmissions(t, settledWork)) > 0 })
+	if got := chatSubmissions(t, settledWork); len(got) != 1 || got[0] != settledText {
+		t.Fatalf("expected exactly one submit with the exact text, got %q", got)
+	}
+	settledFound := chatChunkIndexes(t, settledWork, "\x1b[201~", "\r")
+	settledPaste, settledEnter := settledFound["\x1b[201~"], settledFound["\r"]
+	if len(settledPaste) != 1 || len(settledEnter) != 1 {
+		t.Fatalf("expected one paste-end chunk and one Enter chunk, got %v", settledFound)
+	}
+	if settledPaste[0] == settledEnter[0] {
+		t.Fatalf("paste-end and Enter shared PTY read %d; the Enter is inside the paste", settledPaste[0])
 	}
 }
