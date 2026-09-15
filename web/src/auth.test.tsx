@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AuthProvider, useAuth } from './auth'
+import { AUTH_CHECK_TIMEOUT_MS, AuthProvider, useAuth } from './auth'
 import { api, csrf, currentSessionID, invalidateAuthentication } from './lib/api'
 
 const user = { id: 'user-a', email: 'user@example.test', display_name: 'Member', role: 'user' as const }
@@ -9,7 +9,7 @@ const response = (data: unknown, status = 200) => new Response(JSON.stringify(da
 const fetchMock = vi.fn<typeof fetch>()
 function Probe() {
   const auth = useAuth()
-  return <><p data-testid="user">{auth.user?.id || 'anonymous'}</p><p role="status">{auth.notice}</p><button onClick={() => void auth.signOut().catch(() => {})}>退出</button></>
+  return <><p data-testid="user">{auth.user?.id || 'anonymous'}</p><p data-testid="loading">{auth.loading ? 'yes' : 'no'}</p><p data-testid="error">{auth.error}</p><p role="status">{auth.notice}</p><button onClick={() => void auth.signOut().catch(() => {})}>退出</button></>
 }
 beforeEach(() => { invalidateAuthentication(); vi.stubGlobal('fetch', fetchMock); vi.stubGlobal('BroadcastChannel', undefined) })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); fetchMock.mockReset() })
@@ -73,5 +73,26 @@ describe('Web authentication lifecycle', () => {
     fetchMock.mockRejectedValueOnce(new TypeError('network unavailable'))
     await expect(api.hosts()).rejects.toThrow('network unavailable')
     expect(currentSessionID()).toBe('login-a')
+  })
+  it('leaves the boot spinner when the login check never returns', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchMock.mockImplementation(() => new Promise(() => {}))
+      render(<AuthProvider><Probe/></AuthProvider>)
+      expect(screen.getByTestId('loading')).toHaveTextContent('yes')
+      const started = fetchMock.mock.calls.length
+      await act(async () => {
+        window.dispatchEvent(new Event('online'))
+        window.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      expect(fetchMock.mock.calls.length).toBe(started)
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTH_CHECK_TIMEOUT_MS) })
+      expect(screen.getByTestId('loading')).toHaveTextContent('no')
+      expect(screen.getByTestId('user')).toHaveTextContent('anonymous')
+      expect(screen.getByTestId('error')).toHaveTextContent('无法连接工作台，请重试')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

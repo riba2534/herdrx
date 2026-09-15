@@ -106,6 +106,15 @@ function sendCalls(messages) {
   return messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
 }
 
+// 提交分两腿：正文一腿不带按键（bracketed paste 由 herdr 决定），回车单独一腿。
+function textLegs(messages) {
+  return sendCalls(messages).filter((item) => Array.isArray(item.params?.keys) && item.params.keys.length === 0)
+}
+
+function enterLegs(messages) {
+  return sendCalls(messages).filter((item) => Array.isArray(item.params?.keys) && item.params.keys.includes('Enter'))
+}
+
 function inputFrames(messages) {
   return messages.filter((item) => item.op === 3)
 }
@@ -140,12 +149,17 @@ try {
 
       const started = Date.now()
       await f.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => sendCalls(f.messages).length).toBe(1)
+      // 第一腿只送正文，且不带任何按键。
+      await expect.poll(() => textLegs(f.messages).length).toBe(1)
+      assert.deepEqual(textLegs(f.messages)[0].params, { pane_id: 'p1', text: '第一行\n第二行', keys: [] })
       await expect(f.page.getByRole('status')).toContainText('发送中')
       await expect(f.page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
+      // 正文那一腿成功之后，才补一次单独的回车。
+      await expect.poll(() => enterLegs(f.messages).length).toBe(1)
+      assert.deepEqual(enterLegs(f.messages)[0].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
       await expect(f.page.getByRole('status')).toContainText('已送达', { timeout: 5000 })
       assert.ok(Date.now() - started >= 450, 'send finished before the simulated 500ms round trip')
-      assert.deepEqual(sendCalls(f.messages)[0].params, { pane_id: 'p1', text: '第一行\n第二行', keys: ['Enter'] })
+      assert.equal(sendCalls(f.messages).length, 2, 'one submit is exactly two legs')
 
       await box.fill('切换前再发')
       await f.page.getByRole('button', { name: '发送', exact: true }).click()
@@ -153,8 +167,10 @@ try {
       await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
       await f.page.locator('.switcher button').filter({ hasText: '终端 2' }).click()
       await box.fill('切换前再发')
-      await expect.poll(() => sendCalls(f.messages).length).toBe(2)
-      assert.deepEqual(sendCalls(f.messages)[1].params, { pane_id: 'p1', text: '切换前再发', keys: ['Enter'] })
+      await expect.poll(() => sendCalls(f.messages).filter((item) => item.params.text === '切换前再发').length).toBe(1)
+      await expect.poll(() => enterLegs(f.messages).length).toBe(2)
+      assert.deepEqual(textLegs(f.messages)[1].params, { pane_id: 'p1', text: '切换前再发', keys: [] })
+      assert.deepEqual(enterLegs(f.messages)[1].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
       await f.page.waitForTimeout(600)
       await expect(f.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('切换前再发')
       await expect(f.page.getByRole('status')).toHaveCount(0)
@@ -206,6 +222,51 @@ try {
       await expect(eof.page.getByRole('status')).not.toContainText('发送失败')
       assert.equal(sendCalls(eof.messages).length, 1, 'EOF receipt navigation replayed composer submit')
       await eof.context.close()
+
+      // 手机键栏的「粘贴」：只把剪贴板整段送进当前终端，绝不隐式回车。
+      // 走真实浏览器剪贴板（Chromium 授权 clipboard-read），断言的是 RPC 形状与次数，
+      // 不是本地 xterm 的显示；bracketed-paste 分帧由远端 herdr 按 pane 状态决定。
+      if (name === 'chromium' && browser.version) {
+        const clipboard = await fixture(browser, { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, permissions: ['clipboard-read', 'clipboard-write'] })
+        await clipboard.page.evaluate(() => navigator.clipboard.writeText('第一行\n第二行 🙂'))
+        await showAuxiliaryKeys(clipboard.page)
+        const before = clipboard.messages.length
+        // 44px 目标：按钮必须在手机上可点，而不是只在 DOM 里存在。
+        const pasteButton = clipboard.page.getByRole('button', { name: '粘贴到终端，不自动回车', exact: true })
+        await expect(pasteButton).toBeVisible()
+        const pasteBox = await pasteButton.boundingBox()
+        assert.ok(pasteBox && pasteBox.width >= 44 && pasteBox.height >= 44, `paste target is not 44px: ${JSON.stringify(pasteBox)}`)
+        await pasteButton.click()
+        await expect.poll(() => sendCalls(clipboard.messages).length).toBe(1)
+        // 只发正文、keys 为空：回车由用户自己按，远端才是唯一一次提交。
+        assert.deepEqual(sendCalls(clipboard.messages)[0].params, { pane_id: 'p1', text: '第一行\n第二行 🙂', keys: [] })
+        assert.equal(inputFrames(clipboard.messages.slice(before)).length, 0, 'keybar paste used keystroke frames')
+        // 截图留证：粘贴按钮确实在键栏里可见可点。
+        await screenshot(clipboard.page, `${name}-mobile-390-keybar-paste`)
+        assert.deepEqual(clipboard.errors, [])
+        await clipboard.context.close()
+      }
+
+      // 手机辅助键栏：按键必须真的把字节送进终端，而不只是渲染出按钮。
+      // 这里断言的是 OP_INPUT 帧的内容——辅助键走本地终端输入通道，不是 RPC。
+      if (name === 'chromium' && browser.version) {
+        const keys = await fixture(browser, { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+        await showAuxiliaryKeys(keys.page)
+        const before = keys.messages.length
+        const toolbar = keys.page.getByRole('toolbar', { name: '终端辅助键', exact: true })
+        // 键栏只有在终端注册了发送通道后才可用；按钮禁用就说明通道没接上。
+        const shiftTabButton = toolbar.getByRole('button', { name: 'Shift 加 Tab 反向切换', exact: true })
+        await expect(shiftTabButton).toBeEnabled()
+        await shiftTabButton.click()
+        await toolbar.getByRole('button', { name: '中断 Ctrl+C', exact: true }).click()
+        await toolbar.getByRole('button', { name: '回车键', exact: true }).click()
+        await expect.poll(() => inputFrames(keys.messages.slice(before)).length).toBe(3)
+        assert.deepEqual(inputFrames(keys.messages.slice(before)).map((item) => item.bytes), ['\x1b[Z', '\x03', '\r'])
+        // 键栏不该走 RPC：那是粘贴按钮和提交的通道。
+        assert.equal(sendCalls(keys.messages).length, 0, 'keybar keys were sent as composer submits')
+        assert.deepEqual(keys.errors, [])
+        await keys.context.close()
+      }
 
       for (const [width, height] of [[320, 720], [390, 844], [479, 847], [844, 390]]) {
         const view = await fixture(browser, { viewport: { width, height }, hasTouch: true, ...(name !== 'firefox' ? { isMobile: true } : {}) })
@@ -272,8 +333,9 @@ try {
       await desktop.page.getByRole('button', { name: '本地输入框' }).click()
       await desktop.page.getByRole('textbox', { name: '本地输入内容' }).fill('desktop 整段')
       await desktop.page.getByRole('textbox', { name: '本地输入内容' }).press('Control+Enter')
-      await expect.poll(() => sendCalls(desktop.messages).length).toBe(1)
-      assert.equal(desktop.messages.find((item) => item.t === 'call' && item.method === 'pane.send_input').params.pane_id, 'p1')
+      await expect.poll(() => sendCalls(desktop.messages).length).toBe(2)
+      assert.deepEqual(textLegs(desktop.messages)[0].params, { pane_id: 'p1', text: 'desktop 整段', keys: [] })
+      assert.deepEqual(enterLegs(desktop.messages)[0].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
       await screenshot(desktop.page, `${name}-desktop-composer`)
       await desktop.page.getByRole('button', { name: '直接输入终端' }).click()
       await expect.poll(() => desktop.page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)

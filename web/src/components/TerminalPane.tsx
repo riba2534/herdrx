@@ -6,6 +6,8 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
 import { Copy, History, ImagePlus, Keyboard, MoreHorizontal, Search, Type, X } from 'lucide-react'
+import { ChatView } from './ChatView'
+import { PaneViewToggle } from './PaneViewToggle'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
 import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize, TERMINAL_FONT_FAMILY, whenFontsReady } from '../lib/terminalFit'
@@ -14,6 +16,8 @@ import { attachTerminalTouch } from '../lib/terminalTouch'
 import type { TerminalDisplay } from '../lib/displayPreferences'
 import { isLocalInputTarget } from '../lib/keymap'
 import { paneDisplayName } from '../lib/labels'
+import { composerSubmitParams } from '../lib/composerDrafts'
+import type { PaneViewMode } from '../lib/paneViewMode'
 import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { Button, StatusDot } from './ui'
@@ -33,7 +37,7 @@ function clipboardBlocked() {
   return !window.isSecureContext || !navigator.clipboard
 }
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, pane, connectionEpoch, active, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; pane: Pane; connectionEpoch: number; active: boolean; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -102,12 +106,16 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const wasActiveRef = useRef(false)
   const previousFocusRequest = useRef(inputFocusRequest)
   const activeRef = useRef(active)
+  // 对话视图覆盖终端时，xterm 保持挂载并继续 ack，但不再接收键盘输入。
+  const chatMode = viewMode === 'chat'
+  const chatModeRef = useRef(chatMode)
+  chatModeRef.current = chatMode
   activeRef.current = active
   directInputRef.current = directInput
   const applyStdin = () => {
     const terminal = termRef.current
     if (!terminal) return
-    terminal.options.disableStdin = inputBlockedRef.current || !directInputRef.current
+    terminal.options.disableStdin = inputBlockedRef.current || !directInputRef.current || chatModeRef.current
   }
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -389,7 +397,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const terminal = termRef.current
     const host = hostRef.current
     const viewport = viewportRef.current
-    if (!mountedRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
+    // 对话视图覆盖时不动 xterm 尺寸，也不向远端发送 resize；切回终端时再补齐。
+    if (!mountedRef.current || chatModeRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
     const style = getComputedStyle(host)
     const bounds = {
       width: viewport.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'),
@@ -446,7 +455,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   // Fit the final sidebar layout before the next paint, so xterm's scheduled
   // render sees only the final font instead of several visible trial sizes.
-  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active])
+  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode])
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -690,7 +699,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     wasActiveRef.current = active
     const focusRequested = inputFocusRequest !== previousFocusRequest.current
     previousFocusRequest.current = inputFocusRequest
-    if (directInput && (becameDirect || focusRequested || becameActive) && active && !inputBlockedRef.current && !isLocalInputTarget(document.activeElement)) {
+    if (directInput && !chatMode && (becameDirect || focusRequested || becameActive) && active && !inputBlockedRef.current && !isLocalInputTarget(document.activeElement)) {
       revealCursorRef.current()
       termRef.current?.focus()
     }
@@ -702,7 +711,23 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
     host.addEventListener('focusin', block)
     return () => host.removeEventListener('focusin', block)
-  }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active])
+  }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active, chatMode])
+
+  // 进入对话视图：停止光标闪烁、收起搜索、把焦点移出 xterm，并刷新一次尺寸；
+  // 切回终端：恢复光标、重新 fit（期间远端尺寸未被改动）。不触碰 stream/ack。
+  useEffect(() => {
+    const terminal = termRef.current
+    applyStdin()
+    if (!chatMode) {
+      if (terminal) terminal.options.cursorBlink = true
+      fitRef.current()
+      return
+    }
+    if (terminal) terminal.options.cursorBlink = false
+    setSearchOpen(false)
+    const helper = hostRef.current?.querySelector('textarea')
+    if (helper instanceof HTMLTextAreaElement) helper.blur()
+  }, [chatMode, connectionEpoch, streamGeneration])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -829,7 +854,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
   }, [client, pane.pane_id, active])
 
-  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''} ${pane.right_click_passthrough ? 'terminal-pane-passthrough' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
+  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''} ${chatMode ? 'terminal-pane-chat' : ''} ${pane.right_click_passthrough ? 'terminal-pane-passthrough' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
     const overTerminal = (event.target as HTMLElement).closest('.terminal-host')
     if (overTerminal && pane.right_click_passthrough && !event.shiftKey) {
       event.preventDefault()
@@ -837,40 +862,49 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
     onContextMenu?.(event)
   }}>
-    {!compact && <span className="pane-status-chip" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
-    {!compact && <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="终端工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 终端工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>}
-    {!compact && onContextMenu && pane.right_click_passthrough && <Button className="tool-button pane-menu-button pane-menu-standalone" aria-label="终端操作" data-tooltip="终端操作 · Shift+右键" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
-    <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
-      <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={paneDisplayName(pane)}>{paneDisplayName(pane)}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>
-      {headerControls}
-      <div className="terminal-tools">
-        {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
-        <Button className="tool-button" aria-label="选择文本" aria-pressed={textSelectMode} data-tooltip={textSelectMode ? '关闭文本选择' : '选择终端文本后可复制'} onClick={() => setTextSelectMode((value) => !value)}><Type size={14}/></Button>
-        <Button className="tool-button" aria-label="复制屏幕" data-tooltip="复制当前屏幕文本" onClick={() => void copyScreen()}><Copy size={14}/></Button>
-        <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
-        {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
-        <Button className="tool-button" onClick={(event) => { event.stopPropagation(); if (searchOpen) closeSearch(); else openSearch() }} aria-label="搜索终端"><Search size={14}/></Button>
-        {onContextMenu && <Button className="tool-button pane-menu-button" aria-label="终端操作" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
-        <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
-      </div>
-    </header>
-    {cropHint && display.mode === 'fixed' && <button type="button" className="pane-crop-badge" onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
-    {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
-    {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
-    {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
-    <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; termRef.current?.focus() }}/>
-    {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
-    {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">
-      <span>{imageFeedback.message}</span>
-      {imageFeedback.failed && imageFeedback.files && <button className="button-secondary" onClick={() => uploadImagesRef.current(imageFeedback.files!)}>重试</button>}
-      {!imageFeedback.pending && <button aria-label="关闭图片提示" onClick={() => setImageFeedback(null)}><X size={14}/></button>}
-    </div>}
-    {searchOpen && <Form className="terminal-search" onSubmit={(event) => { event.preventDefault(); const query = String(new FormData(event.currentTarget).get('query') || ''); runSearch(query, 'next') }}><Input name="query" aria-label="搜索内容" autoFocus placeholder="搜索历史与当前缓冲…" defaultValue={searchQuery} onKeyDown={(event) => {
-      if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
-      else if (event.key === 'Enter') { event.preventDefault(); runSearch(event.currentTarget.value, event.shiftKey ? 'previous' : 'next') }
-    }}/><span className="terminal-search-count" aria-live="polite">{searchResults.count > 0 ? `第 ${searchResults.index + 1}/${searchResults.count} 个` : '无匹配'}</span><button type="submit">下一个</button><button type="button" onClick={(event) => { const form = (event.currentTarget as HTMLButtonElement).form; const query = String(new FormData(form!).get('query') || ''); runSearch(query, 'previous') }}>上一个</button><button type="button" aria-label="关闭搜索" onClick={closeSearch}><X size={14}/></button></Form>}
-    {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
-    <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={0} role="region" aria-label="终端画面，可滚动查看"><div className="terminal-host" ref={hostRef}/></div>
+    {/* 紧凑 header 固定在 pane 布局流中：Agent 名称可截断/隐藏，视图开关永远不会被它遮盖。 */}
+    <div className="pane-header">
+      {!compact && <span className="pane-header-name" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
+      {onViewModeChange && <PaneViewToggle mode={viewMode} onChange={(mode) => { setToolbarOpen(false); onViewModeChange(mode) }}/>}
+      {!compact && <span className="pane-header-tools">
+        {onContextMenu && pane.right_click_passthrough && <Button className="tool-button pane-menu-button pane-menu-standalone" aria-label="终端操作" data-tooltip="终端操作 · Shift+右键" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
+        <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="终端工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 终端工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>
+      </span>}
+    </div>
+    <div className="pane-body">
+      <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
+        <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={paneDisplayName(pane)}>{paneDisplayName(pane)}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>
+        {headerControls}
+        <div className="terminal-tools">
+          {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
+          <Button className="tool-button" aria-label="选择文本" aria-pressed={textSelectMode} data-tooltip={textSelectMode ? '关闭文本选择' : '选择终端文本后可复制'} onClick={() => setTextSelectMode((value) => !value)}><Type size={14}/></Button>
+          <Button className="tool-button" aria-label="复制屏幕" data-tooltip="复制当前屏幕文本" onClick={() => void copyScreen()}><Copy size={14}/></Button>
+          <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
+          {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
+          <Button className="tool-button" onClick={(event) => { event.stopPropagation(); if (searchOpen) closeSearch(); else openSearch() }} aria-label="搜索终端"><Search size={14}/></Button>
+          {onContextMenu && <Button className="tool-button pane-menu-button" aria-label="终端操作" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
+          <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
+        </div>
+      </header>
+      {!chatMode && cropHint && display.mode === 'fixed' && <button type="button" className="pane-crop-badge" onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
+      {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
+      {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
+      {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
+      <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; termRef.current?.focus() }}/>
+      {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
+      {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">
+        <span>{imageFeedback.message}</span>
+        {imageFeedback.failed && imageFeedback.files && <button className="button-secondary" onClick={() => uploadImagesRef.current(imageFeedback.files!)}>重试</button>}
+        {!imageFeedback.pending && <button aria-label="关闭图片提示" onClick={() => setImageFeedback(null)}><X size={14}/></button>}
+      </div>}
+      {searchOpen && <Form className="terminal-search" onSubmit={(event) => { event.preventDefault(); const query = String(new FormData(event.currentTarget).get('query') || ''); runSearch(query, 'next') }}><Input name="query" aria-label="搜索内容" autoFocus placeholder="搜索历史与当前缓冲…" defaultValue={searchQuery} onKeyDown={(event) => {
+        if (event.key === 'Escape') { event.preventDefault(); closeSearch() }
+        else if (event.key === 'Enter') { event.preventDefault(); runSearch(event.currentTarget.value, event.shiftKey ? 'previous' : 'next') }
+      }}/><span className="terminal-search-count" aria-live="polite">{searchResults.count > 0 ? `第 ${searchResults.index + 1}/${searchResults.count} 个` : '无匹配'}</span><button type="submit">下一个</button><button type="button" onClick={(event) => { const form = (event.currentTarget as HTMLButtonElement).form; const query = String(new FormData(form!).get('query') || ''); runSearch(query, 'previous') }}>上一个</button><button type="button" aria-label="关闭搜索" onClick={closeSearch}><X size={14}/></button></Form>}
+      {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
+      <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={chatMode ? -1 : 0} role="region" aria-label="终端画面，可滚动查看" aria-hidden={chatMode || undefined}><div className="terminal-host" ref={hostRef}/></div>
+      {chatMode && <ChatView key={`${hostID}:${pane.pane_id}`} hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onSwitchToTerminal={() => onViewModeChange?.('terminal')} onPasteImages={onPasteImages} onFocus={onFocus}/>}
+    </div>
     {copyFallback !== null && <Modal title="复制屏幕文本" onClose={() => setCopyFallback(null)}><p>当前页面无法写入剪贴板，请全选下方文本后手动复制。</p><textarea className="input" readOnly value={copyFallback} rows={8} aria-label="屏幕文本" data-initial-focus onFocus={(event) => event.currentTarget.select()}/><div className="modal-actions"><Button className="button-primary" onClick={() => setCopyFallback(null)}>关闭</Button></div></Modal>}
     {confirmationDialog}
   </section>

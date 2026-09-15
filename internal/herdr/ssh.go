@@ -71,6 +71,12 @@ type SSHEndpoint struct {
 	client     sshTransport
 	socketPath string
 	extraClose io.Closer
+
+	// 仅缓存已知 transport 策略限制；瞬时读取失败不能禁用共享主机的会话读取。
+	// 见 transcript_ssh.go。
+	transcriptMu          sync.Mutex
+	transcriptUnsupported bool
+	transcriptReason      string
 }
 
 func DialSSHEndpoint(ctx context.Context, options SSHOptions) (*SSHEndpoint, error) {

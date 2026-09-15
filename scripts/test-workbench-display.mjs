@@ -217,8 +217,12 @@ async function assertNoReservedHeaders(page) {
     const header = pane.locator('.terminal-titlebar')
     await expect(header).toBeHidden()
     const paneBox = await pane.boundingBox()
+    const paneHeader = await pane.locator('.pane-header').boundingBox()
+    const body = await pane.locator('.pane-body').boundingBox()
     const content = await pane.locator('.terminal-viewport').boundingBox()
-    assert.ok(Math.abs(content.y - paneBox.y) <= 1, 'hidden terminal tools still reserve a header row')
+    assert.ok(paneHeader.height <= 45 && Math.abs(paneHeader.y - paneBox.y) <= 1, `pane switch header exceeded one 44px touch row plus its border: ${JSON.stringify(paneHeader)}`)
+    assert.ok(Math.abs(body.y - paneHeader.y - paneHeader.height) <= 1, 'unexpected gap below pane switch header')
+    assert.ok(Math.abs(content.y - body.y) <= 1, 'hidden terminal tools still reserve a row inside the pane body')
     await openPaneTools(page, index)
     assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'opening terminal tools changed terminal geometry')
     assert.equal(await header.evaluate(el => getComputedStyle(el).position), 'absolute', 'terminal tools must float above the terminal')
@@ -245,7 +249,8 @@ async function touchAndKeyboardChecks(context, page) {
   await showAuxiliaryKeys(page)
   await clickPaneTool(page, '聚焦终端输入')
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
-  await page.getByRole('button', { name: 'Enter', exact: true }).click()
+  // 辅助键栏的按钮文字是符号，无障碍名走 aria-label；这里按当前名称取回车键。
+  await page.getByRole('button', { name: '回车键', exact: true }).click()
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused()
   await expect.poll(() => viewport.evaluate((el) => el.scrollLeft)).toBeLessThan(100)
 
@@ -298,14 +303,14 @@ try {
       await assertNoReservedHeaders(page)
       await openPaneTools(page)
       await expect(page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
-      await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
+      await expect(page.locator('.terminal-pane-active > .pane-body > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       await closePaneTools(page)
       const originalTerminals = await page.locator('.terminal-host > .xterm').elementHandles()
       const originalViewports = await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } }))
       const focusStart = messages.length
       await page.locator('.terminal-pane').nth(1).locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 2')
-      await expect(page.locator('.terminal-pane-active > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
+      await expect(page.locator('.terminal-pane-active > .pane-body > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       await page.locator('.terminal-pane').first().locator('.terminal-viewport').click({ position: { x: 30, y: 30 } })
       await expect(page.locator('.terminal-pane-active .terminal-title')).toContainText('终端 1')
       assert.deepEqual(await page.locator('.terminal-viewport').evaluateAll((els) => els.map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height } })), originalViewports, 'pane focus moved or resized terminal content')
@@ -378,7 +383,7 @@ try {
       const single = await fixture(browser, { viewport: { width: 1440, height: 900 } }, singleSnapshot)
       await assertNoReservedHeaders(single.page)
       const tabbar = await single.page.locator('.tabbar').boundingBox()
-      assert.ok((await single.page.locator('.terminal-viewport').boundingBox()).y - tabbar.y - tabbar.height <= 2, 'single pane still reserves a separate display row')
+      assert.ok(Math.abs((await single.page.locator('.terminal-pane').boundingBox()).y - tabbar.y - tabbar.height) <= 2, 'single pane reserves an extra row above its mode header')
       await screenshot(single.page, `${name}-single-pane`)
       await assertTerminalRecovery(single, 'p1')
       assert.deepEqual(single.errors, [])
@@ -570,7 +575,7 @@ try {
         assert.deepEqual(f.errors, [], `${name} ${width}x${height} compact loop: ${f.errors.join(' | ')}`)
         await f.context.close()
       }
-      console.log(`${name}: floating tools without reserved header space, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, 40 rapid responsive rotations, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
+      console.log(`${name}: floating tools with bounded mode headers, single pane and narrow splits, stable terminals on pane focus, font/zoom persistence, native application wheel, repeated history wheel, LF snapshots, unchanged terminal connection/grid, 40 rapid responsive rotations, panning, fit, keyboard dialog, phone portrait/landscape, tablet, 200% equivalent layout and touch controls passed`)
     } finally { await browser.close() }
   }
 } finally { await new Promise((done) => server.close(done)) }

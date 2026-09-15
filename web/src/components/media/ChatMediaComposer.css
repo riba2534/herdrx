@@ -1,0 +1,285 @@
+/* ChatMediaComposer / ImageAttachments 的独立样式。
+   契约规定：新增前端样式只写 web/src/components/media/*.css，不追加到 styles.css。
+   目标：>=44px 触控目标；占位区与输入框、发送按钮、状态行互不重叠。 */
+
+.chat-media-composer {
+  position: relative;
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.chat-media-composer[data-drag="true"] {
+  outline: 1px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.chat-media-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-soft) 78%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.chat-media-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+}
+
+.chat-media-pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chat-media-pick:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chat-media-voice {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+}
+
+/* 原生文件选择器只作为「选择图片」按钮的隐藏后端，不进入布局与可访问性树。 */
+.chat-media-file {
+  display: none;
+}
+
+/* 附件占位区渲染在 Composer 内部（textarea 上方）。Composer 是网格布局，
+   这里为占位行补一个命名区域，且只在真的有占位时生效——没有附件时网格与今天完全一致。 */
+.chat-media-composer .composer:has(> .composer-media) {
+  grid-template-areas: 'tray tray' 'input send' 'meta meta';
+}
+
+.chat-media-composer .composer.composer-compact:has(> .composer-media) {
+  grid-template-areas: 'tray tray tray' 'mode input send';
+}
+
+.chat-media-composer .composer.composer-compact:has(> .composer-media):has(.composer-meta) {
+  grid-template-areas: 'tray tray tray' 'mode input send' 'meta meta meta';
+}
+
+.chat-media-composer .composer > .composer-media {
+  grid-area: tray;
+  min-width: 0;
+}
+
+.chat-media-tray {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+}
+
+/* 在 Composer 内部时由 Composer 自己提供内边距，避免双重留白。 */
+.chat-media-composer .composer > .composer-media > .chat-media-tray {
+  padding: 0 0 4px;
+}
+
+.chat-media-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.chat-media-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 220px;
+  max-width: 100%;
+  min-height: 56px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.chat-media-item-failed {
+  border-color: color-mix(in srgb, var(--blocked) 55%, var(--border));
+}
+
+.chat-media-item-staging {
+  border-style: dashed;
+}
+
+.chat-media-thumb {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--terminal);
+}
+
+.chat-media-thumb-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.chat-media-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-media-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.chat-media-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-media-state-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-media-item-staging .chat-media-state-label {
+  color: var(--working);
+}
+
+.chat-media-item-staged .chat-media-state-label {
+  color: var(--idle);
+}
+
+.chat-media-path {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-media-error {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--blocked);
+}
+
+.chat-media-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-media-action {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-media-action:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-strong);
+}
+
+.chat-media-hint,
+.chat-media-notice {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.chat-media-hint {
+  color: var(--muted);
+}
+
+.chat-media-notice {
+  color: var(--blocked);
+}
+
+/* 语音助手（非终端 Agent）的回答由调用方渲染在输入区上方。
+   它永远不是终端 Agent 的话，所以只在这里单独展示，不进入草稿、聊天记录或终端。 */
+.voice-assistant-note {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.voice-assistant-note-head {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.voice-assistant-note-text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .chat-media-item {
+    flex-basis: 100%;
+  }
+
+  .chat-media-pick {
+    flex: 1 1 auto;
+  }
+}
