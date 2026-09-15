@@ -2,6 +2,7 @@
 /bin/
 /web/dist/
 /web/node_modules/
+/.pnpm-store/
 /internal/webassets/dist/*
 !/internal/webassets/dist/.gitkeep
 *.tsbuildinfo

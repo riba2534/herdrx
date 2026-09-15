@@ -262,7 +262,23 @@ CREATE TABLE IF NOT EXISTS enrollment_tasks (
 );
 CREATE INDEX IF NOT EXISTS enrollment_tasks_owner ON enrollment_tasks(owner_id);
 CREATE UNIQUE INDEX IF NOT EXISTS enrollment_tasks_owner_inflight
-  ON enrollment_tasks(owner_id, agent_id) WHERE phase NOT IN ('active','failed');`
+  ON enrollment_tasks(owner_id, agent_id) WHERE phase NOT IN ('active','failed');
+CREATE TABLE IF NOT EXISTS user_workbench_sessions (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL DEFAULT '',
+  tab_id TEXT NOT NULL DEFAULT '',
+  pane_id TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  client_class TEXT NOT NULL DEFAULT '' CHECK(client_class IN ('','desktop','mobile')),
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_workbench_writers (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  writer_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence > 0),
+  PRIMARY KEY(session_id, writer_id)
+);`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate sqlite schema: %w", err)
 	}

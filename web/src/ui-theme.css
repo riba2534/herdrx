@@ -135,7 +135,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .page-heading { margin-bottom: 28px; align-items: center; }
 .page-heading h1 { font-size: clamp(26px, 2.5vw, 32px); letter-spacing: -.02em; font-weight: 600; margin: 0 0 8px; }
 .page-heading p { font-size: 14px; }
-.page-heading > .button { min-height: 40px; }
+.page-heading > .button, .page-heading-actions .button { min-height: 40px; }
 .auth-shell { background: var(--ui-background); color: var(--ui-text); }
 .auth-entry { position: relative; padding-top: 100px; padding-bottom: 64px; }
 .auth-topbar { position: absolute; top: 0; left: 0; right: 0; min-height: 44px; padding: 4px clamp(20px, 4vw, 48px); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ui-border); }
@@ -232,13 +232,14 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .workbench .ownership-control { color: var(--ui-accent); }
 .workbench .display-font { font-family: var(--ui-font); }
 .workbench .terminal-title small { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace; }
-.workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 32px; }
+.workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 32px; --workspace-gutter: 20px; }
 .sidebar-section-title { min-height: 32px; font-size: 12px; padding-left: 12px; }
 .sidebar-list { padding-inline: 6px; }
 .workspace-row { min-height: 32px; }
+.workspace-group-toggle { border-radius: 5px; }
 .sidebar-row { border-radius: 5px; }
 .sidebar-row strong { font-size: 13px; }
-.sidebar-row small, .agent-state { font-size: 12px; }
+.sidebar-row small, .agent-state, .workspace-branch { font-size: 12px; }
 .hostbar-home { font-family: var(--ui-font); font-weight: 500; }
 .tab-select { font-family: var(--ui-font); }
 .terminal-titlebar { font-family: var(--ui-font); }
@@ -259,7 +260,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
   .page-heading { gap: 14px; margin-bottom: 24px; }
   .page-heading h1 { font-size: 26px; }
   .page-heading p { max-width: none; }
-  .page-heading > .button { flex-shrink: 0; }
+  .page-heading > .button, .page-heading-actions { flex-shrink: 0; }
   .auth-card h1 { font-size: 28px; }
   .auth-entry { padding-top: 106px; padding-bottom: 40px; }
   .auth-topbar { padding-inline: 20px; }

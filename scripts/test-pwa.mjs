@@ -39,7 +39,8 @@ const server = createServer(async (req, res) => {
     else if (path === '/api/me') {
       if (denyAPI) { status = 401; body = { error: 'unauthorized' } }
       else body = { user: { id: 'pwa-user', email: 'pwa@example.test', display_name: 'PWA 验收', role: 'admin' }, csrf_token: 'test', session_id: 'pwa-session' }
-    } else if (path === '/api/hosts/') body = { hosts: [] }
+    } else if (path === '/api/me/workbench-session') body = { session: null }
+    else if (path === '/api/hosts/') body = { hosts: [] }
     else if (path === '/api/host-folders/') body = { folders: [] }
     else if (path === '/api/ssh-keys/') body = { keys: [] }
     else if (path === '/api/tailcat/enrollments') body = { tasks: [] }
@@ -59,6 +60,26 @@ await new Promise(done => server.listen(0, '127.0.0.1', done))
 const base = `http://127.0.0.1:${server.address().port}`
 const checkUpdate = page => page.evaluate(async () => { await (await navigator.serviceWorker.getRegistration()).update() })
 const controllerReady = page => page.waitForFunction(() => Boolean(navigator.serviceWorker.controller))
+// WebKit reports fixture-destroyed or navigation-aborted same-origin API
+// fetches as pageerror "due to access control checks". Those are not CORS
+// bugs; HostsPage and restore issue GET /api/hosts|/host-folders|/ssh-keys|
+// /me/workbench-session when the offline path tears the socket down.
+function unexpectedErrors(engine, errors) {
+  if (engine !== 'webkit') return errors
+  return errors.filter((message) => !/\/api\/\S+ due to access control checks\.?$/.test(message))
+}
+
+async function assertUnrelatedCache(page, phase) {
+  const state = await page.evaluate(async () => {
+    const names = await caches.keys()
+    if (!names.includes('unrelated-app')) return { names, paths: [], marker: null }
+    const cache = await caches.open('unrelated-app')
+    const paths = (await cache.keys()).map(request => new URL(request.url).pathname)
+    const marker = await cache.match('/unrelated-marker')
+    return { names, paths, marker: marker ? await marker.text() : null }
+  })
+  assert.equal(state.marker, 'keep', `unrelated cache lost ${phase}: ${JSON.stringify(state)}`)
+}
 try {
   for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium', 'firefox', 'webkit']) {
     revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0
@@ -89,10 +110,15 @@ try {
       assert.ok(!cachedPaths.some(path => path.startsWith('/api/')))
       assert.equal(await page.evaluate(async () => (await (await caches.open('herdrx-shell-test-one')).match('/index.html')).redirected), true)
       await page.evaluate(() => caches.open('unrelated-app').then(cache => cache.put('/unrelated-marker', new Response('keep'))))
+      // Verify the seed before tearing down its document, and isolate the phase
+      // of any storage loss without recreating a missing cache during assertions.
+      await assertUnrelatedCache(page, 'after seed')
       await page.reload(); await controllerReady(page)
+      await assertUnrelatedCache(page, 'after initial reload')
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true)
       await page.goto(base + '/h/original-pane')
-      // WebKit uses real socket failures here; allow its network error to settle.
+      // WebKit uses real socket failures here; hung /api/me is released by the
+      // 8s auth-check timeout, then the error heading can render.
       const offlineTimeout = engine === 'webkit' ? 30000 : 5000
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       assert.equal(new URL(page.url()).pathname, '/h/original-pane')
@@ -100,6 +126,7 @@ try {
       // Return to the host list after automatic auth recovery (fixture has no terminal).
       await page.goto(base)
       await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
+      await assertUnrelatedCache(page, 'after offline recovery')
       const other = await context.newPage()
       await other.goto(base)
       await controllerReady(other)
@@ -115,6 +142,7 @@ try {
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
       assert.equal(await other.locator('html').getAttribute('data-test-build'), 'one')
       await expect(other.getByRole('textbox', { name: '名称', exact: true })).toHaveValue('保留未提交内容')
+      await assertUnrelatedCache(page, 'after successful update')
       await other.close()
       // A broken deployment leaves the previous working shell active and usable.
       // Observe the new worker before starting the update: an idle registration
@@ -129,6 +157,7 @@ try {
       revision = 'three'; failAsset = true; await checkUpdate(page)
       await page.waitForFunction(() => globalThis.__failedUpdateWorker?.state === 'redundant')
       assert.equal(await page.evaluate(async () => (await caches.keys()).includes('herdrx-shell-test-three')), false)
+      await assertUnrelatedCache(page, 'after failed precache')
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true); await page.reload()
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
@@ -143,9 +172,9 @@ try {
         if (await reconnect.isVisible()) await reconnect.click()
       }
       await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible({ timeout: engine === 'webkit' ? offlineTimeout : 12000 })
-      assert.ok(await page.evaluate(async () => Boolean(await (await caches.open('unrelated-app')).match('/unrelated-marker'))))
+      await assertUnrelatedCache(page, 'after session revocation')
       assert.ok(!calls.some(call => call.method !== 'GET'), 'offline and update paths must never replay mutations')
-      assert.deepEqual(errors, [])
+      assert.deepEqual(unexpectedErrors(engine, errors), [])
       console.log(`${engine}: PWA offline shell, uncached auth, network recovery, deferred update, two tabs, failed precache, revoked session PASS`)
     } finally { await context.close(); await browser.close() }
   }

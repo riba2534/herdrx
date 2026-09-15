@@ -92,6 +92,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .user-chip { padding: 0 10px; color: var(--muted); font-size: 13px; }
 .page { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: 52px 0 80px; }
 .page-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+.page-heading-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; }
 .page-heading h1 { font-size: 34px; margin: 5px 0 4px; letter-spacing: -.04em; }
 .page-heading p { margin: 0; color: var(--muted); }
 .host-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
@@ -183,14 +184,22 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .sidebar-row { width: 100%; min-height: 40px; display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 6px; border: 0; border-radius: 3px; padding: 4px 6px; background: transparent; text-align: left; color: var(--text); }
 .sidebar-row:hover { background: var(--panel-strong); }
 .sidebar-row-active { background: var(--accent-soft) !important; }
-.agent-row { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.agent-row { min-height: 32px; grid-template-columns: 16px minmax(0, 1fr) auto; }
 .agent-meta { min-width: 0; display: grid; }
 .agent-state { white-space: nowrap; min-width: 3em; text-align: right; align-self: start; padding-top: 2px; font-size: 11px; color: var(--muted); }
 .sidebar-row strong, .sidebar-row small { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
 .sidebar-row strong { font-size: 12px; font-weight: 500; }
 .sidebar-row small { color: var(--muted); font-size: 11px; margin-top: 1px; }
-.workspace-row { min-height: 28px; display: flex; gap: 4px; }
+.workspace-group { min-width: 0; }
+.workspace-item { width: 100%; min-width: 0; display: flex; align-items: stretch; gap: 2px; }
+.workspace-item-child { padding-left: 12px; }
+.workspace-group-toggle { flex: 0 0 var(--workspace-gutter, 16px); width: var(--workspace-gutter, 16px); min-height: 0; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--muted); display: grid; place-items: center; }
+.workspace-group-toggle:hover { background: var(--panel-strong); color: var(--text); }
+.workspace-group-spacer { flex: 0 0 var(--workspace-gutter, 16px); }
+.workspace-row { min-height: 28px; display: flex; gap: 4px; flex: 1; min-width: 0; }
 .workspace-row strong { min-width: 0; flex: 1; }
+.workspace-copy { min-width: 0; flex: 1; display: grid; }
+.workspace-branch { color: var(--muted); }
 .workspace-row .status-dot, .workspace-number, .workspace-count { flex-shrink: 0; }
 .sidebar-section-title .workspace-create { width: auto; padding: 0 7px; display: flex; gap: 3px; color: var(--text); background: var(--panel-strong); }
 .workspace-create:disabled { opacity: .5; cursor: wait; }
@@ -256,18 +265,24 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .split-resize-handle-active { background: color-mix(in srgb, var(--accent) 55%, transparent); }
 @media (pointer: coarse) { .split-resize-handle { display: none; } }
 .pane-position { position: absolute; padding: 0; }
-.terminal-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: grid; grid-template-rows: minmax(0, 1fr); container: terminal-pane / inline-size; overflow: hidden; background: var(--terminal); border: 0; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+.terminal-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: flex; flex-direction: column; container: terminal-pane / inline-size; overflow: hidden; background: var(--terminal); border: 0; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
 .terminal-pane-active { border-color: var(--accent); }
 .terminal-pane-active .terminal-titlebar { background: var(--surface-raised); }
+.terminal-pane-active .pane-header { background: var(--surface-raised); }
+/* 紧凑 header 在布局流里：名称可截断、可隐藏；视图开关 flex:0 0 auto，永远不被名称盖住。 */
+.pane-header { flex: 0 0 auto; min-width: 0; min-height: var(--pane-bar-height); padding: 0 4px 0 6px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; overflow: hidden; background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; line-height: 1; }
+.pane-header-name { flex: 0 1 auto; min-width: 0; margin-right: auto; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; opacity: .85; color: var(--text); }
+.pane-header-name > span:not(.status-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-header-tools { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
+/* 对话覆盖层只覆盖 header 下面的 body；header 在终端和对话视图都可见。 */
+.pane-body { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .terminal-titlebar { position: absolute; z-index: 7; top: 0; left: 0; right: 0; height: var(--pane-bar-height); min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 0 8px; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; line-height: 1; }
 .terminal-titlebar[hidden] { display: none; }
-.pane-controls-toggle { position: absolute; z-index: 6; top: 4px; right: 4px; width: 28px; height: 24px; opacity: 0; background: var(--panel); border: 1px solid var(--border); }
-.pane-status-chip { position: absolute; z-index: 6; top: 4px; right: 36px; max-width: calc(100% - 44px); height: 24px; padding: 0 6px; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; pointer-events: none; opacity: .85; border: 1px solid var(--border); border-radius: 3px; background: color-mix(in srgb, var(--panel) 88%, transparent); color: var(--text); font-size: 11px; line-height: 1; }
-.pane-status-chip > span:not(.status-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-controls-toggle { flex: 0 0 auto; width: 28px; height: 24px; opacity: 0; background: var(--panel); border: 1px solid var(--border); }
 .pane-crop-badge { position: absolute; z-index: 6; left: 8px; bottom: 8px; max-width: calc(100% - 16px); height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 3px; background: color-mix(in srgb, var(--panel) 90%, transparent); color: var(--text); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pane-crop-badge:hover { background: var(--panel-strong); }
-.terminal-pane:hover > .pane-controls-toggle, .pane-controls-toggle:focus-visible { opacity: 1; }
-.terminal-pane-tools-open > .pane-controls-toggle, .terminal-pane-tools-open > .pane-status-chip { visibility: hidden; }
+.terminal-pane:hover .pane-controls-toggle, .pane-controls-toggle:focus-visible { opacity: 1; }
+.terminal-pane-tools-open .pane-controls-toggle { opacity: 1; }
 .terminal-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
 .terminal-title > span:not(.status-dot) { flex: 0 1 auto; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
 .terminal-title small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
@@ -423,7 +438,7 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .workbench-compact:has(.mobile-pane-chips) { grid-template-rows: var(--hostbar-height) 44px minmax(0, 1fr); }
   .terminal-surface { flex: 1; margin: 0; border-radius: 0; box-shadow: none; }
   .pane-position { position: absolute; inset: 0; padding: 0; }
-  .terminal-pane { border-width: 0; grid-template-rows: minmax(0, 1fr); }
+  .terminal-pane { border-width: 0; }
   .terminal-titlebar { padding-left: 9px; }
   .terminal-title small { display: none; }
   .ownership { font-size: 9px; }
@@ -431,7 +446,9 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .composer { padding: 6px max(8px, env(safe-area-inset-right)) 6px max(8px, env(safe-area-inset-left)); }
   .composer-modes > button { min-height: 44px; }
   .keybar { flex: 0 0 auto; min-height: 52px; padding: 4px 6px; display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
-  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; }
+  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 8px; white-space: nowrap; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; }
+  /* 与 orca 一致：长按连发的键需要能压下系统长按菜单，否则中文输入法会抢走手势。 */
+  .keybar button { -webkit-touch-callout: none; touch-action: manipulation; }
   .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
   .mode-bar { left: 5px; right: 5px; bottom: calc(var(--dock-height, 0px) + 8px); overflow-x: auto; white-space: nowrap; }
   .context-menu-item { min-height: 44px; font-size: 14px; }
@@ -443,7 +460,9 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 
 @media (pointer: coarse) and (min-width: 768px) {
   .workbench { --hostbar-height: 44px; --tabbar-height: 44px; --pane-bar-height: 44px; }
-  .workspace-row, .agent-row { min-height: 44px; }
+  .workspace-row, .agent-row, .workspace-group-toggle { min-height: 44px; }
+  /* Declared on the gutter elements so it beats the inherited density value. */
+  .workspace-group-toggle, .workspace-group-spacer { --workspace-gutter: 44px; }
   .workbench-brand .icon-button, .tab-close, .tab-add, .sidebar-reopen, .workbench .tool-button { min-width: 44px; min-height: 44px; }
   .tab-close { flex-basis: 44px; }
   .sidebar-section-title { min-height: 44px; }
@@ -511,9 +530,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .history-navigation { position: absolute; z-index: 4; right: 8px; bottom: 8px; display: flex; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); }
 .pane-menu-button { display: none; }
 .terminal-pane-passthrough .pane-menu-button { display: inline-flex; }
-.pane-menu-standalone { position: absolute; z-index: 6; top: 4px; right: 36px; width: 28px; height: 24px; opacity: 0; background: var(--panel); border: 1px solid var(--border); }
-.terminal-pane:hover > .pane-menu-standalone, .pane-menu-standalone:focus-visible { opacity: 1; }
-.terminal-pane-tools-open > .pane-menu-standalone { visibility: hidden; }
+.pane-menu-standalone { width: 28px; height: 24px; opacity: 0; background: var(--panel); border: 1px solid var(--border); }
+.terminal-pane:hover .pane-menu-standalone, .pane-menu-standalone:focus-visible { opacity: 1; }
 .workbench .modal-backdrop, .workbench .switcher-backdrop { height: var(--workbench-height, 100dvh); bottom: auto; padding-top: max(16px, env(safe-area-inset-top)); padding-right: max(16px, env(safe-area-inset-right)); padding-left: max(16px, env(safe-area-inset-left)); }
 .workbench .modal { max-height: calc(var(--workbench-height, 100dvh) - 32px); }
 .workbench .settings-modal { scroll-padding-block: 16px; }
@@ -524,10 +542,13 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .workbench-compact .pane-menu-button { display: inline-flex; }
 .workbench-compact .hostbar { padding-left: max(4px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); }
 .workbench-compact .keybar { padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
+.workbench-compact .pane-header { padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); }
 .workbench-compact .terminal-viewport { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }
 @media (pointer: coarse) {
   .workbench .display-toolbar .tool-button, .workbench .history-navigation .tool-button { min-height: 44px; min-width: 44px; }
+  /* Compact panes show the crop badge too, so it needs a touch target there. */
+  .pane-crop-badge { height: auto; min-height: 44px; }
   .pane-menu-button { display: inline-flex; }
 }
 @media (max-width: 350px) {
@@ -545,7 +566,14 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .display-zoom, .display-fit, .terminal-title small, .terminal-titlebar .terminal-title { display: none; }
   .terminal-titlebar { height: auto; min-height: var(--pane-bar-height); }
   .terminal-tools { flex: 1; flex-shrink: 1; flex-wrap: wrap; min-width: 0; justify-content: flex-end; }
-  .pane-status-chip { display: inline-flex; max-width: calc(100% - 40px); }
+}
+/* 名称先让位：更窄的分屏隐藏 Agent 名称，视图开关始终留在 header 里。 */
+@container terminal-pane (max-width: 480px) {
+  .pane-header-name { display: none; }
+}
+/* 极窄分屏：只收起开关两侧的文字，滑块仍在，开关本身不会被裁掉。 */
+@container terminal-pane (max-width: 220px) {
+  .pane-view-toggle-label { display: none; }
 }
 @container terminal-pane (max-width: 280px) {
   .display-toolbar { display: none; }
@@ -591,6 +619,12 @@ html[data-appearance-scope="workbench"] .composer { touch-action: manipulation; 
 .workbench-short .composer.composer-compact .composer-send { min-height: 36px; height: 36px; max-height: 36px; }
 .workbench-short .composer.composer-compact .composer-input { padding-block: 6px; overflow: hidden; }
 .workbench-short:has(.keybar) .composer { display: none; }
+/* 矮视口下，对话输入框与 dock 一样锁成单行，把高度留给输出。 */
+.workbench-short .chat-compose .composer.composer-compact .composer-input,
+.workbench-short .chat-compose .composer.composer-compact .composer-send { min-height: 36px; height: 36px; max-height: 36px; }
+.workbench-short .chat-compose .composer.composer-compact .composer-input { padding-block: 6px; overflow: hidden; }
+.workbench-short .chat-notice { display: none; }
+.workbench-short .chat-output-text { max-height: none; }
 @media (pointer: coarse) {
   .pane-controls-toggle { opacity: 1; }
 }
@@ -609,3 +643,53 @@ html[data-appearance-scope="workbench"] .composer { touch-action: manipulation; 
 .ui-modal.switcher .switcher-group button strong { font-weight: 500; }
 .ui-modal.switcher .switcher-group button small { font-size: 11px; }
 .ui-modal.switcher .switcher-group button[aria-current=true], .ui-modal.switcher .switcher-group button[aria-pressed=true] { background: var(--ui-selected); }
+
+/* 对话视图：同一 pane 内的覆盖层，只覆盖 header 下面的 body。xterm 保持挂载并继续 ack，只是被盖住。 */
+.terminal-pane-chat .terminal-viewport { visibility: hidden; pointer-events: none; }
+
+.chat-view { position: absolute; z-index: 5; inset: 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--panel); color: var(--text); container: chat-view / inline-size; }
+.chat-head { flex: 0 0 auto; min-width: 0; min-height: var(--pane-bar-height); padding: 0 6px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); }
+.chat-head-title { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.chat-head-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.chat-head-title small { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.chat-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; }
+.chat-ctrl-status { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.chat-notice { flex: 0 0 auto; margin: 0; padding: 6px 10px; display: flex; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.5; }
+.chat-notice > svg { flex: 0 0 auto; margin-top: 2px; }
+.chat-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.chat-body { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
+.chat-log-wrap { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
+.chat-log { flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 10px; display: flex; flex-direction: column; gap: 10px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.chat-state { margin: auto; padding: 16px; display: grid; justify-items: center; gap: 6px; text-align: center; color: var(--muted); font-size: 12px; }
+.chat-state strong { color: var(--text); font-size: 13px; }
+.chat-state > svg { color: var(--muted); }
+.chat-state-error > svg, .chat-state-error strong { color: var(--blocked); }
+.chat-message-user { align-self: flex-end; max-width: 85%; min-width: 0; display: grid; gap: 3px; justify-items: end; }
+.chat-bubble { margin: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px 8px 4px 8px; background: var(--panel-strong); color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-bubble-status { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.chat-bubble-status-failed, .chat-bubble-status-unknown { color: var(--blocked); }
+.chat-output { min-width: 0; display: grid; gap: 4px; }
+.chat-output-head { min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; color: var(--muted); font-size: 11px; }
+.chat-output-head > span { color: var(--text); font-weight: 600; }
+.chat-output-head small { min-width: 0; overflow-wrap: anywhere; }
+.chat-output-text { margin: 0; padding: 8px 10px; max-width: 100%; max-height: 24rem; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+.chat-jump { position: absolute; z-index: 1; right: 12px; bottom: 12px; min-height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-raised); color: var(--text); font-size: 12px; }
+.chat-disconnected { flex: 0 0 auto; margin: 0; padding: 6px 10px; border-top: 1px solid var(--blocked); background: var(--danger-surface); color: var(--blocked); font-size: 12px; overflow-wrap: anywhere; }
+.chat-compose { flex: 0 0 auto; min-width: 0; padding-bottom: max(0px, env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--panel); }
+.chat-compose .composer { padding: 8px 10px; }
+.chat-compose .composer-status { font-size: 11px; }
+.chat-compose .composer-input { min-height: 46px; }
+.chat-compose .composer-chat { grid-template-areas: 'input send' 'meta meta'; }
+@container chat-view (max-width: 420px) {
+  .chat-head { padding-left: 8px; }
+  .chat-head-title small { display: none; }
+  .chat-ctrl-status { display: none; }
+  .chat-log { padding: 8px; }
+  .chat-message-user { max-width: 92%; }
+}
+@container chat-view (max-width: 320px) {
+  .chat-head-actions .tool-button { padding: 0 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-view * { animation: none !important; transition: none !important; }
+}

@@ -63,6 +63,9 @@ jobs:
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-composer.mjs
+          HERDRX_TEST_ENGINES=chromium node scripts/test-chat-mode.mjs
+          HERDRX_TEST_ENGINES=chromium node scripts/test-chat-media.mjs "$RUNNER_TEMP/herdrx-browser-test"
+          node scripts/test-structured-chat.mjs "$RUNNER_TEMP/herdrx-browser-test"
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-desktop-display.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-space.mjs
           node scripts/test-terminal-flicker.mjs

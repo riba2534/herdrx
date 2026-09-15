@@ -6,6 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { chooseOption } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_DESKTOP_ARTIFACTS
@@ -39,6 +40,7 @@ const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
   const json = path === '/api/bootstrap/status' ? { required: false }
     : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' }
+    : path === '/api/me/workbench-session' ? { session: null }
     : path === '/api/hosts/' ? { hosts: [host] }
     : path === '/api/hosts/display-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
@@ -188,6 +190,14 @@ function gridReady(g) {
     && g.lastEnd && g.endRight != null && g.endBottom != null
 }
 
+// Auto is the shipped desktop default; the geometry cases below assert the
+// explicit fixed-size view, so switch it through the same settings UI a user has.
+async function setDisplayMode(page, mode) {
+  await page.getByRole('button', { name: '工作台设置', exact: true }).click()
+  await chooseOption(page.getByRole('combobox', { name: '显示方式', exact: true }), mode)
+  await page.getByRole('button', { name: '完成', exact: true }).click()
+}
+
 async function screenshot(page, name) {
   if (!artifacts) return
   await mkdir(artifacts, { recursive: true })
@@ -234,6 +244,35 @@ async function openPaneTools(page, index = 0) {
   await expect(pane.locator('.terminal-titlebar')).toBeVisible()
 }
 
+// The title-bar zoom buttons change 缩放 without touching the mode, which is the
+// path that used to crop auto silently.
+async function zoomIn(page, clicks) {
+  await openPaneTools(page)
+  for (let i = 0; i < clicks; i++) await page.getByRole('button', { name: '放大终端', exact: true }).click()
+  await page.getByRole('button', { name: '收起终端工具', exact: true }).click()
+}
+
+// Columns that only fit once the font shrinks below the default but stays
+// readable. Which count that is depends on the cell width this browser
+// actually renders, so derive it from a measured 295-column fixed grid instead
+// of assuming a particular monospace advance.
+function wideGridColumns(state) {
+  const cellWidth = state.screenWidth / 295
+  if (!(cellWidth > 0) || !(state.clientWidth > 0)) return 145
+  return Math.max(20, Math.min(1000, Math.floor(state.clientWidth * 14 / (cellWidth * 12))))
+}
+
+async function pollState(read, ok, label, timeout = 15000) {
+  const deadline = Date.now() + timeout
+  let last
+  for (;;) {
+    last = await read()
+    if (ok(last)) return last
+    if (Date.now() > deadline) assert.fail(`${label} did not settle: ${JSON.stringify(last)}`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+}
+
 const cases = [
   { name: '1440x900-dpr1', viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   { name: '1920x1080-dpr1', viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 },
@@ -250,8 +289,18 @@ try {
     try {
       for (const c of cases) {
         const f = await fixture(browser, { viewport: c.viewport, deviceScaleFactor: c.deviceScaleFactor })
+        const autoState = async () => {
+          const m = await metrics(f.page, 0)
+          return { font: m.font, cropped: (await f.page.locator('.pane-crop-badge').count()) > 0, fits: m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }
+        }
+        // Default auto either shrinks to show the whole grid or hands the pane
+        // back to the fixed-size view; it never shrinks below the readable floor.
+        await expect.poll(async () => { const s = await autoState(); return (s.cropped && s.font === 14) || (!s.cropped && s.fits) }, { timeout: 15000 }).toBe(true)
+        const auto = await autoState()
+        assert.ok(auto.font >= 10 && auto.font <= 14, `${c.name} desktop auto font outside the readable range: ${auto.font}`)
+        await setDisplayMode(f.page, 'fixed')
         const first = await metrics(f.page, 0)
-        assert.equal(first.font, 14, `${c.name} desktop default shrunk to ${first.font}`)
+        assert.equal(first.font, 14, `${c.name} desktop fixed default was not 14px: ${first.font}`)
         assert.ok(await f.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${c.name} page overflow`)
         await openPaneTools(f.page)
         await expect(f.page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
@@ -292,6 +341,82 @@ try {
         assert.deepEqual(f.errors, [], `${c.name} page errors: ${f.errors.join(' | ')}`)
         await f.context.close()
       }
+
+      // Auto keeps a wide grid readable by shrinking, and falls back to the
+      // fixed, scrollable view once fitting would go below the floor.
+      const probe = await fixture(browser, { viewport: { width: 1440, height: 900 } })
+      await setDisplayMode(probe.page, 'fixed')
+      const probeGrid = await pollState(
+        async () => gridState(probe.page),
+        (g) => g.screenWidth > g.clientWidth + 1,
+        `${name} 295-column probe grid`,
+      )
+      await probe.context.close()
+      const wideCols = wideGridColumns(probeGrid)
+      const wideAuto = structuredClone(splitSnapshot)
+      wideAuto.panes = [{ ...wideAuto.panes[0], scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 40 } }]
+      wideAuto.layouts[0].area = { x: 0, y: 0, width: wideCols, height: 40 }
+      wideAuto.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: wideCols, height: 40 } }]
+      const autoFit = await fixture(browser, { viewport: { width: 1440, height: 900 } }, wideAuto)
+      await pollState(
+        async () => {
+          const m = await metrics(autoFit.page, 0)
+          return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+        },
+        (s) => !s.cropped && s.rowCount === 40 && s.font < 14 && s.font >= 10
+          && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1,
+        `${name} auto fit at ${wideCols} columns`,
+      )
+      assert.equal(resizes(autoFit.messages).length, 0, 'auto fit sent a remote resize')
+      await screenshot(autoFit.page, `${name}-auto-fit`)
+      // 缩放 is the ceiling for the fit, so raising it must not push the grid
+      // past the pane: the same wide grid stays complete, not cropped.
+      await zoomIn(autoFit.page, 5)
+      await pollState(async () => {
+        const m = await metrics(autoFit.page, 0)
+        return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+      }, (s) => !s.cropped && s.font <= 14 && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1, `${name} auto fit at 150% zoom`)
+      assert.equal(resizes(autoFit.messages).length, 0, 'auto fit at 150% sent a remote resize')
+      await screenshot(autoFit.page, `${name}-auto-fit-zoom150`)
+      await autoFit.context.close()
+
+      // Zoom still enlarges the font while the grid keeps fitting, so auto does
+      // not turn the zoom controls into a no-op.
+      const autoZoom = structuredClone(splitSnapshot)
+      autoZoom.panes = [{ ...autoZoom.panes[0], scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 20 } }]
+      autoZoom.layouts[0].area = { x: 0, y: 0, width: 60, height: 20 }
+      autoZoom.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 60, height: 20 } }]
+      const zoomedAuto = await fixture(browser, { viewport: { width: 1440, height: 900 } }, autoZoom)
+      await expect.poll(async () => (await metrics(zoomedAuto.page, 0)).font).toBe(14)
+      await zoomIn(zoomedAuto.page, 5)
+      await expect.poll(async () => (await metrics(zoomedAuto.page, 0)).font).toBe(21)
+      const zoomedGrid = await metrics(zoomedAuto.page, 0)
+      assert.ok(zoomedGrid.screenWidth <= zoomedGrid.width + 1 && zoomedGrid.screenHeight <= zoomedGrid.height + 1, `auto zoom 150% overflowed: ${JSON.stringify(zoomedGrid)}`)
+      await expect(zoomedAuto.page.locator('.pane-crop-badge')).toHaveCount(0)
+      assert.equal(resizes(zoomedAuto.messages).length, 0, 'auto zoom sent a remote resize')
+      await screenshot(zoomedAuto.page, `${name}-auto-zoom150`)
+      await zoomedAuto.context.close()
+
+      const autoCrop = await fixture(browser, { viewport: { width: 1440, height: 900 } })
+      await expect.poll(async () => {
+        const m = await metrics(autoCrop.page, 0)
+        const cropped = (await autoCrop.page.locator('.pane-crop-badge').count()) > 0
+        return cropped && m.font === 14
+      }, { timeout: 15000 }).toBe(true)
+      const cropped = await metrics(autoCrop.page, 0)
+      assert.ok(cropped.screenWidth > cropped.width + 1, `auto cropped a grid that fits: ${JSON.stringify(cropped)}`)
+      assert.equal(resizes(autoCrop.messages).length, 0, 'auto fallback sent a remote resize')
+      await screenshot(autoCrop.page, `${name}-auto-crop`)
+      // A 295 column grid cannot be fitted at 10 px, and raising the zoom must
+      // keep the crop signalled instead of hiding the right side again.
+      await zoomIn(autoCrop.page, 5)
+      await expect.poll(async () => (await autoCrop.page.locator('.pane-crop-badge').count()) > 0, { timeout: 15000 }).toBe(true)
+      const croppedZoom = await metrics(autoCrop.page, 0)
+      assert.equal(croppedZoom.font, 21, `auto crop at 150% lost the zoom: ${JSON.stringify(croppedZoom)}`)
+      assert.ok(croppedZoom.screenWidth > croppedZoom.width + 1, `auto crop at 150% no longer overflows: ${JSON.stringify(croppedZoom)}`)
+      assert.equal(resizes(autoCrop.messages).length, 0, 'auto crop at 150% sent a remote resize')
+      await screenshot(autoCrop.page, `${name}-auto-crop-zoom150`)
+      await autoCrop.context.close()
 
       const observed = await fixture(browser, { viewport: { width: 1920, height: 1080 } })
       await expect.poll(async () => (await metrics(observed.page)).rowCount).toBe(38)
@@ -396,7 +521,13 @@ try {
       await expect(roundtrip.page.locator('.composer')).toBeVisible()
       await roundtrip.page.getByRole('textbox', { name: '本地输入内容' }).fill('keep-desktop-draft')
       await roundtrip.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => roundtrip.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input').length).toBe(1)
+      // 提交分两腿：先整段正文（无按键），再单独一次回车。
+      const roundtripSends = () => roundtrip.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
+      await expect.poll(() => roundtripSends().length).toBe(2)
+      assert.deepEqual(roundtripSends().map((item) => item.params), [
+        { pane_id: 'p1', text: 'keep-desktop-draft', keys: [] },
+        { pane_id: 'p1', text: '', keys: ['Enter'] },
+      ])
       assert.deepEqual(roundtrip.errors, [])
       await roundtrip.context.close()
 
@@ -405,14 +536,33 @@ try {
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()
       await mobile.page.getByRole('textbox', { name: '本地输入内容' }).fill('mobile-once')
       await mobile.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => mobile.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input').length).toBe(1)
+      const mobileSends = () => mobile.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
+      await expect.poll(() => mobileSends().length).toBe(2)
+      assert.deepEqual(mobileSends().map((item) => item.params), [
+        { pane_id: 'p1', text: 'mobile-once', keys: [] },
+        { pane_id: 'p1', text: '', keys: ['Enter'] },
+      ])
       await mobile.page.setViewportSize({ width: 844, height: 390 })
       await expect(mobile.page.locator('.terminal-pane')).toHaveCount(1)
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()
       assert.deepEqual(mobile.errors, [])
       await mobile.context.close()
 
-      console.log(`${name}: desktop fixed 14px 295-col split, fit toggle, observed frames, typing, compact isolation, mobile composer passed`)
+      // A phone pane in 自动 must not truncate silently either: the compact
+      // layout shows the same crop badge and one-tap route to a complete grid.
+      const compactCrop = await fixture(browser, { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: name !== 'firefox', deviceScaleFactor: 2 })
+      await compactCrop.context.addInitScript((profiles) => {
+        try { localStorage.setItem('herdrx.terminal-display.v3', JSON.stringify(profiles)) } catch { /* storage may be unavailable */ }
+      }, { desktop: { fontSize: 14, zoom: 100, mode: 'auto' }, mobile: { fontSize: 14, zoom: 100, mode: 'auto' } })
+      await compactCrop.page.reload()
+      await expect(compactCrop.page.locator('.terminal-pane')).toHaveCount(1)
+      await expect(compactCrop.page.locator('.pane-crop-badge')).toHaveText('295×38 · 已裁切 → 适应窗口')
+      await expect(compactCrop.page.locator('.pane-crop-badge')).toBeVisible()
+      await screenshot(compactCrop.page, `${name}-compact-auto-crop`)
+      assert.deepEqual(compactCrop.errors, [])
+      await compactCrop.context.close()
+
+      console.log(`${name}: desktop auto fit/crop, fixed 14px 295-col split, fit toggle, observed frames, typing, compact isolation, mobile composer passed`)
     } finally { await browser.close() }
   }
 } finally { await new Promise((done) => server.close(done)) }

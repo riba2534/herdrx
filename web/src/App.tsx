@@ -1,5 +1,5 @@
 import { BrandIcon } from './components/Brand'
-import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { useAuth } from './auth'
 import { AuthPage } from './pages/AuthPage'
@@ -7,7 +7,18 @@ import { HostsPage } from './pages/HostsPage'
 import { PairPage } from './pages/PairPage'
 import { Button } from './components/ui'
 import { setAppearanceScope } from './lib/appearance'
+import { api } from './lib/api'
+import { navigate } from './lib/navigation'
 import { usePWA } from './lib/pwa'
+import { readWorkbenchSession } from './lib/workbenchSessionPersistence'
+import {
+  hasWorkbenchVisit,
+  markWorkbenchVisit,
+  shouldRestoreWorkbenchSession,
+  cacheWorkbenchSession,
+  workbenchClientClass,
+  workbenchDeviceID,
+} from './lib/workbenchSession'
 
 const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage').then((module) => ({ default: module.WorkbenchPage })))
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })))
@@ -28,6 +39,8 @@ export default function App() {
   }, [])
   const appearanceScope = auth.user && !auth.bootstrapRequired && !window.location.hash.startsWith('#pair=') && /^\/h\/[^/]+$/.test(path) ? 'workbench' : 'site'
   useLayoutEffect(() => { if (!auth.loading) setAppearanceScope(appearanceScope) }, [auth.loading, appearanceScope])
+  const signedIn = Boolean(auth.user) && !auth.bootstrapRequired && !auth.loading && !auth.error
+  const restoreReady = useRootWorkbenchRestore(signedIn, path)
 
   if (auth.loading) return <main className="loading-screen"><BrandIcon/><LoaderCircle className="spin"/><span>正在打开 herdrx…</span></main>
   if (auth.error && !auth.user) return <main className="auth-shell"><section className="auth-card"><h1>{pwa.online ? '无法读取登录状态' : '当前处于离线状态'}</h1><p role="alert">{pwa.online ? auth.error : '远程 Herdr 和任务仍独立运行。恢复网络后将重新验证登录并连接原工作台。'}</p><Button className="button-primary" onClick={() => void auth.refresh()}>重新连接</Button></section></main>
@@ -42,5 +55,60 @@ export default function App() {
   if (window.location.hash.startsWith('#pair=') || path === '/pair') return <PairPage key={authKey} />
   const match = path.match(/^\/h\/([^/]+)$/)
   if (match) return <Suspense fallback={<main className="loading-screen"><LoaderCircle className="spin"/><span>加载终端工作台…</span></main>}><WorkbenchPage key={`${authKey}:${match[1]}`} hostID={decodeURIComponent(match[1])} /></Suspense>
+  if (!restoreReady) return <main className="loading-screen"><BrandIcon/><LoaderCircle className="spin"/><span>正在恢复上次工作台…</span></main>
   return <HostsPage key={authKey} />
+}
+
+function useRootWorkbenchRestore(enabled: boolean, path: string) {
+  const [ready, setReady] = useState(false)
+  const previousPath = useRef(path)
+  useEffect(() => {
+    const returnedToHosts = path === '/' && previousPath.current !== '/'
+    previousPath.current = path
+    if (!enabled) {
+      setReady(true)
+      return
+    }
+    if (path !== '/') {
+      markWorkbenchVisit()
+      setReady(true)
+      return
+    }
+    // A deliberate navigation to the host list takes precedence over another
+    // device's last location. Automatic handoff only runs when opening the root.
+    if (returnedToHosts) {
+      markWorkbenchVisit()
+      setReady(true)
+      return
+    }
+    let cancelled = false
+    setReady(false)
+    void (async () => {
+      try {
+        const { session } = await readWorkbenchSession()
+        if (cancelled) return
+        cacheWorkbenchSession(session ?? null)
+        if (shouldRestoreWorkbenchSession(session, {
+          path,
+          deviceID: workbenchDeviceID(),
+          clientClass: workbenchClientClass(),
+          hasVisit: hasWorkbenchVisit(),
+        }) && session) {
+          const { hosts } = await api.hosts()
+          if (cancelled) return
+          if (hosts?.some((host) => host.id === session.host_id)) {
+            markWorkbenchVisit()
+            navigate(`/h/${session.host_id}`)
+            return
+          }
+        }
+      } catch {
+        // Keep the hosts list usable when restore cannot run.
+      }
+      markWorkbenchVisit()
+      if (!cancelled) setReady(true)
+    })()
+    return () => { cancelled = true }
+  }, [enabled, path])
+  return ready
 }

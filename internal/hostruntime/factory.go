@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/riba2534/herdrx/internal/agentlog"
 	"github.com/riba2534/herdrx/internal/config"
 	"github.com/riba2534/herdrx/internal/herdr"
 	"github.com/riba2534/herdrx/internal/secure"
@@ -288,6 +289,31 @@ func (h *sharedHandle) OpenTerminalSocket(ctx context.Context) (net.Conn, error)
 	}
 	return value, err
 }
+
+// Transcript forwards the optional structured-transcript capability through the shared
+// handle. An endpoint without it reports unsupported_transport instead of failing the
+// request — the shared transport stays valid for every other operation.
+func (h *sharedHandle) Transcript(ctx context.Context, scope herdr.TranscriptScope, request herdr.TranscriptRequest) (herdr.TranscriptPage, error) {
+	endpoint, ok := h.entry.endpoint.(herdr.TranscriptEndpoint)
+	if !ok {
+		return herdr.TranscriptPage{Reason: herdr.ChatReasonUnsupportedTransport, Messages: []agentlog.Record{}}, nil
+	}
+	value, err := endpoint.Transcript(ctx, scope, request)
+	if ctx.Err() == nil && isTransportError(err) {
+		h.invalidate()
+	}
+	return value, err
+}
+
+// TranscriptUnavailableReason exposes the capability-diagnostic side channel of the
+// underlying endpoint, so the HTTP layer can audit why a transport cannot be read.
+func (h *sharedHandle) TranscriptUnavailableReason() string {
+	if diagnostics, ok := h.entry.endpoint.(herdr.TranscriptDiagnostics); ok {
+		return diagnostics.TranscriptUnavailableReason()
+	}
+	return ""
+}
+
 func (h *sharedHandle) StageImage(ctx context.Context, ext string, r io.Reader) (string, error) {
 	value, err := h.entry.endpoint.StageImage(ctx, ext, r)
 	if ctx.Err() == nil && isTransportError(err) {

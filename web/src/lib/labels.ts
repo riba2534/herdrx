@@ -55,6 +55,16 @@ export function workspaceCountLabel(paneCount: number, tabCount: number) {
   return `${terminalCountLabel(paneCount)} · ${tabCountLabel(tabCount)}`
 }
 
+export function workspaceBranchLine(branch?: string | null) {
+  return (branch || '').trim()
+}
+
+export function workspaceSwitcherDetail(paneCount: number, branch?: string | null) {
+  const count = terminalCountLabel(paneCount)
+  const line = workspaceBranchLine(branch)
+  return line ? `${line} · ${count}` : count
+}
+
 export function agentNotificationTitle(name: string, status: string) {
   return status === 'blocked' ? `${name} 等待你的确认` : `${name} 已完成`
 }
