@@ -8,7 +8,7 @@
  * 契约见 docs/design/chat-media-contract.md §3；类型唯一正文是 ./chatMediaTypes。
  */
 
-import { APIError, apiErrorMessage, authenticationGeneration, csrf, invalidateAuthentication } from './api'
+import { APIError, apiErrorMessage, authenticationGeneration, csrf, invalidateAuthentication, onAuthEvent } from './api'
 import type { VoiceCapabilities, VoiceEvent, VoiceSessionHandle, VoiceTransport } from './chatMediaTypes'
 
 /** 未配置 / 未启用时的能力。UI 据此隐藏麦克风入口，绝不触发授权弹窗。 */
@@ -44,6 +44,7 @@ async function requestJSON<T>(path: string, options: RequestOptions = {}): Promi
     signal: options.signal,
   })
   const payload = await response.json().catch(() => ({}))
+  if (epoch !== authenticationGeneration()) throw authenticationChanged()
   if (!response.ok) {
     if (response.status === 401) invalidateAuthentication(epoch)
     throw new APIError(response.status, payload.code || 'request_failed', apiErrorMessage(payload), payload)
@@ -69,9 +70,13 @@ export async function fetchVoiceCapabilities(signal?: AbortSignal): Promise<Voic
       maxSessionSeconds: Number(payload.maxSessionSeconds) || 0,
     }
   } catch (error) {
-    if (error instanceof APIError && error.status === 401) throw error
+    if (error instanceof APIError && (error.status === 401 || error.code === 'auth_changed')) throw error
     return DISABLED_VOICE_CAPABILITIES
   }
+}
+
+function authenticationChanged() {
+  return new APIError(409, 'auth_changed', '登录状态已变化，请重新开始语音输入')
 }
 
 function relayURL(ticket: string): string {
@@ -135,6 +140,8 @@ class RelaySession implements VoiceSessionHandle {
   private closeReason = ''
   private closedPromise: Promise<void>
   private resolveClosed!: () => void
+  private readonly authEpoch = authenticationGeneration()
+  private releaseAuth: (() => void) | null = null
 
   constructor(socket: WebSocket, capabilities: VoiceCapabilities, output: 'text' | 'audio') {
     this.socket = socket
@@ -143,6 +150,9 @@ class RelaySession implements VoiceSessionHandle {
     this.output = output === 'audio' && capabilities.audioReply === 'allowed' ? 'audio' : 'text'
     this.sampleRate = capabilities.inputSampleRate
     this.closedPromise = new Promise((resolve) => { this.resolveClosed = resolve })
+    this.releaseAuth = onAuthEvent(() => {
+      if (this.authEpoch !== authenticationGeneration()) this.close('auth')
+    })
     socket.binaryType = 'arraybuffer'
     socket.addEventListener('message', (event) => this.receive(event))
     socket.addEventListener('close', () => this.settle('transport'))
@@ -159,6 +169,7 @@ class RelaySession implements VoiceSessionHandle {
   }
 
   private receive(event: MessageEvent) {
+    if (this.closed || this.authEpoch !== authenticationGeneration()) return
     if (typeof event.data === 'string') {
       const parsed = parseVoiceEvent(event.data)
       if (parsed) this.emit(parsed)
@@ -174,7 +185,12 @@ class RelaySession implements VoiceSessionHandle {
   }
 
   private emit(event: VoiceEvent) {
-    if (event.t === 'closed') this.settle(event.reason)
+    if (event.t === 'closed') { this.settle(event.reason); return }
+    if (this.closed) return
+    this.dispatch(event)
+  }
+
+  private dispatch(event: VoiceEvent) {
     if (this.eventHandlers.size === 0) {
       if (this.pendingEvents.length < MAX_PENDING_EVENTS) this.pendingEvents.push(event)
       return
@@ -186,7 +202,11 @@ class RelaySession implements VoiceSessionHandle {
     if (this.closed) return
     this.closed = true
     this.closeReason = reason
+    this.releaseAuth?.()
+    this.releaseAuth = null
     this.resolveClosed()
+    this.pendingAudio = []
+    this.dispatch({ t: 'closed', reason })
   }
 
   private send(frame: Record<string, unknown>) {
@@ -207,6 +227,8 @@ class RelaySession implements VoiceSessionHandle {
 
   /** 幂等关闭：stop / unmount / 登出 / pagehide 都会调用它。 */
   close(reason: string) {
+    this.pendingEvents = []
+    this.pendingAudio = []
     if (this.closed) {
       this.socket.close()
       return
@@ -217,21 +239,33 @@ class RelaySession implements VoiceSessionHandle {
   }
 
   onEvent(handler: (event: VoiceEvent) => void) {
+    if (this.authEpoch !== authenticationGeneration()) {
+      this.pendingEvents = []
+      handler({ t: 'closed', reason: 'auth' })
+      return () => {}
+    }
     this.eventHandlers.add(handler)
     if (this.pendingEvents.length > 0) {
       const flush = this.pendingEvents
       this.pendingEvents = []
-      for (const event of flush) handler(event)
+      for (const event of flush) {
+        if (this.authEpoch !== authenticationGeneration()) break
+        handler(event)
+      }
     }
     return () => { this.eventHandlers.delete(handler) }
   }
 
   onAudio(handler: (pcm: ArrayBuffer) => void) {
+    if (this.closed || this.authEpoch !== authenticationGeneration()) return () => {}
     this.audioHandlers.add(handler)
     if (this.pendingAudio.length > 0) {
       const flush = this.pendingAudio
       this.pendingAudio = []
-      for (const frame of flush) handler(frame)
+      for (const frame of flush) {
+        if (this.closed || this.authEpoch !== authenticationGeneration()) break
+        handler(frame)
+      }
     }
     return () => { this.audioHandlers.delete(handler) }
   }
@@ -262,10 +296,12 @@ export class HttpVoiceTransport implements VoiceTransport {
   invalidate() { this.cached = null }
 
   async open(input: { output: 'text' | 'audio' }): Promise<VoiceSessionHandle> {
+    const epoch = authenticationGeneration()
     const session = await requestJSON<VoiceSessionResponse>('/api/voice/sessions', {
       method: 'POST',
       body: { output: input.output },
     })
+    if (epoch !== authenticationGeneration()) throw authenticationChanged()
     if (!session?.ticket) throw new APIError(502, 'voice_ticket_missing', '语音服务未返回会话票据，请稍后重试')
     this.cached = session.capabilities ?? this.cached
 
@@ -273,10 +309,22 @@ export class HttpVoiceTransport implements VoiceTransport {
     const handle = new RelaySession(socket, this.cached ?? DISABLED_VOICE_CAPABILITIES, input.output)
 
     await new Promise<void>((resolve, reject) => {
-      const onOpen = () => { cleanup(); resolve() }
+      const onOpen = () => {
+        if (epoch !== authenticationGeneration()) { onAuthChanged(); return }
+        cleanup()
+        resolve()
+      }
+      const onAuthChanged = () => {
+        if (epoch === authenticationGeneration()) return
+        cleanup()
+        handle.close('auth')
+        reject(authenticationChanged())
+      }
+      const releaseAuth = onAuthEvent(onAuthChanged)
       const onError = () => { cleanup(); reject(new APIError(502, 'voice_socket_failed', '无法连接语音服务，请稍后重试')) }
       const onClose = () => { cleanup(); reject(new APIError(502, 'voice_socket_closed', '语音连接在建立前被关闭，请重试')) }
       const cleanup = () => {
+        releaseAuth()
         socket.removeEventListener('open', onOpen)
         socket.removeEventListener('error', onError)
         socket.removeEventListener('close', onClose)

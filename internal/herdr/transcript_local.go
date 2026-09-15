@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -105,21 +106,35 @@ func (f *localTranscriptFS) walk(ctx context.Context, directory, rel string, dep
 	if err != nil {
 		return errTranscriptDenied
 	}
+	infos := make([]os.FileInfo, 0, len(items))
 	for _, item := range items {
+		if info, err := item.Info(); err == nil {
+			infos = append(infos, info)
+		}
+	}
+	// Codex 的日期目录、DSH 的会话目录从新到旧，文件按修改时间排序。
+	// 必须在 500 项预算截断之前排序，不能永远只扫描最旧的日志。
+	sort.Slice(infos, func(i, j int) bool {
+		left, right := infos[i], infos[j]
+		if left.IsDir() != right.IsDir() {
+			return left.IsDir()
+		}
+		if left.IsDir() || left.ModTime().Equal(right.ModTime()) {
+			return left.Name() > right.Name()
+		}
+		return left.ModTime().After(right.ModTime())
+	})
+	for _, info := range infos {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if len(*entries) >= transcriptMaxListEntries {
 			return nil
 		}
-		name := item.Name()
+		name := info.Name()
 		child := name
 		if rel != "" {
 			child = rel + "/" + name
-		}
-		info, err := os.Lstat(filepath.Join(directory, name))
-		if err != nil {
-			continue
 		}
 		// 目录项本身是符号链接的一律标记出来，由上层拒绝：契约要求符号链接（含父目录）
 		// 全部拒绝，不做「跟随但限制在根内」的宽容处理。

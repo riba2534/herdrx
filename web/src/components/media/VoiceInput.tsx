@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MicOff, Mic, Square, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '../ui'
-import { onAuthEvent } from '../../lib/api'
+import { authenticationGeneration, onAuthEvent } from '../../lib/api'
 import {
   appendVoiceTranscript,
   type VoiceCapabilities,
@@ -50,6 +50,7 @@ export function VoiceInput({
   const wantAudioRef = useRef(false)
   // 每轮会话一个代号：晚到的 promise 回调不能影响新一轮界面。
   const runRef = useRef(0)
+  const authRef = useRef<number | null>(null)
 
   // 回调经 ref 保活：`report` 必须是稳定引用。否则父组件每次传入新的内联回调，
   // 下面几个 effect 都会重跑清理分支，把一条正在进行的语音会话（含麦克风）拆掉。
@@ -66,6 +67,7 @@ export function VoiceInput({
   const shutdown = useCallback(() => {
     activeRef.current = false
     runRef.current += 1
+    authRef.current = null
     for (const off of unsubscribeRef.current) {
       try { off() } catch { /* already detached */ }
     }
@@ -89,8 +91,8 @@ export function VoiceInput({
   }, [visible, shutdown, report])
 
   // 登出 / 会话失效：立即停止。
-  useEffect(() => onAuthEvent((event) => {
-    if (event.kind !== 'expired' || !activeRef.current) return
+  useEffect(() => onAuthEvent(() => {
+    if (!activeRef.current || authRef.current === authenticationGeneration()) return
     shutdown()
     report('idle')
   }), [shutdown, report])
@@ -102,8 +104,13 @@ export function VoiceInput({
       shutdown()
       report('idle')
     }
+    const onVisibility = () => { if (document.hidden) onHide() }
     window.addEventListener('pagehide', onHide)
-    return () => window.removeEventListener('pagehide', onHide)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', onHide)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [shutdown, report])
 
   // 切换 pane：旧会话必须结束，而不是继续对着旧 pane 录音。
@@ -133,6 +140,8 @@ export function VoiceInput({
       report('error', '请先选择一个终端再使用语音输入')
       return
     }
+    const epoch = authenticationGeneration()
+    authRef.current = epoch
     const run = runRef.current + 1
     runRef.current = run
     activeRef.current = true
@@ -142,11 +151,12 @@ export function VoiceInput({
     try {
       caps = await transport.capabilities()
     } catch {
+      if (run !== runRef.current || epoch !== authenticationGeneration()) return
       activeRef.current = false
       report('error', '无法获取语音服务状态，请稍后重试')
       return
     }
-    if (run !== runRef.current) return
+    if (run !== runRef.current || epoch !== authenticationGeneration()) return
     if (!caps.enabled) {
       activeRef.current = false
       report('error', '本实例未启用语音输入')
@@ -159,14 +169,17 @@ export function VoiceInput({
     try {
       capture = await startVoiceCapture({
         sampleRate: caps.inputSampleRate,
-        onFrame: (frame) => { handleRef.current?.sendAudio(frame) },
+        onFrame: (frame) => {
+          if (run === runRef.current && epoch === authenticationGeneration()) handleRef.current?.sendAudio(frame)
+        },
       })
     } catch (error) {
+      if (run !== runRef.current || epoch !== authenticationGeneration()) return
       activeRef.current = false
       report('error', error instanceof Error ? error.message : '无法访问麦克风，请检查浏览器权限后重试')
       return
     }
-    if (run !== runRef.current) { capture.stop(); return }
+    if (run !== runRef.current || epoch !== authenticationGeneration()) { capture.stop(); return }
     captureRef.current = capture
     report('connecting')
 
@@ -176,17 +189,18 @@ export function VoiceInput({
       handle = await transport.open({ output: audio ? 'audio' : 'text' })
     } catch (error) {
       capture.stop()
+      if (run !== runRef.current || epoch !== authenticationGeneration()) return
       captureRef.current = null
       activeRef.current = false
       report('error', error instanceof Error ? error.message : '无法建立语音会话，请稍后重试')
       return
     }
-    if (run !== runRef.current) { handle.close('superseded'); capture.stop(); return }
+    if (run !== runRef.current || epoch !== authenticationGeneration()) { handle.close('superseded'); capture.stop(); return }
     handleRef.current = handle
     if (audio) playbackRef.current = createVoicePlayback(caps.outputSampleRate)
 
     unsubscribeRef.current.push(handle.onEvent((event) => {
-      if (run !== runRef.current) return
+      if (run !== runRef.current || epoch !== authenticationGeneration()) return
       switch (event.t) {
         case 'ready':
           report('listening')
@@ -211,6 +225,7 @@ export function VoiceInput({
           callbacksRef.current.onAssistantText?.(event.text, event.final)
           break
         case 'error':
+          shutdown()
           report('error', event.message)
           break
         case 'closed':
@@ -219,7 +234,9 @@ export function VoiceInput({
           break
       }
     }))
-    unsubscribeRef.current.push(handle.onAudio((pcm) => { playbackRef.current?.push(pcm) }))
+    unsubscribeRef.current.push(handle.onAudio((pcm) => {
+      if (run === runRef.current && epoch === authenticationGeneration()) playbackRef.current?.push(pcm)
+    }))
   }, [hostID, paneID, transport, report, shutdown])
 
   const stop = useCallback(() => {

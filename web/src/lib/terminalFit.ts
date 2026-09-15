@@ -2,6 +2,24 @@ type FontMetrics = { width: number; height: number }
 export type FontMeasure = (fontSize: number) => FontMetrics | null
 export const TERMINAL_FONT_FAMILY = '"JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace'
 
+export function resolvedTerminalFontFamily(host: HTMLElement): string {
+  const probe = document.createElement('span')
+  Object.assign(probe.style, { position: 'fixed', left: '-10000px', visibility: 'hidden', whiteSpace: 'pre', fontFamily: TERMINAL_FONT_FAMILY, fontSize: '14px', fontWeight: 'normal', fontKerning: 'none', letterSpacing: '0' })
+  host.appendChild(probe)
+  try {
+    probe.textContent = 'W'.repeat(32)
+    const wide = probe.getBoundingClientRect().width
+    probe.textContent = 'i'.repeat(32)
+    const narrow = probe.getBoundingClientRect().width
+    // Some WebKit/fontconfig combinations substitute a proportional CJK font
+    // for an unavailable named family before reaching the monospace fallback.
+    // xterm then pads every glyph to W's width and needlessly crops the grid.
+    return wide > 0 && narrow > 0 && Math.abs(wide - narrow) > 0.5 ? 'monospace' : TERMINAL_FONT_FAMILY
+  } finally {
+    probe.remove()
+  }
+}
+
 export function whenFontsReady(): Promise<void> {
   return document.fonts?.ready ? document.fonts.ready.then(() => undefined) : Promise.resolve()
 }

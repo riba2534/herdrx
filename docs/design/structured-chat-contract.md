@@ -151,6 +151,7 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
   该文件存在任何 `response_item` 帧时，消息一律走 `response_item`，`event_msg` 中的
   消息型 payload（`user_message` / `agent_message` / `item_completed`）全部忽略；
   该文件完全没有 `response_item` 帧时才走 `event_msg`。
+- 身份头部不足以判定规范路径。若尚未看到 `response_item`，继续有界扫描：总量最多 8 MiB，单行最多 1 MiB；只有扫描到文件末尾才能采用 `event_msg`。超预算返回 `read_limit_exceeded`。追加首个 `response_item` 导致规范路径切换时重置旧视图，避免同一轮双记。
 - `event_msg` 的生命周期信号（`turn_aborted` → `system` 记录）在任何情况下都保留。
 - 旧式「未包裹的 `response_item`」形态必须与包裹形态一并处理；只处理一种会在部分 Codex
   版本上得到空会话。
@@ -170,6 +171,7 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 - **首屏不拉全量**：无游标时只返回日志尾部 `STRUCTURED_CHAT_INITIAL_WINDOW_BYTES`
   并按行对齐，`previous_cursor` 指向上一个窗口，供"加载更早"。
 - **`has_more`** 相对本次请求方向：正向请求表示还有更新记录，反向请求表示还有更早记录。
+- **候选扫描**：最多 500 个目录项，日期/会话目录从新到旧、文件按更新时间扫描；按精确 cwd 过滤后最多返回 20 个候选。扫描预算耗尽且未找到对应项目时返回 `read_limit_exceeded`，不声明该项目没有会话。
 - **单次上限**：记录数（默认 200 / 硬上限 500）与响应字节数（256 KiB）双上限。触顶时
   **停在最后一条完整记录之后**，置 `has_more:true`，`next_cursor` 指向该处；客户端立刻再取
   一页。绝不为了凑上限而截断成半条记录。

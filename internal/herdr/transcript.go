@@ -52,6 +52,8 @@ const (
 	transcriptMaxListEntries = 500
 	// Codex 会话目录的最大递归深度（`sessions/YYYY/MM/DD/rollout-*.jsonl`）。
 	transcriptMaxCodexDepth = 4
+	// 规范消息路径探测的总预算；未找到 response_item 时须扫完文件才能认定 event_msg。
+	transcriptCodexProbeMaxBytes = 8 << 20
 )
 
 // 降级原因，闭集合。取值必须与契约 `CHAT_REASONS` 逐字一致，不允许自造字符串。
@@ -210,6 +212,7 @@ var (
 	errTranscriptRoot = errors.New("structured chat log root unavailable")
 	// errTranscriptTransport 表示当前接入方式拿不到受限读取能力。
 	errTranscriptTransport = errors.New("structured chat transport unsupported")
+	errTranscriptLimit     = errors.New("structured chat read limit exceeded")
 )
 
 type transcriptEntry struct {
@@ -338,6 +341,8 @@ func transcriptDegradeFromError(err error, agent string) TranscriptPage {
 		return transcriptDegrade(ChatReasonLogRootUnavailable, agent)
 	case errors.Is(err, errTranscriptDenied):
 		return transcriptDegrade(ChatReasonReadDenied, agent)
+	case errors.Is(err, errTranscriptLimit):
+		return transcriptDegrade(ChatReasonReadLimitExceeded, agent)
 	default:
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
@@ -436,64 +441,73 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 	sort.SliceStable(files_, func(left, right int) bool {
 		return files_[left].Modified.After(files_[right].Modified)
 	})
-	if len(files_) > transcriptMaxCandidates {
-		files_ = files_[:transcriptMaxCandidates]
-	}
 	if len(files_) == 0 {
 		return nil, foreign, nil
 	}
 
-	rels := make([]string, 0, len(files_))
-	for _, entry := range files_ {
-		rels = append(rels, entry.Rel)
-	}
-	shapes, results, err := transcriptShapes(ctx, files, root, agent, rels)
-	if err != nil {
-		return nil, false, err
-	}
-	candidates := make([]agentlog.Candidate, 0, len(files_))
-	for position, entry := range files_ {
-		if position >= len(results) {
-			break
+	candidates := make([]agentlog.Candidate, 0, transcriptMaxCandidates)
+	// 先核对 cwd 再限制候选数量；其他项目的较新日志不能挤掉当前项目。
+	// 每批仍为 20 个，避免 SSH 的头部探测响应超过传输预算。
+	for offset := 0; offset < len(files_); offset += transcriptMaxCandidates {
+		end := min(offset+transcriptMaxCandidates, len(files_))
+		batch := files_[offset:end]
+		rels := make([]string, 0, len(batch))
+		for _, entry := range batch {
+			rels = append(rels, entry.Rel)
 		}
-		result := results[position]
-		if result.Err != nil || !result.Exists {
-			continue
-		}
-		shape := shapes[position]
-		// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
-		if shape.CWD != cwd {
-			continue
-		}
-		sessionID := shape.SessionID
-		switch agent {
-		case agentlog.AgentClaude:
-			sessionID = agentlog.SessionStem(baseName(entry.Rel))
-		case agentlog.AgentDSH:
-			// 会话 id 只认 header；同时要求目录段**逐字**等于该 id 的规范编码 ——
-			// 这是「严格 canonical 目录规则」的一半，另一半由归属判定给出。
-			if sessionID == "" || shape.DSHVersion != agentlog.DSHFormatVersion {
-				foreign = true
-				continue
-			}
-			if encoded, ok := dshEncodeSegment(sessionID); !ok || encoded != baseName(parentDir(entry.Rel)) {
-				continue
-			}
-		default:
-			if sessionID == "" {
-				sessionID = agentlog.SessionStem(baseName(entry.Rel))
-			}
-		}
-		id, err := codec.seal(agent, sessionID, entry.Rel)
+		shapes, results, err := transcriptShapes(ctx, files, root, agent, rels)
 		if err != nil {
 			return nil, false, err
 		}
-		candidates = append(candidates, agentlog.Candidate{
-			ID:        id,
-			Agent:     agent,
-			SessionID: sessionID,
-			UpdatedAt: entry.Modified.UTC().Format(time.RFC3339),
-		})
+		for position, entry := range batch {
+			if position >= len(results) {
+				break
+			}
+			result := results[position]
+			if result.Err != nil || !result.Exists {
+				continue
+			}
+			shape := shapes[position]
+			// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
+			if shape.CWD != cwd {
+				continue
+			}
+			sessionID := shape.SessionID
+			switch agent {
+			case agentlog.AgentClaude:
+				sessionID = agentlog.SessionStem(baseName(entry.Rel))
+			case agentlog.AgentDSH:
+				// 会话 id 只认 header；同时要求目录段**逐字**等于该 id 的规范编码 ——
+				// 这是「严格 canonical 目录规则」的一半，另一半由归属判定给出。
+				if sessionID == "" || shape.DSHVersion != agentlog.DSHFormatVersion {
+					foreign = true
+					continue
+				}
+				if encoded, ok := dshEncodeSegment(sessionID); !ok || encoded != baseName(parentDir(entry.Rel)) {
+					continue
+				}
+			default:
+				if sessionID == "" {
+					sessionID = agentlog.SessionStem(baseName(entry.Rel))
+				}
+			}
+			id, err := codec.seal(agent, sessionID, entry.Rel)
+			if err != nil {
+				return nil, false, err
+			}
+			candidates = append(candidates, agentlog.Candidate{
+				ID:        id,
+				Agent:     agent,
+				SessionID: sessionID,
+				UpdatedAt: entry.Modified.UTC().Format(time.RFC3339),
+			})
+			if len(candidates) == transcriptMaxCandidates {
+				return candidates, foreign, nil
+			}
+		}
+	}
+	if len(candidates) == 0 && len(entries) >= transcriptMaxListEntries {
+		return nil, false, errTranscriptLimit
 	}
 	return candidates, foreign, nil
 }
@@ -655,9 +669,18 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	}
 
 	size := head.Size
-	// 文件身份来自 stat（设备 + inode），不是内容前缀哈希：会话正常追加时它必须不变，
-	// 否则每次轮询都会被误判成轮转。
+	// 文件身份来自 stat，Codex 的规范路径也绑定到游标；追加首个 response_item
+	// 改变规范路径时重建旧视图，避免已展示的 event_msg 与新记录双记。
 	identity := head.Identity
+	if agent == agentlog.AgentCodex {
+		if !shape.ResponseItemPath {
+			shape.ResponseItemPath, err = transcriptCodexResponsePath(ctx, files, rel, head)
+			if err != nil {
+				return transcriptDegradeFromError(err, agent)
+			}
+		}
+		identity += ":" + strconv.FormatBool(shape.ResponseItemPath)
+	}
 	token := []string{sessionID, rel, identity}
 
 	start := size - transcriptInitialWindowBytes
@@ -726,7 +749,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		}
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
-	if !body.Exists || body.Size < size {
+	if !body.Exists || body.Size < size || body.Identity != head.Identity {
 		// 两次读取之间文件被替换或截断。
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
@@ -804,10 +827,16 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		Reset:     reset,
 		Skipped:   decoded.Skipped,
 	}
-	consumed := trueStart
+	consumed := decoded.Consumed
 	if last > first {
 		pageStart = records[first].Start
-		consumed = records[last-1].End
+		if last < len(records) {
+			consumed = records[last-1].End
+		}
+	}
+	// 没有完整行且窗口尚未到文件末尾，继续请求不会有进展；如实报读取上限。
+	if !backward && consumed <= start && start+transcriptInitialWindowBytes < size {
+		return transcriptDegrade(ChatReasonReadLimitExceeded, agent)
 	}
 	if backward {
 		// 下面还有更早的记录：被切掉的、或窗口之前还有内容。
@@ -828,9 +857,9 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 是它已经有的一整页（实测：260 条记录的文件点一次「加载更早」条数不变）。所以正向游标页
 	// 一律不产出 previous_cursor，客户端继续沿用初始页给出的锚点。
 	//
-	// 反向页一条记录都没解出来时同样不给 previous：那表示已经读到文件开头，客户端必须据此
-	// 收起「加载更早」（客户端把「反向请求 + 没有 previous_cursor」当作已经到底）。
-	offeredPrevious := backward && last > first
+	// 只有元数据的窗口同样需要 previous，以便继续找到更早的问答；只有没有完整行
+	// 或已经读到文件开头时才收起入口。
+	offeredPrevious := backward && decoded.Consumed > trueStart
 	if pageStart > 0 && offeredPrevious {
 		previous, err := codec.seal(sessionID, rel, identity, strconv.FormatInt(pageStart, 10))
 		if err != nil {
@@ -949,3 +978,38 @@ func transcriptReadOne(ctx context.Context, files transcriptFS, root transcriptR
 
 // hasCompleteLine 报告数据里是否至少有一行以换行结尾。
 func hasCompleteLine(data []byte) bool { return bytes.IndexByte(data, '\n') >= 0 }
+
+// transcriptCodexResponsePath 在有界范围内查找规范 response_item。
+// 首部身份字段齐全不能证明文件没有 response_item：前面的 turn_context 可以很长。
+// 只有确实扫到文件末尾才能采用 event_msg；超过预算时明确降级。
+func transcriptCodexResponsePath(ctx context.Context, files transcriptFS, rel string, head transcriptReadResult) (bool, error) {
+	var pending []byte
+	for offset := int64(0); offset < head.Size; {
+		if offset >= transcriptCodexProbeMaxBytes {
+			return false, errTranscriptLimit
+		}
+		length := min(int64(transcriptInitialWindowBytes), head.Size-offset, int64(transcriptCodexProbeMaxBytes)-offset, int64(transcriptMaxReadBytes-len(pending)))
+		part, err := transcriptReadOne(ctx, files, transcriptRootCodex, rel, offset, length)
+		if err != nil {
+			return false, err
+		}
+		if part.Err != nil {
+			return false, part.Err
+		}
+		if !part.Exists || part.Identity != head.Identity || part.Size < head.Size || len(part.Data) == 0 {
+			return false, errTranscriptNotFound
+		}
+		offset += int64(len(part.Data))
+		pending = append(pending, part.Data...)
+		if end := bytes.LastIndexByte(pending, '\n'); end >= 0 {
+			if agentlog.ReadFileShape(agentlog.AgentCodex, pending[:end+1]).ResponseItemPath {
+				return true, nil
+			}
+			pending = append(pending[:0], pending[end+1:]...)
+		}
+		if len(pending) >= transcriptMaxReadBytes {
+			return false, errTranscriptLimit
+		}
+	}
+	return false, nil
+}

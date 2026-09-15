@@ -402,7 +402,7 @@ func (d *dshDecoder) Close() {
 //
 // 真正卡住输出的是 dst 的 **cap**：WithDecodeAllCapLimit 让 DecodeAll 只解
 // `cap(dst)-len(dst)` 个字节，超出即报错。所以这里必须按限额分配 dst ——
-// 给一个固定的小 cap 会把所有正常帧都判成超限。
+// 小帧先用小容量，容量不足时逐步增长，直到本次预算；不会按最大预算给每帧预分配。
 // 返回的字节只有在 err == nil 时有效。
 func (d *dshDecoder) decode(frame []byte) ([]byte, error) {
 	limit := d.remaining
@@ -415,10 +415,25 @@ func (d *dshDecoder) decode(frame []byte) ([]byte, error) {
 	// 帧头声明的内容大小先过一遍账：还没解就知道超了，省掉一次分配。
 	// 没有声明大小（HasFCS=false）的帧照样由 decodeAllLimit 兜住。
 	var header zstd.Header
-	if err := header.Decode(frame); err == nil && header.HasFCS && header.FrameContentSize > uint64(limit) {
+	knownSize := header.Decode(frame) == nil && header.HasFCS
+	if knownSize && header.FrameContentSize > uint64(limit) {
 		return nil, errDSHDecodeLimit
 	}
-	plain, err := d.decoder.DecodeAll(frame, make([]byte, 0, limit))
+	// 有长度声明时按真实长度分配；无声明则从小窗口逐步扩大。
+	// DecodeAll 是无状态解码，容量不足可安全重试，且始终不越过本次预算。
+	capacity := min(transcriptHeadBytes, limit)
+	if knownSize {
+		capacity = int(header.FrameContentSize)
+	}
+	var plain []byte
+	var err error
+	for {
+		plain, err = d.decoder.DecodeAll(frame, make([]byte, 0, capacity))
+		if !errors.Is(err, zstd.ErrDecoderSizeExceeded) || capacity >= limit || knownSize {
+			break
+		}
+		capacity = min(capacity*2, limit)
+	}
 	if err != nil {
 		if errors.Is(err, zstd.ErrDecoderSizeExceeded) || errors.Is(err, zstd.ErrWindowSizeExceeded) || errors.Is(err, zstd.ErrFrameSizeExceeded) {
 			// 不是「帧坏了」，而是「这一帧比允许读的更多」：对用户是不同的下一步。

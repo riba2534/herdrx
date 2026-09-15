@@ -237,6 +237,18 @@ describe('VoiceInput', () => {
     expect(harness.transport.closes.length).toBeGreaterThan(0)
   })
 
+  it('stops synchronously on account replacement before old transcripts can enter the new draft', async () => {
+    const harness = renderVoice()
+    await startListening(harness)
+    await act(async () => {
+      await login('replacement-session')
+      harness.transport.emit({ t: 'transcript', text: 'old account words', final: true })
+    })
+    expect(harness.writeDraft).not.toHaveBeenCalled()
+    expect(captureStop).toHaveBeenCalled()
+    expect(harness.transport.closes.length).toBeGreaterThan(0)
+  })
+
   it('releases the microphone on pagehide', async () => {
     const harness = renderVoice()
     await startListening(harness)
@@ -258,6 +270,18 @@ describe('VoiceInput', () => {
     await startListening(harness)
     act(() => { harness.transport.emit({ t: 'error', code: 'voice_upstream_error', message: '语音上游暂时不可用，请稍后重试' }) })
     expect(screen.getByRole('status')).toHaveTextContent('语音上游暂时不可用，请稍后重试')
+    expect(captureStop).toHaveBeenCalled()
+    expect(harness.transport.closes).toContain('client')
+  })
+
+  it('stops capture when a PWA or browser tab moves to the background', async () => {
+    const harness = renderVoice()
+    await startListening(harness)
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(captureStop).toHaveBeenCalled()
+    expect(harness.transport.closes).toContain('client')
+    expect(screen.getByRole('button', { name: '开始语音输入' })).toBeTruthy()
   })
 
   it('surfaces a denied microphone permission without retrying', async () => {
@@ -266,6 +290,22 @@ describe('VoiceInput', () => {
     fireEvent.click(await waitFor(() => screen.getByRole('button', { name: '开始语音输入' })))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('未授权麦克风'))
     expect(harness.transport.opened).toHaveLength(0)
+  })
+
+  it('ignores a failed old connection after a new recording has started', async () => {
+    const harness = renderVoice()
+    let rejectOld!: (reason: Error) => void
+    const open = vi.spyOn(harness.transport, 'open')
+    open.mockImplementationOnce(() => new Promise((_, reject) => { rejectOld = reject }))
+    fireEvent.click(await screen.findByRole('button', { name: '开始语音输入' }))
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '停止语音输入' }))
+    await startListening(harness)
+    await act(async () => rejectOld(new Error('old connection failed')))
+    expect(screen.getByRole('button', { name: '停止语音输入' })).toBeTruthy()
+    captureStop.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '停止语音输入' }))
+    expect(captureStop).toHaveBeenCalled()
   })
 
   it('hides the audio reply switch when the operator left it off', async () => {

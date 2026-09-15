@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AUTO_FIT_MIN_FONT_SIZE, autoFitFont, fittedTerminalFont, TERMINAL_FONT_FAMILY, whenFontsReady } from './terminalFit'
+import { AUTO_FIT_MIN_FONT_SIZE, autoFitFont, fittedTerminalFont, resolvedTerminalFontFamily, TERMINAL_FONT_FAMILY, whenFontsReady } from './terminalFit'
 
 describe('offscreen terminal sizing', () => {
   const bounds = { width: 1260, height: 840, cols: 200, rows: 80, lineHeight: 1, letterSpacing: 0, dpr: 1 }
@@ -47,6 +47,24 @@ describe('offscreen terminal sizing', () => {
     expect(autoFitFont({ ...room, width: 200, height: 80 }, measure)).toBeNull()
     expect(autoFitFont({ ...room, width: 0 }, measure)).toBeNull()
     expect(autoFitFont(room, () => null)).toBeNull()
+  })
+
+  it('uses generic monospace when the browser substitutes a proportional font', () => {
+    const host = document.createElement('div')
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { width: this.textContent?.startsWith('W') ? 384 : 128 } as DOMRect
+    })
+    try {
+      expect(resolvedTerminalFontFamily(host)).toBe('monospace')
+      expect(host.childElementCount).toBe(0)
+    } finally { measure.mockRestore() }
+  })
+
+  it('keeps the preferred font when its wide and narrow glyphs share a cell width', () => {
+    const host = document.createElement('div')
+    const measure = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 256 } as DOMRect)
+    try { expect(resolvedTerminalFontFamily(host)).toBe(TERMINAL_FONT_FAMILY) }
+    finally { measure.mockRestore() }
   })
 
   it('waits for document.fonts.ready before measuring', async () => {

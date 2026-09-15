@@ -176,17 +176,16 @@ func (s *Session) touch() {
 }
 
 func (s *Session) watchIdle(ctx context.Context, stop <-chan struct{}) {
-	interval := time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
 	idle := time.Duration(s.gateway.cfg.IdleSeconds) * time.Second
+	timer := time.NewTimer(idle)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-stop:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			s.mu.Lock()
 			stale := s.gateway.now().Sub(s.lastActivity)
 			cancel := s.cancel
@@ -197,6 +196,7 @@ func (s *Session) watchIdle(ctx context.Context, stop <-chan struct{}) {
 				}
 				return
 			}
+			timer.Reset(idle - stale)
 		}
 	}
 }

@@ -62,6 +62,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export type CLIRelease = { status: 'available' | 'unpublished' | 'unavailable'; version?: string; prerelease?: boolean }
 export type RelayOffer = { available: boolean; workbench?: string; token?: string; address?: string; expires_at?: string }
 
+async function workbenchPositionRequest<T>(init: RequestInit = {}): Promise<T> {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 5000)
+  try {
+    return await request<T>('/api/me/workbench-session', { ...init, signal: controller.signal })
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
 export const api = {
   cliRelease: () => request<CLIRelease>('/api/cli-release'),
   relayOffer: () => request<RelayOffer>('/api/tailcat/relay-offer', { method: 'POST' }),
@@ -73,8 +83,8 @@ export const api = {
   register: (input: { email: string; password: string; display_name: string; invite_code: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/register', { method: 'POST', body: JSON.stringify(input) }),
   me: (init?: RequestInit) => request<{ user: User; csrf_token: string; session_id: string }>('/api/me', init),
-  workbenchSession: () => request<{ session: WorkbenchSession | null }>('/api/me/workbench-session'),
-  saveWorkbenchSession: (input: WorkbenchSession) => request<{ session: WorkbenchSession }>('/api/me/workbench-session', { method: 'PUT', body: JSON.stringify(input), keepalive: true }),
+  workbenchSession: () => workbenchPositionRequest<{ session: WorkbenchSession | null }>(),
+  saveWorkbenchSession: (input: WorkbenchSession & { writer_id?: string; sequence?: number }) => workbenchPositionRequest<{ session: WorkbenchSession }>({ method: 'PUT', body: JSON.stringify(input), keepalive: true }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
   hosts: () => request<{ hosts: Host[] }>('/api/hosts/'),
   host: (id: string) => request<{ host: Host }>(`/api/hosts/${encodeURIComponent(id)}/`),

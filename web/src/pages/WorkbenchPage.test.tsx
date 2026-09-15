@@ -550,7 +550,7 @@ describe('workbench workspace groups', () => {
     snapshot.focused_pane_id = 'w3:p1'
     render(<WorkbenchPage hostID="host"/>)
     const toggle = await screen.findByRole('button', { name: '收起 astergate 的 Worktree 组' })
-    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-disabled', 'true'))
     fireEvent.click(toggle)
     expect(screen.getByText('codex-reset-cards')).toBeInTheDocument()
     expect(screen.getByText('codex-reset-cards').closest('button')).toHaveAttribute('aria-current', 'true')
@@ -583,6 +583,7 @@ describe('workbench workspace groups', () => {
 
   it('selects an indented child workspace', async () => {
     render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
     const child = await screen.findByRole('button', { name: /codex-reset-cards/ })
     fireEvent.click(child)
     expect(child).toHaveAttribute('aria-current', 'true')
@@ -778,7 +779,7 @@ describe('mobile auxiliary keybar paste', () => {
     // 切完后 Composer 的草稿键应换成新的 pane，证明选择确实变了。
     const box = screen.getByRole('textbox', { name: '本地输入内容' })
     fireEvent.change(box, { target: { value: 'probe' } })
-    await waitFor(() => expect(Object.keys(localStorage).some((key) => key.endsWith('w1%3Ap2'))).toBe(true))
+    await waitFor(() => expect(localStorage.getItem('herdrx.composer.v1.workbench-session/host/w1%3Ap2')).toBe('probe'))
     await act(async () => release('切换后读出的内容'))
     await waitFor(() => expect(call).toHaveBeenCalledTimes(1))
     expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '切换后读出的内容', keys: [] })

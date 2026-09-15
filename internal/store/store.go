@@ -272,6 +272,12 @@ CREATE TABLE IF NOT EXISTS user_workbench_sessions (
   device_id TEXT NOT NULL DEFAULT '',
   client_class TEXT NOT NULL DEFAULT '' CHECK(client_class IN ('','desktop','mobile')),
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_workbench_writers (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  writer_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence > 0),
+  PRIMARY KEY(session_id, writer_id)
 );`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate sqlite schema: %w", err)

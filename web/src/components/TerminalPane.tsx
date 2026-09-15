@@ -10,7 +10,7 @@ import { ChatView } from './ChatView'
 import { PaneViewToggle } from './PaneViewToggle'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
-import { autoFitFont, createFontMeasure, fittedTerminalFont, responsiveTerminalSize, TERMINAL_FONT_FAMILY, whenFontsReady } from '../lib/terminalFit'
+import { autoFitFont, createFontMeasure, fittedTerminalFont, responsiveTerminalSize, resolvedTerminalFontFamily, whenFontsReady } from '../lib/terminalFit'
 import { Modal } from './Modal'
 import { attachTerminalTouch } from '../lib/terminalTouch'
 import { DEFAULT_DISPLAY, type TerminalDisplay } from '../lib/displayPreferences'
@@ -479,7 +479,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (!hostRef.current) return
     const terminal = new Terminal({
       allowProposedApi: true, cursorBlink: true, cursorStyle: 'block', cursorInactiveStyle: 'outline',
-      fontFamily: TERMINAL_FONT_FAMILY, fontSize: 14, lineHeight: 1,
+      fontFamily: resolvedTerminalFontFamily(hostRef.current), fontSize: 14, lineHeight: 1,
       scrollback: 0, theme, minimumContrastRatio: enhancedContrast ? 4.5 : 1, convertEol: false,
       macOptionIsMeta: optionAsMeta, macOptionClickForcesSelection: optionAsMeta, screenReaderMode,
     })

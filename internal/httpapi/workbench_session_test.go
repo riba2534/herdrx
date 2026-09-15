@@ -110,3 +110,21 @@ func TestWorkbenchSessionHandoffRoundTrip(t *testing.T) {
 		t.Fatalf("phone client did not become the last writer: %v", again)
 	}
 }
+
+func TestWorkbenchSessionRejectsLateWrites(t *testing.T) {
+	_, _, srv, admin, info := authFixture(t)
+	csrf := info["csrf_token"].(string)
+	created := postJSON(t, admin, srv.URL+"/api/hosts/", csrf, map[string]any{"name": "Desk", "transport": "local", "auth_method": "generated"}, 201)
+	hostID := created["host"].(map[string]any)["id"].(string)
+	write := func(sequence int, workspace string, status int) {
+		requestJSON(t, admin, "PUT", srv.URL+"/api/me/workbench-session", csrf, map[string]any{"host_id": hostID, "workspace_id": workspace, "writer_id": "test-page-writer", "sequence": sequence}, status)
+	}
+	write(0, "invalid", 400)
+	write(2, "new", 200)
+	write(1, "old", 409)
+	write(2, "duplicate", 409)
+	got := requestJSON(t, admin, "GET", srv.URL+"/api/me/workbench-session", "", nil, 200)
+	if got["session"].(map[string]any)["workspace_id"] != "new" {
+		t.Fatalf("late request changed saved position: %v", got)
+	}
+}

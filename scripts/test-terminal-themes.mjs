@@ -3,7 +3,7 @@
 // xterm 5.5 targets half the configured contrast for dim cells (2.25 at 4.5).
 import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
-import { chromium, firefox, webkit } from '../web/node_modules/@playwright/test/index.mjs'
+import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
 import { terminalThemes } from '../web/src/lib/themes.ts'
 
 const path = (relative) => fileURLToPath(new URL(relative, new URL('../', import.meta.url)))
@@ -34,12 +34,18 @@ for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium']
           const workbench = document.querySelector('.workbench')
           workbench.style.setProperty('--terminal', theme.background)
           workbench.style.setProperty('--terminal-ink', theme.foreground)
-          const terminal = new window.Terminal({ cols: 60, rows: 8, theme, minimumContrastRatio })
+          // Keep the color sample in one span per ANSI style. xterm's default
+          // named fonts may become proportional fontconfig substitutions on
+          // WebKit and split NORMAL into individually spaced character spans.
+          const terminal = new window.Terminal({ cols: 60, rows: 8, fontFamily: 'monospace', theme, minimumContrastRatio })
           terminal.open(document.getElementById('terminal'))
           window.testTerminal = terminal
           await new Promise((done) => terminal.write('\x1b[?25lNORMAL\r\n\x1b[2mDIM\r\n\x1b[22;31mRED\r\n\x1b[2mDIMRED\r\n\x1b[22;37mWHITE\r\n\x1b[2mDIMWHITE\x1b[0m', done))
           await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
         }, { theme, minimumContrastRatio })
+        // write() completes parsing; wait for the rendered fixture itself
+        // before sampling either stylesheet configuration.
+        await expect(page.locator('.xterm-rows')).toContainText('DIMWHITE')
         const sample = () => page.evaluate((background) => {
           const canvas = document.createElement('canvas')
           canvas.width = canvas.height = 1

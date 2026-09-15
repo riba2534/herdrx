@@ -269,11 +269,15 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(submit).not.toHaveBeenCalled()
   })
 
-  it('发送期间新加的图片不会被本次成功结算清掉', async () => {
+  it.each([false, true])('发送期间新加的图片不会打断提交或被结算清掉（上传挂起：%s）', async (pendingUpload) => {
     // 两腿各占一个 deferred：放行第一腿后才会发出第二腿，逐腿控制时序。
     const legs: Array<() => void> = []
     const submit = vi.fn(() => new Promise<void>((resolve) => { legs.push(resolve) }))
-    const stageImage = vi.fn(async (_host: string, _pane: string, file: File) => ({ path: `/remote/${file.name}` }))
+    let finishUpload!: () => void
+    const stageImage = vi.fn(async (_host: string, _pane: string, file: File) => {
+      if (pendingUpload && file.name === 'b.png') await new Promise<void>((resolve) => { finishUpload = resolve })
+      return { path: `/remote/${file.name}` }
+    })
     const { wrapper } = renderComposer({ submit, stageImage })
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
@@ -284,7 +288,7 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
     // 发送在飞时又加了一张：它不属于本次提交快照。
     fireEvent.drop(wrapper, dropData([imageFile('b.png')]))
-    await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
+    if (!pendingUpload) await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
 
     // 两腿都放行才算送达；中间新加的 b.png 不参与本次提交。
     await act(async () => { legs[0]() })
@@ -292,6 +296,7 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
     await act(async () => { legs[1]() })
     await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
+    if (pendingUpload) await act(async () => finishUpload())
     // 只清掉本次提交过的那张，发送期间新加的仍然在。
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(1))
     expect(screen.getByText('b.png')).toBeInTheDocument()

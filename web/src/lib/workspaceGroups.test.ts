@@ -6,6 +6,7 @@ import {
   gitWorkspaceListTargets,
   groupWorkspaces,
   isLinkedWorktree,
+  replaceWorkspaceBranches,
   visibleWorkspaceGroups,
   workspaceBranchText,
   workspaceGroupHasChildren,
@@ -249,6 +250,14 @@ describe('worktree.list branch join', () => {
     expect(worktreeListEntries([{ path: '/workspace/example', branch: 'main' }])).toHaveLength(1)
     expect(worktreeListEntries({})).toEqual([])
     expect(worktreeListEntries(null)).toEqual([])
+  })
+
+  it('clears detached and missing checkouts while preserving another repository', () => {
+    const other = workspace({ workspace_id: 'other', label: 'other', number: 9 })
+    const result = { worktrees: [{ path: parent.worktree!.checkout_path, open_workspace_id: parent.workspace_id, branch: null }] }
+    const branches = replaceWorkspaceBranches({ w3: 'main', w5: 'feature/old', other: 'unrelated' }, result, [parent, child, other], 'w3')
+    expect(branches).toEqual({ w3: '', w5: '', other: 'unrelated' })
+    expect(workspaceBranchText({ ...parent, branch: 'stale-snapshot' }, branches)).toBe('')
   })
 
   it('joins branch by open_workspace_id then checkout path', () => {

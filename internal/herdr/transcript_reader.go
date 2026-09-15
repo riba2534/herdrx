@@ -13,7 +13,7 @@ const transcriptReaderSource = `import base64, errno, json, os, stat, sys
 ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "dsh": ".dsh/sessions"}
 CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0) | CLOEXEC
-FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | CLOEXEC
+FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | CLOEXEC | os.O_NONBLOCK
 ENTRY_LIMIT = 500
 MAX_READ = 1 << 20
 
@@ -68,7 +68,14 @@ def collect(root_fd, rel, depth, entries):
         return
     fd = open_dir(root_fd, rel)
     try:
-        names = sorted(os.listdir(fd))
+        def newest_first(name):
+            try:
+                info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                is_dir = stat.S_ISDIR(info.st_mode)
+                return (is_dir, name if is_dir else "", info.st_mtime_ns, name)
+            except OSError:
+                return (False, "", 0, name)
+        names = sorted(os.listdir(fd), key=newest_first, reverse=True)
         for name in names:
             if len(entries) >= ENTRY_LIMIT:
                 return
@@ -192,7 +199,11 @@ def main():
     if not home.startswith("/"):
         return {"ok": False, "error": "home_unavailable"}
     try:
-        root_fd = os.open(os.path.join(home, ROOTS[agent]), DIR_FLAGS)
+        home_fd = os.open(home, DIR_FLAGS)
+        try:
+            root_fd = open_dir(home_fd, ROOTS[agent])
+        finally:
+            os.close(home_fd)
     except OSError as exc:
         return {"ok": False, "error": "root_unavailable" if exc.errno == errno.ENOENT else "denied"}
     try:

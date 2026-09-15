@@ -22,8 +22,10 @@ import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneV
 import { navigate } from '../lib/navigation'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel, workspaceSwitcherDetail } from '../lib/labels'
-import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchSessionPayload, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
-import { branchesFromWorktreeList, gitWorkspaceFetchKey, gitWorkspaceListTargets, isLinkedWorktree, visibleWorkspaceGroups, worktreeListEntries, workspaceBranchText, workspaceGroupHasChildren, workspaceGroupKey, workspaceRepoKey } from '../lib/workspaceGroups'
+import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
+import { readWorkbenchSession, useWorkbenchSessionPersistence } from '../lib/workbenchSessionPersistence'
+import { gitWorkspaceFetchKey, isLinkedWorktree, visibleWorkspaceGroups, workspaceBranchText, workspaceGroupHasChildren, workspaceGroupKey, workspaceRepoKey } from '../lib/workspaceGroups'
+import { useWorkspaceBranches } from '../lib/useWorkspaceBranches'
 import { terminalThemes } from '../lib/themes'
 import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
 
@@ -144,8 +146,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [promptError, setPromptError] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => loadCollapsedGroups(hostID))
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
-  const [gitWorkspaces, setGitWorkspaces] = useState<Record<string, boolean>>({})
-  const [workspaceBranches, setWorkspaceBranches] = useState<Record<string, string>>({})
+  const { gitWorkspaces, workspaceBranches, refreshWorkspaceBranches } = useWorkspaceBranches(client, connection, snapshot?.workspaces || [])
   const previousStatuses = useRef(new Map<string, string>())
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
   // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
@@ -355,9 +356,9 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     setRestore(cached === undefined
       ? { phase: 'loading', location: null }
       : { phase: 'ready', location: workbenchLocationFromSession(cached, hostID) })
-    void api.workbenchSession().then(({ session }) => {
-      cacheWorkbenchSession(session ?? null)
+    void readWorkbenchSession().then(({ session }) => {
       if (cancelled) return
+      cacheWorkbenchSession(session ?? null)
       setRestore({ phase: 'ready', location: workbenchLocationFromSession(session, hostID) })
     }).catch(() => {
       if (!cancelled) setRestore((current) => current.phase === 'ready' ? current : { phase: 'ready', location: null })
@@ -365,59 +366,15 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     return () => { cancelled = true }
   }, [hostID])
 
-  useEffect(() => {
-    if (restore.phase !== 'ready' || restore.location || !workspaceID) return
-    const persist = () => {
-      void api.saveWorkbenchSession(workbenchSessionPayload({
-        host_id: hostID,
-        workspace_id: workspaceID,
-        tab_id: tabID,
-        pane_id: paneID,
-      }, mobile)).catch(() => {})
-    }
-    const timer = window.setTimeout(persist, 300)
-    let hiding = false
-    const hide = () => {
-      if (hiding) return
-      hiding = true
-      persist()
-    }
-    const onHidden = () => { if (document.visibilityState === 'hidden') hide() }
-    window.addEventListener('pagehide', hide)
-    document.addEventListener('visibilitychange', onHidden)
-    return () => {
-      window.clearTimeout(timer)
-      window.removeEventListener('pagehide', hide)
-      document.removeEventListener('visibilitychange', onHidden)
-    }
-  }, [restore, hostID, workspaceID, tabID, paneID, mobile])
+  useWorkbenchSessionPersistence(restore.phase === 'ready' && !restore.location && workspaceID ? {
+    host_id: hostID, workspace_id: workspaceID, tab_id: tabID, pane_id: paneID,
+  } : null, mobile)
 
   useEffect(() => {
     setCollapsedGroups(loadCollapsedGroups(hostID))
-    setGitWorkspaces({})
-    setWorkspaceBranches({})
   }, [hostID])
 
   const worktreeFetchKey = gitWorkspaceFetchKey(snapshot?.workspaces || [])
-  useEffect(() => {
-    const list = snapshot?.workspaces || []
-    if (!worktreeFetchKey || connection !== 'ready') return
-    let cancelled = false
-    void Promise.all(gitWorkspaceListTargets(list).map((id) => client.call('worktree.list', { workspace_id: id }).then((result) => {
-      if (cancelled) return
-      setGitWorkspaces((current) => {
-        const next = { ...current, [id]: true }
-        for (const item of worktreeListEntries(result)) {
-          if (typeof item.open_workspace_id === 'string' && item.open_workspace_id) next[item.open_workspace_id] = true
-        }
-        return next
-      })
-      setWorkspaceBranches((current) => ({ ...current, ...branchesFromWorktreeList(result, list) }))
-    }).catch(() => {
-      if (!cancelled) setGitWorkspaces((current) => ({ ...current, [id]: false }))
-    })))
-    return () => { cancelled = true }
-  }, [client, connection, worktreeFetchKey])
 
   useEffect(() => {
     const selected = snapshot?.workspaces.find((item) => item.workspace_id === workspaceID)
@@ -457,7 +414,11 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       }
     }
     if (restore.phase !== 'ready') return
-    if (restore.location && !userPickedLocation.current) {
+    if (restore.location && userPickedLocation.current) {
+      // A manual choice consumes the restore attempt too; otherwise a late GET
+      // leaves location set forever and disables all subsequent position saves.
+      setRestore({ phase: 'ready', location: null })
+    } else if (restore.location) {
       const restored = matchWorkbenchLocation(snapshot, restore.location)
       if (restored) {
         setWorkspaceID(restored.workspaceID)
@@ -680,12 +641,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     // a failed one is retried, otherwise missing branch text could never recover.
     if (workspace.branch || workspaceBranchText(workspace, workspaceBranches) || state === true) return
     if (state === false && !workspace.worktree) return
-    void client.call('worktree.list', { workspace_id: workspace.workspace_id }).then((result) => {
-      setGitWorkspaces((current) => ({ ...current, [workspace.workspace_id]: true }))
-      setWorkspaceBranches((current) => ({ ...current, ...branchesFromWorktreeList(result, snapshot?.workspaces || []) }))
-    }).catch(() => {
-      setGitWorkspaces((current) => ({ ...current, [workspace.workspace_id]: false }))
-    })
+    void refreshWorkspaceBranches(workspace.workspace_id)
   }
 
   const openAgentContextMenu = (event: ReactMouseEvent, agent: Agent) => {

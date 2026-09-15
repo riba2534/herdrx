@@ -123,6 +123,29 @@ describe('HttpVoiceTransport.open', () => {
     return new HttpVoiceTransport()
   }
 
+  it('rejects a delayed ticket response after authentication changes', async () => {
+    let respond!: (response: Response) => void
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { respond = resolve })))
+    const opening = new HttpVoiceTransport().open({ output: 'text' })
+    const result = opening.catch((error: unknown) => error)
+    invalidateAuthentication()
+    respond(jsonResponse({ ticket: 'old-ticket', expiresAt: 'later', capabilities }))
+    await expect(result).resolves.toMatchObject({ code: 'auth_changed' })
+    expect(FakeWebSocket.instances).toHaveLength(0)
+  })
+
+  it('closes a pending websocket handshake when authentication changes', async () => {
+    const transport = transportWith({ ticket: 't', expiresAt: 'later', capabilities })
+    const result = transport.open({ output: 'text' }).catch((error: unknown) => error)
+    const socket = await nextSocket()
+    invalidateAuthentication()
+    // A late browser open must not revive the previous login's handle.
+    socket.open()
+    await expect(result).resolves.toMatchObject({ code: 'auth_changed' })
+    expect(socket.closedWith.length).toBeGreaterThan(0)
+    expect(socket.sent).toHaveLength(0)
+  })
+
   it('posts only the output mode and carries the CSRF token', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ticket: 'ticket-1', expiresAt: 'later', capabilities }))
     vi.stubGlobal('fetch', fetchMock)
@@ -188,6 +211,31 @@ describe('RelaySession', () => {
     const handle = await opening
     return { handle, socket }
   }
+
+  it('drops buffered transcripts and audio after an authentication change', async () => {
+    const { handle, socket } = await opened('allowed', 'audio')
+    socket.message(JSON.stringify({ t: 'transcript', text: 'old login', final: true }))
+    socket.message(new Uint8Array([1, 2]).buffer)
+    invalidateAuthentication()
+    const events: VoiceEvent[] = []
+    const audio: ArrayBuffer[] = []
+    handle.onEvent((event) => events.push(event))
+    handle.onAudio((frame) => audio.push(frame))
+    socket.message(new Uint8Array([3, 4]).buffer)
+    expect(events).toEqual([{ t: 'closed', reason: 'auth' }])
+    expect(audio).toHaveLength(0)
+    expect(socket.closedWith.length).toBeGreaterThan(0)
+  })
+
+  it('reports an abrupt socket close exactly once so capture can stop', async () => {
+    const { handle, socket } = await opened()
+    const events: VoiceEvent[] = []
+    handle.onEvent((event) => events.push(event))
+    socket.emit('close')
+    socket.emit('close')
+    socket.message(JSON.stringify({ t: 'transcript', text: 'late', final: true }))
+    expect(events).toEqual([{ t: 'closed', reason: 'transport' }])
+  })
 
   it('delivers every frame the server can send', async () => {
     const { handle, socket } = await opened()

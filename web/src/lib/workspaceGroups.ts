@@ -70,8 +70,7 @@ export function gitWorkspaceListTargets(workspaces: Workspace[]): string[] {
 
 export function gitWorkspaceFetchKey(workspaces: Workspace[]): string {
   return workspaces
-    .filter((workspace) => workspaceRepoKey(workspace))
-    .map((workspace) => `${workspace.workspace_id}\t${workspaceRepoKey(workspace)}\t${workspace.worktree?.checkout_path || ''}`)
+    .map((workspace) => JSON.stringify([workspace.workspace_id, workspaceRepoKey(workspace), workspace.worktree?.checkout_path || '', workspace.branch || '']))
     .sort()
     .join('\n')
 }
@@ -153,8 +152,10 @@ export function worktreeListEntries(result: unknown): WorktreeListItem[] {
 export function branchesFromWorktreeList(result: unknown, workspaces: Workspace[]): Record<string, string> {
   const branches: Record<string, string> = {}
   for (const item of worktreeListEntries(result)) {
-    const branch = typeof item.branch === 'string' ? item.branch.trim() : ''
-    if (!branch) continue
+    // null is Git's detached HEAD: preserve it as an explicit empty value so
+    // callers can clear an older cached branch instead of keeping it forever.
+    const branch = item.branch === null ? '' : typeof item.branch === 'string' ? item.branch.trim() : undefined
+    if (branch === undefined || (item.branch !== null && !branch)) continue
     if (typeof item.open_workspace_id === 'string' && item.open_workspace_id) {
       const byID = workspaces.find((workspace) => workspace.workspace_id === item.open_workspace_id)
       if (byID) {
@@ -170,8 +171,20 @@ export function branchesFromWorktreeList(result: unknown, workspaces: Workspace[
   return branches
 }
 
+export function replaceWorkspaceBranches(current: Record<string, string>, result: unknown, workspaces: Workspace[], workspaceID: string): Record<string, string> {
+  const source = workspaces.find((workspace) => workspace.workspace_id === workspaceID)
+  if (!source) return current
+  const key = workspaceRepoKey(source)
+  const scope = key ? workspaces.filter((workspace) => workspaceRepoKey(workspace) === key) : [source]
+  const next = { ...current }
+  // worktree.list is a complete repository listing; a missing checkout or a
+  // detached HEAD must remove its previous branch without touching other repos.
+  for (const workspace of scope) next[workspace.workspace_id] = ''
+  return { ...next, ...branchesFromWorktreeList(result, scope) }
+}
+
 export function workspaceBranchText(workspace: Workspace, branches?: Record<string, string>): string {
   const listed = branches?.[workspace.workspace_id]
-  if (listed) return listed
+  if (listed !== undefined) return listed
   return typeof workspace.branch === 'string' ? workspace.branch.trim() : ''
 }

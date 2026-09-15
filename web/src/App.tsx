@@ -1,5 +1,5 @@
 import { BrandIcon } from './components/Brand'
-import { lazy, Suspense, useEffect, useLayoutEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { useAuth } from './auth'
 import { AuthPage } from './pages/AuthPage'
@@ -10,6 +10,7 @@ import { setAppearanceScope } from './lib/appearance'
 import { api } from './lib/api'
 import { navigate } from './lib/navigation'
 import { usePWA } from './lib/pwa'
+import { readWorkbenchSession } from './lib/workbenchSessionPersistence'
 import {
   hasWorkbenchVisit,
   markWorkbenchVisit,
@@ -60,7 +61,10 @@ export default function App() {
 
 function useRootWorkbenchRestore(enabled: boolean, path: string) {
   const [ready, setReady] = useState(false)
+  const previousPath = useRef(path)
   useEffect(() => {
+    const returnedToHosts = path === '/' && previousPath.current !== '/'
+    previousPath.current = path
     if (!enabled) {
       setReady(true)
       return
@@ -70,13 +74,20 @@ function useRootWorkbenchRestore(enabled: boolean, path: string) {
       setReady(true)
       return
     }
+    // A deliberate navigation to the host list takes precedence over another
+    // device's last location. Automatic handoff only runs when opening the root.
+    if (returnedToHosts) {
+      markWorkbenchVisit()
+      setReady(true)
+      return
+    }
     let cancelled = false
     setReady(false)
     void (async () => {
       try {
-        const { session } = await api.workbenchSession()
-        cacheWorkbenchSession(session ?? null)
+        const { session } = await readWorkbenchSession()
         if (cancelled) return
+        cacheWorkbenchSession(session ?? null)
         if (shouldRestoreWorkbenchSession(session, {
           path,
           deviceID: workbenchDeviceID(),

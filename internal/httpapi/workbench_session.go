@@ -32,6 +32,8 @@ type workbenchSessionRequest struct {
 	PaneID      string `json:"pane_id"`
 	DeviceID    string `json:"device_id"`
 	ClientClass string `json:"client_class"`
+	WriterID    string `json:"writer_id"`
+	Sequence    int64  `json:"sequence"`
 }
 
 func (a *API) getWorkbenchSession(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +61,10 @@ func (a *API) putWorkbenchSession(w http.ResponseWriter, r *http.Request) {
 	input.PaneID = strings.TrimSpace(input.PaneID)
 	input.DeviceID = strings.TrimSpace(input.DeviceID)
 	input.ClientClass = strings.TrimSpace(input.ClientClass)
+	if (input.WriterID != "" || input.Sequence != 0) && (!validWorkbenchRef(input.WriterID, 8, 128) || input.Sequence < 1 || input.Sequence > 9007199254740991) {
+		writeError(w, 400, "invalid_session", "工作台位置序号无效，请刷新后重试")
+		return
+	}
 	if !validWorkbenchRef(input.HostID, 1, 128) {
 		writeError(w, 400, "invalid_session", "请选择要恢复的主机")
 		return
@@ -85,14 +91,21 @@ func (a *API) putWorkbenchSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	saved, err := a.store.PutWorkbenchSession(r.Context(), store.WorkbenchSession{
-		UserID:      userFromContext(r.Context()).ID,
-		HostID:      input.HostID,
-		WorkspaceID: input.WorkspaceID,
-		TabID:       input.TabID,
-		PaneID:      input.PaneID,
-		DeviceID:    input.DeviceID,
-		ClientClass: input.ClientClass,
+		LoginSessionID: sessionFromContext(r.Context()).ID,
+		WriterID:       input.WriterID,
+		Sequence:       input.Sequence,
+		UserID:         userFromContext(r.Context()).ID,
+		HostID:         input.HostID,
+		WorkspaceID:    input.WorkspaceID,
+		TabID:          input.TabID,
+		PaneID:         input.PaneID,
+		DeviceID:       input.DeviceID,
+		ClientClass:    input.ClientClass,
 	})
+	if errors.Is(err, store.ErrStaleWorkbenchSession) {
+		writeError(w, 409, "stale_session", "已有更新的工作台位置，此次旧位置未保存")
+		return
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, 404, "host_not_found", "主机不存在或无权访问")
 		return

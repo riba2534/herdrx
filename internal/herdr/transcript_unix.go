@@ -33,7 +33,7 @@ func openRegularNoFollow(root string, parts []string) (*os.File, error) {
 		}
 		fd = child
 	}
-	file, err := unix.Openat(fd, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	file, err := unix.Openat(fd, parts[len(parts)-1], unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	unix.Close(fd)
 	if err != nil {
 		return nil, transcriptOpenError(err, false)

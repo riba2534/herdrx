@@ -75,7 +75,8 @@ export function ChatMediaComposer(props: ChatMediaComposerProps) {
    */
   // 两腿提交：正文与回车分别调用，pane 固定为本次提交开始时选中的终端。
   const submit = useCallback(async (targetPane: string, text: string, keys: string[]) => {
-    if (store.busy(hostID, paneID)) throw new Error('图片仍在上传，请稍候再发送')
+    // 新增附件只阻止下一次正文提交，不能打断已经发送正文的提交回车。
+    if (keys.length === 0 && store.busy(hostID, paneID)) throw new Error('图片仍在上传，请稍候再发送')
     await submitRef.current(targetPane, text, keys)
   }, [store, hostID, paneID])
 
