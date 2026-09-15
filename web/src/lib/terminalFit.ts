@@ -52,6 +52,17 @@ export function fittedTerminalFont(bounds: FitBounds, measure: FontMeasure, maxF
   return best
 }
 
+// Auto mode shows the whole terminal while the fitted font stays readable.
+// Below this floor, cropping with a scrollable pane beats unreadable text, so
+// auto falls back to the fixed-size view instead. Matches the 10 px minimum of
+// the font-size control.
+export const AUTO_FIT_MIN_FONT_SIZE = 10
+
+export function autoFitFont(bounds: FitBounds, measure: FontMeasure, maxFontSize = 14): number | null {
+  const fitted = fittedTerminalFont(bounds, measure, maxFontSize)
+  return fitted !== null && fitted >= AUTO_FIT_MIN_FONT_SIZE ? fitted : null
+}
+
 export function createFontMeasure(host: HTMLElement, fontFamily: string): { measure: FontMeasure; dispose: () => void } {
   let context: OffscreenCanvasRenderingContext2D | null = null
   try {

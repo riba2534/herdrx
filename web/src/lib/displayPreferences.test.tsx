@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DEFAULT_DISPLAY, DISPLAY_STORAGE_KEY, readDisplayProfiles, useTerminalDisplay, useWorkbenchViewport } from './displayPreferences'
+import { DEFAULT_DISPLAY, DISPLAY_MIGRATION_KEY, DISPLAY_STORAGE_KEY, readDisplayProfiles, useTerminalDisplay, useWorkbenchViewport } from './displayPreferences'
 
 beforeEach(() => localStorage.clear())
 afterEach(() => vi.unstubAllGlobals())
@@ -35,7 +35,7 @@ describe('display preferences', () => {
     localStorage.setItem(DISPLAY_STORAGE_KEY, '{broken')
     expect(readDisplayProfiles()).toEqual(DEFAULT_DISPLAY)
     localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { mode: 'unsupported', fontSize: -50, zoom: 900 }, mobile: { fontSize: '12', zoom: null } }))
-    expect(readDisplayProfiles()).toEqual({ desktop: { mode: 'fixed', fontSize: 10, zoom: 200 }, mobile: DEFAULT_DISPLAY.mobile })
+    expect(readDisplayProfiles()).toEqual({ desktop: { mode: 'auto', fontSize: 10, zoom: 200 }, mobile: DEFAULT_DISPLAY.mobile })
   })
 
   it('migrates only the legacy desktop fit 14/100 default and keeps later explicit fit', () => {
@@ -53,6 +53,31 @@ describe('display preferences', () => {
     act(() => result.current.update({ mode: 'fit', zoom: 100 }))
     unmount()
     expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 100, mode: 'fit' })
+  })
+
+  it('migrates the previous fixed 14px desktop default once and keeps later explicit choices', () => {
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { fontSize: 14, zoom: 100, mode: 'fixed' }, mobile: DEFAULT_DISPLAY.mobile }))
+    expect(readDisplayProfiles().desktop).toEqual(DEFAULT_DISPLAY.desktop)
+    // Visitors who only used the title-bar zoom buttons are migrated too, and keep the zoom.
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { fontSize: 14, zoom: 130, mode: 'fixed' }, mobile: DEFAULT_DISPLAY.mobile }))
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 130, mode: 'auto' })
+    // A changed font size is an explicit choice, not a shipped default.
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { fontSize: 16, zoom: 100, mode: 'fixed' }, mobile: DEFAULT_DISPLAY.mobile }))
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 16, zoom: 100, mode: 'fixed' })
+    localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify({ desktop: { fontSize: 14, zoom: 100, mode: 'auto' }, mobile: DEFAULT_DISPLAY.mobile }))
+    expect(readDisplayProfiles().desktop).toEqual(DEFAULT_DISPLAY.desktop)
+    // The migration runs once, so picking fixed 14px afterwards survives a reload.
+    const { result, unmount } = renderHook(() => useTerminalDisplay(false))
+    act(() => result.current.update({ fontSize: 14, zoom: 100, mode: 'fixed' }))
+    unmount()
+    expect(localStorage.getItem(DISPLAY_MIGRATION_KEY)).toBe('1')
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 100, mode: 'fixed' })
+    // A browser that already wrote this release's record is never migrated.
+    localStorage.clear()
+    const fresh = renderHook(() => useTerminalDisplay(false))
+    act(() => fresh.result.current.update({ fontSize: 14, zoom: 100, mode: 'fixed' }))
+    fresh.unmount()
+    expect(readDisplayProfiles().desktop).toEqual({ fontSize: 14, zoom: 100, mode: 'fixed' })
   })
 
   it('follows the software keyboard viewport while leaving native pinch zoom alone', () => {

@@ -64,7 +64,7 @@
 13. **完成。** `/h/` 路径并行预热 `WorkbenchPage` chunk。
 14. **完成。** `boot.js` 内联，CSP 用 sha256，无 `unsafe-inline`。
 15. **部分。** 已补 apple-mobile-web-app-title、status-bar-style、192 maskable、orientation、`interactive-widget`；standalone 下隐藏安装条，iOS 无 Notification 时提示先加到主屏幕。真机 Mac/iPhone/Android 安装未执行。
-16. **完成。** 固定字号且远端行列大于视口时，左下角可点徽标切到适应窗口。`docs/display-validation-2026-09-06.md` 已改为电脑默认固定 14px。
+16. **完成。** 固定字号且远端行列大于视口时，左下角可点徽标切到适应窗口。当时 `docs/display-validation-2026-09-06.md` 记为电脑默认固定 14px；该默认现已改为「自动」——先按「字号 × 缩放」缩小字号看全画面，缩到 10 px 仍放不下时才回落到固定字号并显示徽标，当前行为以该文档为准。
 17. **完成。** 焦点 pane 边框 `--accent`；桌面常驻 `pane-status-chip`。窄于 560px 的分屏会隐藏标题栏里的 `.terminal-title` 并让工具换行，chip 仍在标题栏外，合并后保留可见。
 18. **完成。** `retryNow()`、中文状态、顶部条幅、offline 半透明遮罩。
 19. **完成。** 相邻 pane 1px 分隔处 6px 透明拖拽热区（桌面 pointer），松手调用 `layout.set_split_ratio`。`prefix+r` 进入 RESIZE，hjkl 调 `pane.resize`，Esc/Enter 退出。手机不渲染热区。Go 侧本已放行这两个方法。

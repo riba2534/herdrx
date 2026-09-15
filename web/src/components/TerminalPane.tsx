@@ -10,10 +10,10 @@ import { ChatView } from './ChatView'
 import { PaneViewToggle } from './PaneViewToggle'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
-import { createFontMeasure, fittedTerminalFont, responsiveTerminalSize, TERMINAL_FONT_FAMILY, whenFontsReady } from '../lib/terminalFit'
+import { autoFitFont, createFontMeasure, fittedTerminalFont, responsiveTerminalSize, TERMINAL_FONT_FAMILY, whenFontsReady } from '../lib/terminalFit'
 import { Modal } from './Modal'
 import { attachTerminalTouch } from '../lib/terminalTouch'
-import type { TerminalDisplay } from '../lib/displayPreferences'
+import { DEFAULT_DISPLAY, type TerminalDisplay } from '../lib/displayPreferences'
 import { isLocalInputTarget } from '../lib/keymap'
 import { paneDisplayName } from '../lib/labels'
 import { composerSubmitParams } from '../lib/composerDrafts'
@@ -22,7 +22,9 @@ import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { Button, StatusDot } from './ui'
 
-const defaultDisplay: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fixed' }
+// Only the workbench passes a display profile; anything else must not silently
+// fall back to the cropped fixed-size view this component once shipped.
+const defaultDisplay: TerminalDisplay = { ...DEFAULT_DISPLAY.desktop }
 
 export type PaneSurfaceHandle = {
   copy: () => Promise<void>
@@ -127,7 +129,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const [historyActive, setHistoryActive] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [streamGeneration, setStreamGeneration] = useState(0)
-  const [cropHint, setCropHint] = useState<{ cols: number; rows: number } | null>(null)
+  const [cropHint, setCropHint] = useState<{ cols: number; rows: number; fit: number | null } | null>(null)
   const historyRef = useRef({ active: false, loading: false, delta: 0, generation: 0 })
   const returnToLiveRef = useRef<() => void>(() => {})
   const scrollHistoryRef = useRef<(lines: number) => void>(() => {})
@@ -406,12 +408,23 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       dpr: window.devicePixelRatio || 1,
       lineHeight: terminal.options.lineHeight || 1, letterSpacing: terminal.options.letterSpacing || 0,
     }
-    const size = responsive ? responsiveTerminalSize(bounds, fontMeasureRef.current.measure, display.fontSize * display.zoom / 100) : null
+    // Font size and zoom are one budget: fitting searches up to 字号 × 缩放 and
+    // the result is rendered as-is, so a raised zoom can never push the grid
+    // past the pane. Below the zoom ceiling only the fixed-size view scrolls.
+    const maxFontSize = display.fontSize * display.zoom / 100
+    const size = responsive ? responsiveTerminalSize(bounds, fontMeasureRef.current.measure, maxFontSize) : null
     const observed = observedGridRef.current
     const cols = size?.cols ?? Math.max(10, observed?.cols || sourceCols || terminal.cols)
     const rows = size?.rows ?? Math.max(3, observed?.rows || sourceRows || terminal.rows)
-    const baseSize = display.mode !== 'fit' ? display.fontSize : fittedTerminalFont({ ...bounds, cols, rows }, fontMeasureRef.current.measure, display.fontSize)
-    const fontSize = baseSize === null ? null : Math.round(baseSize * display.zoom) / 100
+    const grid = { ...bounds, cols, rows }
+    // Auto keeps the complete terminal visible while the fitted font stays
+    // readable; below the floor it falls back to the fixed, scrollable view.
+    const fitted = display.mode === 'fit' ? fittedTerminalFont(grid, fontMeasureRef.current.measure, maxFontSize)
+      : display.mode === 'auto' ? autoFitFont(grid, fontMeasureRef.current.measure, maxFontSize)
+        : null
+    const cropToFixedSize = display.mode === 'fixed' || (display.mode === 'auto' && fitted === null)
+    const baseSize = display.mode === 'responsive' || cropToFixedSize ? maxFontSize : fitted
+    const fontSize = baseSize === null ? null : Math.round(baseSize * 100) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
     const applyResize = () => {
       if (termRef.current !== terminal || writeSessionRef.current.closed) return
@@ -439,13 +452,18 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       }
     }
     if (fontSize !== null) onFontSizeChange?.(fontSize)
-    if (display.mode === 'fixed' && !compact && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
+    // Compact panes are told too: on a phone the overlay scrollbars hide the
+    // cut just as well, and the badge is the only way back to a complete grid.
+    if (cropToFixedSize && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
       const metrics = fontMeasureRef.current.measure(fontSize)
       const cropped = Boolean(metrics && (cols * metrics.width > bounds.width + 0.5 || rows * metrics.height > bounds.height + 0.5))
+      // State the size the badge would produce, so the jump below the readable
+      // floor is a deliberate choice instead of a surprise.
+      const fit = fittedTerminalFont(grid, fontMeasureRef.current.measure, display.fontSize)
       setCropHint((current) => {
         if (!cropped) return current ? null : current
-        if (current?.cols === cols && current?.rows === rows) return current
-        return { cols, rows }
+        if (current?.cols === cols && current?.rows === rows && current?.fit === fit) return current
+        return { cols, rows, fit }
       })
     } else {
       setCropHint((current) => current ? null : current)
@@ -620,7 +638,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         terminal.options.disableStdin = true
         pendingInputRef.current = []
         pendingInputSizeRef.current = 0
-        setStatus('终端连接已关闭：' + (responsive && reason.includes('already has an attached client') ? '此终端正在其他窗口自适应显示，请关闭那个窗口后重连，或切换为“原始画面”。' : reason))
+        setStatus('终端连接已关闭：' + (responsive && reason.includes('already has an attached client') ? '此终端正在其他窗口自适应显示，请关闭那个窗口后重连，或切换为“固定字号”。' : reason))
         setStreamFailed(true)
       }
       try {
@@ -886,7 +904,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
           <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
         </div>
       </header>
-      {!chatMode && cropHint && display.mode === 'fixed' && <button type="button" className="pane-crop-badge" onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
+      {!chatMode && cropHint && <button type="button" className="pane-crop-badge" data-tooltip={`当前 ${cropHint.cols}×${cropHint.rows} 未完整显示；点击改为适应窗口${cropHint.fit === null ? '' : `，字号约 ${cropHint.fit.toFixed(1).replace(/\.0$/, '')} px`}`} onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
       {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}

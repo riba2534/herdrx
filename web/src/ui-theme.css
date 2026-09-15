@@ -232,13 +232,14 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .workbench .ownership-control { color: var(--ui-accent); }
 .workbench .display-font { font-family: var(--ui-font); }
 .workbench .terminal-title small { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "SFMono-Regular", Consolas, monospace; }
-.workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 32px; }
+.workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 32px; --workspace-gutter: 20px; }
 .sidebar-section-title { min-height: 32px; font-size: 12px; padding-left: 12px; }
 .sidebar-list { padding-inline: 6px; }
 .workspace-row { min-height: 32px; }
+.workspace-group-toggle { border-radius: 5px; }
 .sidebar-row { border-radius: 5px; }
 .sidebar-row strong { font-size: 13px; }
-.sidebar-row small, .agent-state { font-size: 12px; }
+.sidebar-row small, .agent-state, .workspace-branch { font-size: 12px; }
 .hostbar-home { font-family: var(--ui-font); font-weight: 500; }
 .tab-select { font-family: var(--ui-font); }
 .terminal-titlebar { font-family: var(--ui-font); }

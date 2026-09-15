@@ -87,7 +87,6 @@ beforeEach(() => {
   clearPaneViewModes()
   resetWorkbenchSessionCache()
   snapshotListeners.length = 0
-  call.mockClear()
   retryNow.mockClear()
   connection.state = 'ready'
   connection.message = ''
@@ -95,7 +94,7 @@ beforeEach(() => {
   snapshot.focused_workspace_id = 'w1'
   snapshot.focused_tab_id = 'w1:t1'
   snapshot.focused_pane_id = 'w1:p1'
-  snapshot.workspaces = ['alpha', 'beta'].map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1, active_tab_id: `w${i + 1}:t1`, agent_status: 'idle', focused: i === 0, pane_count: 1, tab_count: 1 }))
+  snapshot.workspaces = ['alpha', 'beta'].map((label, i) => ({ workspace_id: `w${i + 1}`, label, number: i + 1, active_tab_id: `w${i + 1}:t1`, agent_status: 'idle' as const, focused: i === 0, pane_count: 1, tab_count: 1 }))
   snapshot.tabs = [
     { tab_id: 'w1:t1', workspace_id: 'w1', label: '1', number: 1, pane_count: 1, agent_status: 'idle', focused: true },
     { tab_id: 'w1:t2', workspace_id: 'w1', label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false },
@@ -112,6 +111,8 @@ beforeEach(() => {
   vi.mocked(api.saveWorkbenchSession).mockReset()
   vi.mocked(api.workbenchSession).mockResolvedValue({ session: null })
   vi.mocked(api.saveWorkbenchSession).mockResolvedValue({ session: { host_id: 'host' } })
+  call.mockReset()
+  call.mockResolvedValue({})
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
 })
 afterEach(() => {
@@ -488,6 +489,113 @@ describe('workbench prefix keymap and focus', () => {
     const agent2 = await screen.findByRole('button', { name: /agent2/ })
     fireEvent.click(agent2)
     expect(agent2).toHaveAttribute('aria-current', 'true')
+  })
+})
+
+describe('workbench workspace groups', () => {
+  const exampleWorktree = {
+    repo_key: '/workspace/example/.git',
+    repo_name: 'example',
+    repo_root: '/workspace/example',
+    checkout_path: '/workspace/example',
+    is_linked_worktree: false,
+  }
+
+  beforeEach(() => {
+    snapshot.workspaces = [
+      { workspace_id: 'w1', label: '~', number: 1, active_tab_id: 'w1:t1', agent_status: 'idle', focused: true, pane_count: 1, tab_count: 1 },
+      { workspace_id: 'w2', label: 'astergate', number: 2, active_tab_id: 'w2:t1', agent_status: 'working', focused: false, pane_count: 1, tab_count: 1, worktree: exampleWorktree },
+      { workspace_id: 'w3', label: 'codex-reset-cards', number: 3, active_tab_id: 'w3:t1', agent_status: 'idle', focused: false, pane_count: 1, tab_count: 1, worktree: { ...exampleWorktree, checkout_path: '/workspace/example/.herdr/worktrees/example/feat-codex-reset', is_linked_worktree: true } },
+      { workspace_id: 'w4', label: 'herdrx', number: 4, active_tab_id: 'w4:t1', agent_status: 'idle', focused: false, pane_count: 1, tab_count: 1, worktree: { repo_key: '/workspace/herdrx/.git', repo_name: 'herdrx', repo_root: '/workspace/herdrx', checkout_path: '/workspace/herdrx', is_linked_worktree: false } },
+    ]
+    snapshot.tabs = snapshot.workspaces.map((workspace) => ({ tab_id: workspace.active_tab_id, workspace_id: workspace.workspace_id, label: '1', number: 1, pane_count: 1, agent_status: 'idle' as const, focused: workspace.workspace_id === 'w1' }))
+    snapshot.panes = snapshot.workspaces.map((workspace) => ({ pane_id: `${workspace.workspace_id}:p1`, workspace_id: workspace.workspace_id, tab_id: workspace.active_tab_id, terminal_id: `term-${workspace.workspace_id}`, agent_status: 'idle' as const, focused: workspace.workspace_id === 'w1', revision: 1 }))
+    snapshot.agents = [{ name: 'agent1', agent: 'codex', agent_status: 'idle', pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', focused: true }]
+    call.mockImplementation(async (method: string) => {
+      if (method === 'worktree.list') {
+        return {
+          type: 'worktree_list',
+          worktrees: [
+            { path: '/workspace/example', open_workspace_id: 'w2', branch: 'feat/overview-tps-m' },
+            { path: '/workspace/example/.herdr/worktrees/example/feat-codex-reset', open_workspace_id: 'w3', branch: 'feat/codex-reset-credits' },
+            { path: '/workspace/herdrx', open_workspace_id: 'w4', branch: 'main' },
+          ],
+        }
+      }
+      return {}
+    })
+  })
+
+  it('indents linked worktrees and shows branch text', async () => {
+    const { container } = render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(container.querySelector('.workspace-branch')?.textContent).toBe('feat/overview-tps-m'))
+    expect([...container.querySelectorAll('.workspace-row strong')].map((item) => item.textContent)).toEqual(['~', 'astergate', 'codex-reset-cards', 'herdrx'])
+    expect(container.querySelector('.workspace-row-child strong')).toHaveTextContent('codex-reset-cards')
+    expect(container.querySelector('.workspace-item-child')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '收起 astergate 的 Worktree 组' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('collapses a worktree group from the in-row toggle and persists the key', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(screen.getByText('codex-reset-cards')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '收起 astergate 的 Worktree 组' }))
+    expect(screen.queryByText('codex-reset-cards')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '展开 astergate 的 Worktree 组' })).toHaveAttribute('aria-expanded', 'false')
+    expect(JSON.parse(localStorage.getItem('herdrx.collapsed-spaces.host') || '[]')).toEqual(['/workspace/example/.git'])
+  })
+
+  it('does not collapse the group that holds the active workspace', async () => {
+    snapshot.focused_workspace_id = 'w3'
+    snapshot.focused_tab_id = 'w3:t1'
+    snapshot.focused_pane_id = 'w3:p1'
+    render(<WorkbenchPage hostID="host"/>)
+    const toggle = await screen.findByRole('button', { name: '收起 astergate 的 Worktree 组' })
+    expect(toggle).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(toggle)
+    expect(screen.getByText('codex-reset-cards')).toBeInTheDocument()
+    expect(screen.getByText('codex-reset-cards').closest('button')).toHaveAttribute('aria-current', 'true')
+    // The context menu may not offer the collapse either.
+    fireEvent.contextMenu(screen.getByText('astergate').closest('button')!)
+    expect(await screen.findByRole('menuitem', { name: '重命名工作区' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /Worktree 组/ })).not.toBeInTheDocument()
+  })
+
+  it('opens the workspace menu from the empty group gutter', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(screen.getByText('codex-reset-cards')).toBeInTheDocument())
+    const spacer = document.querySelector('.workspace-group-spacer')
+    expect(spacer).not.toBeNull()
+    fireEvent.contextMenu(spacer as Element)
+    expect(await screen.findByRole('menuitem', { name: /重命名工作区/ })).toBeInTheDocument()
+  })
+
+  it('retries a failed background worktree.list from the workspace menu', async () => {
+    call.mockImplementation(async (method: string) => {
+      if (method === 'worktree.list') throw new Error('offline')
+      return {}
+    })
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(call).toHaveBeenCalledWith('worktree.list', { workspace_id: 'w2' }))
+    call.mockClear()
+    fireEvent.contextMenu(screen.getByText('astergate').closest('button')!)
+    await waitFor(() => expect(call).toHaveBeenCalledWith('worktree.list', { workspace_id: 'w2' }))
+  })
+
+  it('selects an indented child workspace', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    const child = await screen.findByRole('button', { name: /codex-reset-cards/ })
+    fireEvent.click(child)
+    expect(child).toHaveAttribute('aria-current', 'true')
+  })
+
+  it('shows branch text in the mobile switcher', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    fireEvent.click(await screen.findByRole('button', { name: '切换工作区或终端' }))
+    const switcher = screen.getByRole('dialog', { name: '切换工作区或终端' })
+    await waitFor(() => expect(within(switcher).getByText(/feat\/overview-tps-m/)).toBeInTheDocument())
+    expect(within(switcher).getByText(/codex-reset-cards/)).toBeInTheDocument()
+    expect(within(switcher).getByText(/^main · /)).toBeInTheDocument()
   })
 })
 
