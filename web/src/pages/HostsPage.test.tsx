@@ -11,7 +11,7 @@ vi.mock('../lib/api', () => ({
   api: {
     hosts: vi.fn(), renameHost: vi.fn(), refreshEndpoint: vi.fn(), hostFolders: vi.fn(), sshKeys: vi.fn(), cliRelease: vi.fn(),
     createHost: vi.fn(), updateSSHHost: vi.fn(), createTailcatEnrollment: vi.fn(), getTailcatEnrollment: vi.fn(),
-    deleteHost: vi.fn(), relayOffer: vi.fn(),
+    deleteHost: vi.fn(), relayOffer: vi.fn(), workbenchSession: vi.fn(),
   },
 }))
 beforeEach(() => {
@@ -20,6 +20,7 @@ beforeEach(() => {
   vi.mocked(api.sshKeys).mockResolvedValue({ keys: [] })
   vi.mocked(api.cliRelease).mockResolvedValue({ status: 'unpublished' })
   vi.mocked(api.relayOffer).mockResolvedValue({ available: false })
+  vi.mocked(api.workbenchSession).mockResolvedValue({ session: null })
 })
 afterEach(() => { vi.resetAllMocks(); auth.user.role = 'user'; sessionStorage.clear() })
 
@@ -239,4 +240,15 @@ describe('site topbar', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '退出登录' }))
     await waitFor(() => expect(signOut).toHaveBeenCalled())
   })
+})
+
+it('continues the last workbench after switching devices', async () => {
+  vi.mocked(api.hosts).mockResolvedValue({ hosts: [host] })
+  vi.mocked(api.workbenchSession).mockResolvedValue({
+    session: { host_id: host.id, workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', client_class: 'desktop' },
+  })
+  render(<HostsPage/>)
+  fireEvent.click(await screen.findByRole('button', { name: /继续上次工作台 · Old host/ }))
+  expect(window.location.pathname).toBe('/h/hst_test')
+  window.history.replaceState({}, '', '/')
 })

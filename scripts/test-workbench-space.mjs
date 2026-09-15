@@ -44,6 +44,7 @@ const server = createServer(async (req, res) => {
   const selectedHost = hosts.find((host) => path === `/api/hosts/${host.id}/`)
   const json = path === '/api/bootstrap/status' ? { required: false }
     : path === '/api/me' ? { user: { id: 'space-user', email: 'space@example.test', display_name: 'Space', role: 'admin' }, csrf_token: 'space-fixture', session_id: 'space-session' }
+    : path === '/api/me/workbench-session' ? { session: null }
     : path === '/api/hosts/' ? { hosts } : selectedHost ? { host: selectedHost } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }

@@ -16,6 +16,7 @@ const server = createServer(async (req, res) => {
   const fixture = fixtures.get(req.headers['x-fixture'])
   if (path === '/api/bootstrap/status') body = { required: false, registration: 'closed' }
   else if (path === '/api/me') body = { user: { id: 'member', email: 'member@example.test', display_name: 'Lin', role: 'user' }, csrf_token: 'fixture', session_id: 'session' }
+  else if (path === '/api/me/workbench-session') body = { session: null }
   else if (path === '/api/cli-release') body = fixture.release
   else if (path === '/api/tailcat/relay-offer') body = fixture.relay || { available: false }
   else if (path === '/api/tailcat/enrollments' && req.method === 'POST') {

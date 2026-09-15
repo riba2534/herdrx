@@ -23,7 +23,7 @@ const snapshot = {
 
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
-  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'test', email: 'test@example.test', display_name: 'Test', role: 'admin' }, csrf_token: 'test', session_id: 'test' } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/flicker-test/' ? { host } : null
+  const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'test', email: 'test@example.test', display_name: 'Test', role: 'admin' }, csrf_token: 'test', session_id: 'test' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/flicker-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
   try {

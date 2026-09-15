@@ -1,4 +1,4 @@
-import type { Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder } from '../types'
+import type { Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession } from '../types'
 
 let csrfToken = ''
 let sessionID = ''
@@ -73,6 +73,8 @@ export const api = {
   register: (input: { email: string; password: string; display_name: string; invite_code: string }) =>
     request<{ user: User; csrf_token: string; session_id: string }>('/api/register', { method: 'POST', body: JSON.stringify(input) }),
   me: () => request<{ user: User; csrf_token: string; session_id: string }>('/api/me'),
+  workbenchSession: () => request<{ session: WorkbenchSession | null }>('/api/me/workbench-session'),
+  saveWorkbenchSession: (input: WorkbenchSession) => request<{ session: WorkbenchSession }>('/api/me/workbench-session', { method: 'PUT', body: JSON.stringify(input), keepalive: true }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
   hosts: () => request<{ hosts: Host[] }>('/api/hosts/'),
   host: (id: string) => request<{ host: Host }>(`/api/hosts/${encodeURIComponent(id)}/`),
