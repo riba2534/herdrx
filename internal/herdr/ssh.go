@@ -473,6 +473,32 @@ func terminalCommand(transport string, args []string) string {
 		// The access daemon accepts this exact command grammar, without a shell.
 		return command
 	}
+	if strings.Contains(command, " terminal session observe ") {
+		// Herdr's read-only CLI does not read stdin. Closing an SSH channel
+		// therefore leaves a quiet observer alive until it next writes output.
+		// Watch channel EOF separately and stop only this observation process;
+		// the Herdr server, PTY and pane task are independent processes.
+		script := `PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/usr/local/bin"; export PATH
+observer=
+reader=
+cleanup() {
+  if [ -n "$observer" ]; then kill "$observer" 2>/dev/null; wait "$observer" 2>/dev/null; fi
+  if [ -n "$reader" ]; then kill "$reader" 2>/dev/null; wait "$reader" 2>/dev/null; fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+exec 3<&0
+` + command + ` </dev/null 3<&- &
+observer=$!
+(trap - EXIT HUP INT TERM; while IFS= read -r ignored; do :; done; kill "$observer" 2>/dev/null) <&3 3<&- &
+reader=$!
+exec 3<&-
+wait "$observer"
+result=$?
+observer=
+exit "$result"`
+		return "sh -c '" + strings.ReplaceAll(script, "'", "'\"'\"'") + "'"
+	}
 	// Non-interactive SSH often omits the installer's ~/.local/bin directory.
 	// Preserve the host's PATH precedence and quote HOME inside the remote shell.
 	return `sh -c 'PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/usr/local/bin"; export PATH; exec ` + command + `'`

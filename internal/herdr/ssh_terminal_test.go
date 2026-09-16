@@ -24,6 +24,11 @@ func TestSSHTerminalNonInteractivePath(t *testing.T) {
 		t.Helper()
 		cmd := exec.Command("/bin/sh", "-c", command)
 		cmd.Env = []string{"HOME=" + home, "PATH=" + path}
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stdin.Close()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("non-interactive command: %v: %s", err, out)
