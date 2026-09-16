@@ -127,6 +127,7 @@ while True:
 			t.Fatal(err)
 		}
 	}
+	receivedFrames := make(map[uint32]bool)
 	read := func(want string) map[string]any {
 		t.Helper()
 		for {
@@ -139,6 +140,7 @@ while True:
 				if err != nil {
 					t.Fatal(err)
 				}
+				receivedFrames[frame.StreamID] = true
 				write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeAck, StreamID: frame.StreamID, Seq: frame.Seq}))
 				continue
 			}
@@ -156,12 +158,23 @@ while True:
 	}
 	open := func(responsive bool, cols, rows int) uint32 {
 		t.Helper()
-		data, _ := json.Marshal(map[string]any{"t": "terminal.open", "id": "open", "pane_id": created.RootPane.ID, "mode": "observe", "responsive": responsive, "takeover": true, "cols": cols, "rows": rows})
+		data, _ := json.Marshal(map[string]any{"t": "terminal.open", "id": "open", "pane_id": created.RootPane.ID, "mode": "observe", "responsive": responsive, "resize_remote": responsive, "takeover": true, "cols": cols, "rows": rows})
 		write(websocket.MessageText, data)
 		return uint32(read("terminal.opened")["stream_id"].(float64))
 	}
-	desktop := open(false, 295, 40)
 	before := state()
+	desktop := open(false, 295, 40)
+	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"terminal.open","id":"legacy","pane_id":%q,"mode":"control","responsive":true,"takeover":true,"cols":142,"rows":81}`, created.RootPane.ID)))
+	legacy := uint32(read("terminal.opened")["stream_id"].(float64))
+	until(func() bool {
+		write(websocket.MessageText, []byte(`{"t":"ping"}`))
+		read("pong")
+		return receivedFrames[desktop] && receivedFrames[legacy]
+	})
+	if got := state(); got != before {
+		t.Fatalf("opening default or legacy page changed the task: %+v -> %+v", before, got)
+	}
+	write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: legacy, Payload: terminalwire.TerminalPayload(142, 81, nil)}))
 	// An ordinary desktop resize remains local; its wire message cannot change PTY geometry.
 	write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: desktop, Payload: terminalwire.TerminalPayload(100, 30, nil)}))
 	write(websocket.MessageText, []byte(`{"t":"ping"}`))
@@ -262,14 +275,15 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 			}
 		}
 	}
-	open := func(responsive bool) uint32 {
+	open := func(responsive, resizeRemote bool) uint32 {
 		t.Helper()
-		write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"terminal.open","id":"open","pane_id":"p_fixture","mode":"observe","responsive":%t,"takeover":true,"cols":56,"rows":30}`, responsive)))
+		write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"terminal.open","id":"open","pane_id":"p_fixture","mode":"observe","responsive":%t,"resize_remote":%t,"takeover":true,"cols":56,"rows":30}`, responsive, resizeRemote)))
 		return uint32(read("terminal.opened")["stream_id"].(float64))
 	}
-	desktop := open(false)
-	mobile := open(true)
-	for _, id := range []uint32{desktop, mobile} {
+	desktop := open(false, false)
+	legacy := open(true, false)
+	mobile := open(true, true)
+	for _, id := range []uint32{desktop, legacy, mobile} {
 		write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: id, Payload: terminalwire.TerminalPayload(40, 18, nil)}))
 	}
 	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"call","id":"wheel","method":"terminal.scroll","params":{"stream_id":%d,"lines":-7,"column":10,"row":5}}`, mobile)))
@@ -280,7 +294,7 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 		commands = string(raw)
 		raw, _ = os.ReadFile(filepath.Join(dir, "args"))
 		args = string(raw)
-		if strings.Count(commands, "\n") == 4 && strings.Count(args, "\n") == 2 {
+		if strings.Count(commands, "\n") == 4 && strings.Count(args, "\n") == 3 {
 			break
 		}
 		select {
@@ -289,7 +303,7 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
-	if strings.Count(args, "session control") != 1 || strings.Count(args, "session observe") != 1 || strings.Contains(args, "--takeover") {
+	if strings.Count(args, "session control") != 1 || strings.Count(args, "session observe") != 2 || strings.Contains(args, "--takeover") {
 		t.Fatalf("unexpected attachment modes: %s", args)
 	}
 	var total int

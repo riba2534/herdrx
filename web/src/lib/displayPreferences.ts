@@ -8,7 +8,7 @@ const DISPLAY_STORAGE_V2 = 'herdrx.terminal-display.v2'
 const DISPLAY_STORAGE_V1 = 'herdrx.terminal-display.v1'
 export const DEFAULT_DISPLAY: DisplayProfiles = {
   desktop: { fontSize: 14, zoom: 100, mode: 'auto' },
-  mobile: { fontSize: 14, zoom: 100, mode: 'responsive' },
+  mobile: { fontSize: 14, zoom: 100, mode: 'fixed' },
 }
 export const LEGACY_DESKTOP_DEFAULT: TerminalDisplay = { fontSize: 14, zoom: 100, mode: 'fit' }
 
@@ -57,9 +57,6 @@ export function readDisplayProfiles(): DisplayProfiles {
     const previous = localStorage.getItem(DISPLAY_STORAGE_V2)
     const stored = JSON.parse(current || previous || localStorage.getItem(DISPLAY_STORAGE_V1) || '{}')
     if (!current) {
-      // v1 persisted the old mobile default even when it was never selected.
-      // Migrate existing visitors to reflow while retaining their chosen font.
-      if (!previous && stored?.mobile) stored.mobile = { ...stored.mobile, mode: 'responsive', zoom: 100 }
       // Old v1/v2 cannot tell "never changed" from "explicitly chose fit 14/100".
       if (isLegacyDesktopDefault(stored?.desktop)) stored.desktop = { ...DEFAULT_DISPLAY.desktop }
     } else if (!defaultMigrationDone() && isPreviousDesktopDefault(stored?.desktop)) {
@@ -72,7 +69,9 @@ export function readDisplayProfiles(): DisplayProfiles {
       return {
         fontSize: bounded(value?.fontSize, fallback.fontSize, 10, 28),
         zoom: bounded(value?.zoom, fallback.zoom, 50, 200),
-        mode: ['auto', 'fit', 'fixed', 'responsive'].includes(value?.mode) ? value.mode : fallback.mode,
+        // Remote resize is a current-visit action, never a saved preference.
+        // Restoring it on open would silently take geometry from native Herdr.
+        mode: ['auto', 'fit', 'fixed'].includes(value?.mode) ? value.mode : fallback.mode,
       }
     }
     return { desktop: profile('desktop'), mobile: profile('mobile') }
@@ -83,7 +82,10 @@ export function useTerminalDisplay(mobile: boolean) {
   const [profiles, setProfiles] = useState(readDisplayProfiles)
   const key = mobile ? 'mobile' : 'desktop'
   useEffect(() => {
-    try { localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(profiles)) } catch { /* Private storage may be unavailable; keep this visit usable. */ }
+    const saved = Object.fromEntries(Object.entries(profiles).map(([name, profile]) => [name, {
+      ...profile, mode: profile.mode === 'responsive' ? DEFAULT_DISPLAY[name as keyof DisplayProfiles].mode : profile.mode,
+    }]))
+    try { localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(saved)) } catch { /* Private storage may be unavailable; keep this visit usable. */ }
     markDefaultMigrationDone()
   }, [profiles])
   const update = (patch: Partial<TerminalDisplay>) => setProfiles((current) => ({ ...current, [key]: { ...current[key], ...patch } }))

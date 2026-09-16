@@ -168,7 +168,7 @@ export class WorkbenchClient {
   }
 
   async openTerminal(paneID: string, cols: number, rows: number, responsive = false) {
-    const response = await this.request<{ stream_id: number }>('terminal.open', { pane_id: paneID, mode: 'observe', cols, rows, ...(responsive ? { responsive: true } : {}) })
+    const response = await this.request<{ stream_id: number }>('terminal.open', { pane_id: paneID, mode: 'observe', cols, rows, ...(responsive ? { responsive: true, resize_remote: true } : {}) })
     return response.stream_id
   }
 

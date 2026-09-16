@@ -34,7 +34,7 @@ const server = createServer(async (req, res) => {
 await new Promise((done) => server.listen(0, '127.0.0.1', done))
 const base = `http://127.0.0.1:${server.address().port}`
 
-async function fixture(browser, options, fixtureSnapshot = snapshot) {
+async function fixture(browser, options, fixtureSnapshot = snapshot, storedDisplay = null) {
   fixtureSnapshot = structuredClone(fixtureSnapshot)
   const context = await browser.newContext(options)
   const page = await context.newPage()
@@ -123,6 +123,9 @@ async function fixture(browser, options, fixtureSnapshot = snapshot) {
       }
     })
   })
+  if (storedDisplay) await page.addInitScript((profile) => {
+    if (!localStorage.getItem('herdrx.terminal-display.v3')) localStorage.setItem('herdrx.terminal-display.v3', JSON.stringify(profile))
+  }, storedDisplay)
   await page.goto(base + '/h/display-test')
   await expect(page.locator('.xterm-rows').first()).toContainText('Terminal')
   await expect(page.locator('.terminal-pane').first()).toHaveAttribute('data-terminal-status', '可输入')
@@ -306,6 +309,24 @@ try {
   for (const name of engines) {
     const browser = await ({ chromium, firefox, webkit })[name].launch({ headless: true, ...(name === 'chromium' && process.env.HERDRX_TEST_CHROMIUM ? { executablePath: process.env.HERDRX_TEST_CHROMIUM } : {}) })
     try {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+        const restored = await fixture(browser, { viewport }, snapshot, {
+          desktop: { mode: 'responsive', fontSize: 14, zoom: 100 },
+          mobile: { mode: 'responsive', fontSize: 14, zoom: 100 },
+        })
+        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'saved responsive profile took native geometry on open')
+        await restored.page.setViewportSize({ ...viewport, height: viewport.height - 100 })
+        await restored.page.waitForTimeout(150)
+        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'local window resizing changed native geometry')
+        await setDisplayMode(restored.page, 'responsive')
+        await expect.poll(() => restored.messages.filter(m => m.t === 'terminal.open').at(-1)?.resize_remote).toBe(true)
+        const beforeReload = restored.messages.length
+        await restored.page.reload()
+        await expect(restored.page.locator('.terminal-pane').first()).toHaveAttribute('data-terminal-status', '可输入')
+        assert.equal(restored.messages.slice(beforeReload).some(m => m.responsive || m.resize_remote || m.op === 4), false, 'reload silently resumed remote resize')
+        assert.deepEqual(restored.errors, [])
+        await restored.context.close()
+      }
       const labels = structuredClone(snapshot)
       labels.workspaces[0].label = 'workspace-with-a-very-long-name-工作区名称应完整展示'
       labels.workspaces[0].worktree = { repo_key: '/workspace/example/.git', repo_name: 'example', repo_root: '/workspace/example', checkout_path: '/workspace/example', is_linked_worktree: false }
@@ -545,7 +566,10 @@ try {
           return Boolean(row.textContent.includes('END') && edge && viewport && edge.width > 0 && edge.right <= viewport.right + 1)
         })).toBe(true)
       }
+      assert.equal(reflow.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'opening mobile must preserve native geometry')
+      await setDisplayMode(reflow.page, 'responsive')
       await assertReflow()
+      assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).resize_remote, true)
       assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).responsive, true)
       assert.ok(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).cols < 70)
       await screenshot(reflow.page, `${name}-295cols-responsive-479x847`)
@@ -623,7 +647,7 @@ try {
             await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
             await expect(f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
             await f.page.getByRole('button', { name: '关闭切换位置', exact: true }).click()
-            await expect.poll(async () => { const m = await metrics(f.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
+            assert.equal(f.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'mobile opening must not claim remote geometry')
             await setDisplayMode(f.page, 'fixed')
             await setDisplayMode(f.page, 'responsive')
             await expect.poll(async () => (await metrics(f.page)).font).toBe(14)

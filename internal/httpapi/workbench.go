@@ -63,6 +63,7 @@ type workbenchMessage struct {
 	Mode              string          `json:"mode,omitempty"`
 	Takeover          bool            `json:"takeover,omitempty"`
 	Responsive        bool            `json:"responsive,omitempty"`
+	ResizeRemote      bool            `json:"resize_remote,omitempty"`
 	Cols              uint16          `json:"cols,omitempty"`
 	Rows              uint16          `json:"rows,omitempty"`
 	StreamID          uint32          `json:"stream_id,omitempty"`
@@ -347,12 +348,16 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 		return
 	}
 	streamID := s.nextID.Add(1)
-	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: message.Mode, responsive: message.Responsive, creditCh: make(chan struct{}, 1)}
+	// Old browser bundles restore responsive automatically. They must reconnect
+	// as observers after an update; only a current-visit choice opts into resize.
+	responsive := message.Responsive && message.ResizeRemote
 	mode := "observe"
-	if message.Responsive {
+	if responsive {
 		mode = "control"
 	}
-	// A responsive view owns the PTY geometry. Never take over another client.
+	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: mode, responsive: responsive, creditCh: make(chan struct{}, 1)}
+	// Direct control changes the shared PTY, including what native Herdr renders.
+	// takeover=false only protects another direct controller, not a native TUI.
 	process, err := s.endpoint.OpenTerminal(s.ctx, herdr.TerminalOpen{PaneID: message.PaneID, Mode: mode, Takeover: false, Cols: message.Cols, Rows: message.Rows})
 	if err != nil {
 		s.writeRequestError(message.RequestID, "terminal_open_failed", err.Error())
@@ -366,7 +371,7 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 	s.streamsMu.Lock()
 	s.streams[streamID] = stream
 	s.streamsMu.Unlock()
-	_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.opened", "id": message.RequestID, "stream_id": streamID, "stream_epoch": time.Now().UnixNano(), "pane_id": message.PaneID, "mode": message.Mode})
+	_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.opened", "id": message.RequestID, "stream_id": streamID, "stream_epoch": time.Now().UnixNano(), "pane_id": message.PaneID, "mode": mode})
 	go s.forwardTerminal(stream)
 }
 

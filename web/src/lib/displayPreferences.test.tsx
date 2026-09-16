@@ -16,19 +16,34 @@ describe('display preferences', () => {
     expect(result.current.display).toEqual({ fontSize: 20, zoom: 150, mode: 'fixed' })
     unmount()
     const reloaded = renderHook(() => useTerminalDisplay(true))
-    expect(reloaded.result.current.display).toEqual({ fontSize: 16, zoom: 120, mode: 'responsive' })
+    expect(reloaded.result.current.display).toEqual({ fontSize: 16, zoom: 120, mode: 'fixed' })
     act(() => reloaded.result.current.reset())
     expect(readDisplayProfiles().mobile).toEqual(DEFAULT_DISPLAY.mobile)
     expect(readDisplayProfiles().desktop.fontSize).toBe(20)
   })
 
-  it('migrates existing mobile visitors to reflow and remembers a later opt-out', () => {
+  it('preserves legacy mobile local display preferences without enabling remote resize', () => {
     localStorage.setItem('herdrx.terminal-display.v1', JSON.stringify({ desktop: { fontSize: 20, zoom: 140, mode: 'fixed' }, mobile: { fontSize: 16, zoom: 170, mode: 'fixed' } }))
-    expect(readDisplayProfiles()).toEqual({ desktop: { fontSize: 20, zoom: 140, mode: 'fixed' }, mobile: { fontSize: 16, zoom: 100, mode: 'responsive' } })
+    expect(readDisplayProfiles()).toEqual({ desktop: { fontSize: 20, zoom: 140, mode: 'fixed' }, mobile: { fontSize: 16, zoom: 170, mode: 'fixed' } })
     const { result, unmount } = renderHook(() => useTerminalDisplay(true))
     act(() => result.current.update({ mode: 'fixed' }))
     unmount()
     expect(readDisplayProfiles().mobile.mode).toBe('fixed')
+  })
+
+  it.each(['herdrx.terminal-display.v1', 'herdrx.terminal-display.v2', DISPLAY_STORAGE_KEY])('never restores remote resize from %s', (key) => {
+    localStorage.setItem(key, JSON.stringify({ desktop: { fontSize: 18, zoom: 130, mode: 'responsive' }, mobile: { fontSize: 16, zoom: 120, mode: 'responsive' } }))
+    expect(readDisplayProfiles()).toEqual({ desktop: { fontSize: 18, zoom: 130, mode: 'auto' }, mobile: { fontSize: 16, zoom: 120, mode: 'fixed' } })
+  })
+
+  it('requires a new remote resize choice on the next visit while retaining font settings', () => {
+    const { result, unmount } = renderHook(() => useTerminalDisplay(true))
+    act(() => result.current.update({ mode: 'responsive', fontSize: 18, zoom: 120 }))
+    expect(result.current.display.mode).toBe('responsive')
+    expect(JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY)!).mobile.mode).toBe('fixed')
+    unmount()
+    const next = renderHook(() => useTerminalDisplay(true))
+    expect(next.result.current.display).toEqual({ mode: 'fixed', fontSize: 18, zoom: 120 })
   })
 
   it('recovers corrupt settings and clamps invalid persisted dimensions', () => {

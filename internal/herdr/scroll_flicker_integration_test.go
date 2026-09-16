@@ -156,6 +156,24 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 				}
 				return time.Since(stable) > 150*time.Millisecond
 			})
+			// Herdr 0.9 defers the native scrollbar-gutter update when an app
+			// enters the alternate screen. Ask the native host to refresh its
+			// unchanged window before measuring Web access side effects.
+			if err := os.WriteFile(filepath.Join(dir, "refresh-native"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			wait(func() bool { _, err := os.Stat(filepath.Join(dir, "refresh-native-done")); return err == nil })
+			stable = time.Now()
+			wait(func() bool {
+				value, ok := readState()
+				if !ok {
+					return false
+				}
+				if value != before {
+					before, stable = value, time.Now()
+				}
+				return time.Since(stable) > 150*time.Millisecond
+			})
 			if before.Size[2] == 0 || before.Size[3] == 0 {
 				t.Fatalf("fixture did not establish native pixel geometry: %+v", before)
 			}
@@ -190,9 +208,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 			}()
 			defer func() { _ = observer.Close(); _ = observer.Wait(); <-observed }()
 			wait(func() bool { frameMu.Lock(); defer frameMu.Unlock(); return frames > 0 })
-			// A newly opened observer also asks the native shell to recompute its
-			// current layout. Measure wheel gestures after this access-only setup,
-			// just as a browser has an observer before its first wheel event.
+			// Opening a Web observer must preserve the pre-connection baseline.
 			stable = time.Now()
 			wait(func() bool {
 				value, ok := readState()
@@ -200,7 +216,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 					return false
 				}
 				if value != before {
-					before, stable = value, time.Now()
+					t.Fatalf("observer opening changed the native application: %+v -> %+v", before, value)
 				}
 				return time.Since(stable) > 150*time.Millisecond
 			})
@@ -239,6 +255,11 @@ def stop(*args): raise KeyboardInterrupt()
 signal.signal(signal.SIGTERM,stop)
 try:
     while child.poll() is None:
+        marker=os.path.join(os.path.dirname(__file__),'refresh-native')
+        if os.path.exists(marker):
+            os.unlink(marker)
+            os.kill(child.pid,signal.SIGWINCH)
+            open(marker+'-done','w').close()
         if not select.select([master],[],[],.2)[0]: continue
         data=os.read(master,65536)
         if not data: break
