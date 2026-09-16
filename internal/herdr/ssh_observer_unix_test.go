@@ -59,6 +59,7 @@ func TestSSHObserverStopsOnChannelEOF(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", terminalCommand("ssh", args))
+		cmd.WaitDelay = time.Second
 		cmd.Env = append(os.Environ(), "PATH="+dir+":/usr/bin:/bin", "HERDRX_QUIET_OBSERVER_PROBE="+socket)
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
@@ -111,6 +112,9 @@ func TestSSHObserverPropagatesEarlyExit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", terminalCommand("ssh", []string{"herdr", "terminal", "session", "observe", "w1:p1", "--cols", "80", "--rows", "24"}))
+	// A leaked grandchild can retain stderr after CommandContext kills its
+	// parent. Bound that pipe wait too, and still fail on timeout/WaitDelay.
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "PATH="+dir+":/usr/bin:/bin")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

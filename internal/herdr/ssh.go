@@ -477,13 +477,15 @@ func terminalCommand(transport string, args []string) string {
 		// Herdr's read-only CLI does not read stdin. Closing an SSH channel
 		// therefore leaves a quiet observer alive until it next writes output.
 		// Watch channel EOF separately and stop only this observation process;
-		// the Herdr server, PTY and pane task are independent processes.
+		// the Herdr server, PTY and pane task are independent processes. The
+		// reader has no cleanup work: KILL also covers an early observer exit
+		// racing with the reader's inherited shell signal/trap initialization.
 		script := `PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/usr/local/bin"; export PATH
 observer=
 reader=
 cleanup() {
   if [ -n "$observer" ]; then kill "$observer" 2>/dev/null; wait "$observer" 2>/dev/null; fi
-  if [ -n "$reader" ]; then kill "$reader" 2>/dev/null; wait "$reader" 2>/dev/null; fi
+  if [ -n "$reader" ]; then kill -KILL "$reader" 2>/dev/null; wait "$reader" 2>/dev/null; fi
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
