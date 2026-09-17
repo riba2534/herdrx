@@ -34,7 +34,7 @@ docker compose up -d --wait
 
 已有自定义 unit / plist 时 setup 拒绝覆盖；旧配置损坏或旧服务仍在运行时，迁移明确失败，不会创建替代身份。Linux amd64/arm64 的原生 systemd 生命周期、升级回滚和旧服务迁移已通过隔离 guest 验收，详见 [当前验收](release-validation-2026-09-07.md)。
 
-macOS 受控端为**预览**：Apple Silicon 已实机验证，Intel Mac 按同一流程构建但未实机运行，launchd 服务生命周期尚未纳入 CI。它使用 per-user LaunchAgent（`~/Library/LaunchAgents/com.riba2534.herdrx.plist`，标签 `com.riba2534.herdrx`），由 `launchctl` 在 `gui/<uid>` 域中管理，服务日志写入 `~/Library/Logs/herdrx.log`，`herdrx logs` 直接读取该文件（macOS 没有 journald）。Herdr 自身的 socket 按 Herdr 的实际位置解析（`${XDG_CONFIG_HOME:-~/.config}/herdr`），不使用 macOS 惯例的 `~/Library/Application Support`。macOS 的服务生命周期尚未纳入 CI，由人工在 Apple Silicon 上验证；Intel Mac 的附件按同一流程构建但未实机运行。
+macOS 受控端为**预览**：Apple Silicon 已实机验证，Intel Mac 尚未完成用户环境的完整实机验收。终端尺寸读取、本机与 Tailcat 接入回归已通过两种架构的 macOS CI，范围见[尺寸读取验收](macos-terminal-geometry-validation-2026-09-17.md)；launchd 服务生命周期尚未纳入 CI。它使用 per-user LaunchAgent（`~/Library/LaunchAgents/com.riba2534.herdrx.plist`，标签 `com.riba2534.herdrx`），由 `launchctl` 在 `gui/<uid>` 域中管理，服务日志写入 `~/Library/Logs/herdrx.log`，`herdrx logs` 直接读取该文件（macOS 没有 journald）。Herdr 自身的 socket 按 Herdr 的实际位置解析（`${XDG_CONFIG_HOME:-~/.config}/herdr`），不使用 macOS 惯例的 `~/Library/Application Support`。
 
 ## 工作台自带中继
 
@@ -51,7 +51,7 @@ CLI v0.1.0-rc.2 起，网页连接命令可携带 20 分钟有效的中继授权
 - Tailcat 使用与本次网站配套构建的 herdrx CLI，提供只读尺寸命令和 client socket 转发；不需要 Python。已有 CLI 更新后需按当前服务配置重启 herdrx 访问服务，Herdr 和任务继续运行。
 - 适配的 Herdr 私有协议为 20 和 22；20 已在 Herdr 0.8.2 上运行验证，22 使用对应源码的独立协议样例测试。其他版本及不能准确还原的像素尺寸会明确报错，不尝试猜测输入协议或改变尺寸。
 
-实体手机、macOS 远程尺寸读取及真实跨网手感的验收边界见[滚动与手机手势验收](flicker-mobile-validation-2026-09-06.md)。
+macOS 尺寸读取的验证范围见[尺寸读取验收](macos-terminal-geometry-validation-2026-09-17.md)；实体手机与真实跨网手感的既有验收边界见[滚动与手机手势验收](flicker-mobile-validation-2026-09-06.md)。
 
 ## 日常命令
 
