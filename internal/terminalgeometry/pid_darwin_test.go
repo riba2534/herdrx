@@ -1,8 +1,12 @@
 package terminalgeometry
 
 import (
+	"errors"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/creack/pty"
@@ -40,7 +44,32 @@ func TestReadPIDPreservesExistingTerminal(t *testing.T) {
 // NODEV 也会因为候选路径不存在而失败，所以这里断言的是具体原因：错误必须
 // 指出「没有控制终端」，不能让用户去排查一个不存在的 /dev 项。
 func TestReadPIDWithoutControllingTerminal(t *testing.T) {
+	const helperEnv = "HERDRX_TEST_CONTROLLING_TERMINAL"
+	if os.Getenv(helperEnv) != "1" {
+		// 即使测试运行器没有终端，也让真正执行断言的父进程拥有控制终端。
+		// 这样删掉下面的 Setsid 时，headless CI 同样会发现继承终端的回归。
+		command := exec.Command(os.Args[0], "-test.run=^TestReadPIDWithoutControllingTerminal$", "-test.count=1", "-test.timeout=15s")
+		command.Env = append(os.Environ(), helperEnv+"=1")
+		terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 47, Cols: 65})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait(); _ = terminal.Close() })
+		// PTY 在子进程退出后可能用 EIO 表示流结束；退出状态决定测试是否通过。
+		output, readErr := io.ReadAll(terminal)
+		if err := command.Wait(); err != nil {
+			t.Fatalf("test with controlling terminal: %v\n%s", err, output)
+		}
+		if readErr != nil && !errors.Is(readErr, syscall.EIO) {
+			t.Fatalf("read test output: %v", readErr)
+		}
+		return
+	}
+	if geometry, err := ReadPID(os.Getpid()); err != nil || geometry != (Geometry{Cols: 65, Rows: 47}) {
+		t.Fatalf("parent controlling terminal: geometry=%+v err=%v", geometry, err)
+	}
 	command := exec.Command("sleep", "30")
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -54,44 +83,39 @@ func TestReadPIDWithoutControllingTerminal(t *testing.T) {
 	}
 }
 
-// 设备号到 /dev 路径不是双射（/dev/ttys0 与 /dev/ttys048 的 minor 同为 48）。
-// 候选列表必须覆盖两种命名，实际选择由 fstat 核对 st_rdev 决定。
-func TestTerminalPathsCoverBothDeviceNamings(t *testing.T) {
-	paths := terminalPaths(unix.Mkdev(16, 48))
-	want := map[string]bool{"/dev/ttys048": false, "/dev/ttys48": false}
-	for _, path := range paths {
-		if _, ok := want[path]; !ok {
-			t.Fatalf("unexpected candidate %q", path)
-		}
-		want[path] = true
-	}
-	for path, found := range want {
-		if !found {
-			t.Fatalf("missing candidate %q", path)
+func TestTerminalPathUsesPTMXNaming(t *testing.T) {
+	for minor, want := range map[uint32]string{
+		0: "/dev/ttys000", 9: "/dev/ttys009", 48: "/dev/ttys048", 999: "/dev/ttys999",
+	} {
+		if path := terminalPath(unix.Mkdev(16, minor)); path != want {
+			t.Errorf("minor %d: path=%q want=%q", minor, path, want)
 		}
 	}
 }
 
 // 校验的是打开后的 fd，而不是打开前的路径：设备号对不上就不能返回尺寸。
 func TestOpenControllingTerminalRejectsMismatchedDevice(t *testing.T) {
-	command := exec.Command("sleep", "30")
-	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 47, Cols: 65})
+	terminal, slave, err := pty.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = command.Process.Kill(); _ = command.Wait(); _ = terminal.Close() })
+	t.Cleanup(func() { _ = slave.Close(); _ = terminal.Close() })
 	var stat unix.Stat_t
-	if err := unix.Fstat(int(terminal.Fd()), &stat); err != nil {
+	if err := unix.Fstat(int(slave.Fd()), &stat); err != nil {
 		t.Fatal(err)
 	}
-	// 用一个确实存在、但不是任何 tty 的字符设备号（/dev/null）来探测：
-	// 它的候选路径 /dev/ttysNNN 要么不存在，要么 rdev 不符，都必须失败。
-	var null unix.Stat_t
-	if err := unix.Stat("/dev/null", &null); err != nil {
+	device := uint64(uint32(stat.Rdev))
+	// 先确认候选可以打开，再只改 major：路径不变，负例必须经过 fd 校验。
+	fd, err := openControllingTerminal(device)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if fd, err := openControllingTerminal(uint64(null.Rdev)); err == nil {
+	_ = unix.Close(fd)
+	wrongDevice := unix.Mkdev(unix.Major(device)^1, unix.Minor(device))
+	if fd, err := openControllingTerminal(wrongDevice); err == nil {
 		_ = unix.Close(fd)
 		t.Fatal("accepted a device that is not the controlling terminal")
+	} else if !strings.Contains(err.Error(), "not the controlling terminal") {
+		t.Fatalf("did not reach device validation: %v", err)
 	}
 }
