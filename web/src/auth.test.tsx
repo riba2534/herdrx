@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_CHECK_TIMEOUT_MS, AuthProvider, useAuth } from './auth'
 import { api, csrf, currentSessionID, invalidateAuthentication } from './lib/api'
@@ -9,7 +10,7 @@ const response = (data: unknown, status = 200) => new Response(JSON.stringify(da
 const fetchMock = vi.fn<typeof fetch>()
 function Probe() {
   const auth = useAuth()
-  return <><p data-testid="user">{auth.user?.id || 'anonymous'}</p><p data-testid="loading">{auth.loading ? 'yes' : 'no'}</p><p data-testid="error">{auth.error}</p><p role="status">{auth.notice}</p><button onClick={() => void auth.signOut().catch(() => {})}>退出</button></>
+  return <><p data-testid="user">{auth.user?.id || 'anonymous'}</p><p data-testid="loading">{auth.loading ? 'yes' : 'no'}</p><p data-testid="error">{auth.error}</p><p role="status">{auth.notice}</p><button onClick={() => void auth.refresh()}>重新连接</button><button onClick={() => void auth.signOut().catch(() => {})}>退出</button></>
 }
 beforeEach(() => { invalidateAuthentication(); vi.stubGlobal('fetch', fetchMock); vi.stubGlobal('BroadcastChannel', undefined) })
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); fetchMock.mockReset() })
@@ -87,12 +88,75 @@ describe('Web authentication lifecycle', () => {
         document.dispatchEvent(new Event('visibilitychange'))
       })
       expect(fetchMock.mock.calls.length).toBe(started)
+      const signal = fetchMock.mock.calls[0][1]?.signal
+      expect(signal?.aborted).toBe(false)
       await act(async () => { await vi.advanceTimersByTimeAsync(AUTH_CHECK_TIMEOUT_MS) })
+      expect(signal?.aborted).toBe(true)
       expect(screen.getByTestId('loading')).toHaveTextContent('no')
       expect(screen.getByTestId('user')).toHaveTextContent('anonymous')
       expect(screen.getByTestId('error')).toHaveTextContent('无法连接工作台，请重试')
     } finally {
       vi.useRealTimers()
     }
+  })
+  it('reconnects immediately while an automatic retry is stalled and ignores its late login', async () => {
+    vi.useFakeTimers()
+    try {
+      fetchMock.mockRejectedValueOnce(new TypeError('network unavailable'))
+      render(<AuthProvider><Probe/></AuthProvider>)
+      await act(async () => {})
+      expect(screen.getByTestId('error')).toHaveTextContent('network unavailable')
+      let finish!: (value: Response) => void
+      fetchMock.mockResolvedValueOnce(response({ required: false, registration: 'closed' }))
+        .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      const stalled = fetchMock.mock.calls[2][1]?.signal
+      expect(stalled?.aborted).toBe(false)
+      fetchMock.mockResolvedValueOnce(response({ required: false, registration: 'closed' }))
+        .mockResolvedValueOnce(response({}, 401))
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新连接' })) })
+      expect(stalled?.aborted).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(5)
+      expect(screen.getByTestId('error')).toBeEmptyDOMElement()
+      expect(screen.getByTestId('user')).toHaveTextContent('anonymous')
+      await act(async () => { finish(response(login('late-login'))) })
+      expect(currentSessionID()).toBe('')
+      expect(screen.getByTestId('user')).toHaveTextContent('anonymous')
+    } finally { vi.useRealTimers() }
+  })
+  it('aborts a timed-out /me response and recovers on the next periodic check', async () => {
+    vi.useFakeTimers()
+    try {
+      let finish!: (value: Response) => void
+      fetchMock.mockResolvedValueOnce(response({ required: false, registration: 'closed' }))
+        .mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+      render(<AuthProvider><Probe/></AuthProvider>)
+      await act(async () => {})
+      const stalled = fetchMock.mock.calls[1][1]?.signal
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTH_CHECK_TIMEOUT_MS) })
+      expect(stalled?.aborted).toBe(true)
+      await act(async () => { finish(response(login('late-login'))) })
+      expect(currentSessionID()).toBe('')
+      expect(screen.getByTestId('error')).toHaveTextContent('无法连接工作台，请重试')
+      fetchMock.mockResolvedValueOnce(response({ required: false, registration: 'closed' }))
+        .mockResolvedValueOnce(response(login('recovered-login')))
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+      expect(currentSessionID()).toBe('recovered-login')
+      expect(screen.getByTestId('error')).toBeEmptyDOMElement()
+      expect(screen.getByTestId('user')).toHaveTextContent('user-a')
+    } finally { vi.useRealTimers() }
+  })
+  it('cancels an abandoned mount and starts a fresh check during Strict Mode remount', async () => {
+    fetchMock.mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(response({ required: false, registration: 'closed' }))
+      .mockResolvedValueOnce(response(login()))
+    const mounted = render(<StrictMode><AuthProvider><Probe/></AuthProvider></StrictMode>)
+    await waitFor(() => expect(screen.getByTestId('user')).toHaveTextContent('user-a'))
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true)
+    fetchMock.mockImplementationOnce(() => new Promise(() => {}))
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    const pending = fetchMock.mock.calls.at(-1)?.[1]?.signal
+    mounted.unmount()
+    expect(pending?.aborted).toBe(true)
   })
 })

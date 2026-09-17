@@ -26,7 +26,13 @@ assert.ok(!workerPrecache.some(path => /logo|icon-1024|icon-256/.test(path)), 'u
 assert.ok(!workerPrecache.some(path => path.endsWith('.gz') || path.endsWith('.br')))
 let revision = 'one', denyAPI = false, failAsset = false, droppedNetwork = false
 const calls = []
+const authTrace = []
+function traceAuth(event, url, details = {}) {
+  const path = new URL(url, 'http://localhost').pathname
+  if (path === '/api/bootstrap/status' || path === '/api/me') authTrace.push({ at: Date.now(), event, path, ...details })
+}
 const server = createServer(async (req, res) => {
+  traceAuth('server-request', req.url, { droppedNetwork, denyAPI })
   if (droppedNetwork) { req.socket.destroy(); return }
   const path = new URL(req.url, 'http://localhost').pathname
   res.setHeader('cache-control', 'no-store')
@@ -82,11 +88,14 @@ async function assertUnrelatedCache(page, phase) {
 }
 try {
   for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium', 'firefox', 'webkit']) {
-    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0
+    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0
     const browser = await ({ chromium, firefox, webkit })[engine].launch()
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage(), errors = []
     page.on('pageerror', error => errors.push(error.message))
+    page.on('request', request => traceAuth('request', request.url()))
+    page.on('response', response => traceAuth('response', response.url(), { status: response.status() }))
+    page.on('requestfailed', request => traceAuth('failed', request.url(), { error: request.failure()?.errorText }))
     page.on('dialog', dialog => { errors.push(`Unexpected dialog: ${dialog.type()}`); void dialog.dismiss() })
     try {
       await page.goto(base)
@@ -163,10 +172,8 @@ try {
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
       failAsset = false; revision = 'two'; denyAPI = true
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
-      // WebKit gets no online event here and may keep reusing the sockets the
-      // fixture destroyed, so the 5 s auto-retry can fail several times on a slow
-      // runner. Trigger the manual reconnect when the error page is still up and
-      // allow the same settle window as the failure path.
+      // Destroying fixture sockets does not send WebKit an online event.
+      // Exercise the error page's manual reconnect without reloading the shell.
       if (engine === 'webkit') {
         const reconnect = page.getByRole('button', { name: '重新连接', exact: true })
         if (await reconnect.isVisible()) await reconnect.click()
@@ -176,6 +183,10 @@ try {
       assert.ok(!calls.some(call => call.method !== 'GET'), 'offline and update paths must never replay mutations')
       assert.deepEqual(unexpectedErrors(engine, errors), [])
       console.log(`${engine}: PWA offline shell, uncached auth, network recovery, deferred update, two tabs, failed precache, revoked session PASS`)
+    } catch (error) {
+      const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine })).catch(() => null)
+      console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), errors }, null, 2))
+      throw error
     } finally { await context.close(); await browser.close() }
   }
 } finally { await new Promise(done => server.close(done)) }
