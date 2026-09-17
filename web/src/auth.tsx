@@ -16,17 +16,19 @@ type AuthState = {
 }
 const AuthContext = createContext<AuthState | null>(null)
 
-/** WebKit can leave same-origin fetch pending after the fixture/server drops the socket. */
+/** Bound login checks even when a dropped connection leaves fetch pending. */
 export const AUTH_CHECK_TIMEOUT_MS = 8_000
 
-function withTimeout<T>(promise: Promise<T>, ms = AUTH_CHECK_TIMEOUT_MS): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, controller: AbortController): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error('无法连接工作台，请重试'))
-    }, ms)
+    const timer = window.setTimeout(() => controller.abort(new Error('无法连接工作台，请重试')), AUTH_CHECK_TIMEOUT_MS)
+    const cleanup = () => { window.clearTimeout(timer); controller.signal.removeEventListener('abort', aborted) }
+    const aborted = () => { cleanup(); reject(controller.signal.reason) }
+    controller.signal.addEventListener('abort', aborted, { once: true })
+    if (controller.signal.aborted) aborted()
     promise.then(
-      (value) => { window.clearTimeout(timer); resolve(value) },
-      (reason) => { window.clearTimeout(timer); reject(reason) },
+      (value) => { cleanup(); resolve(value) },
+      (reason) => { cleanup(); reject(reason) },
     )
   })
 }
@@ -40,32 +42,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const refreshSequence = useRef(0)
-  const inFlight = useRef(false)
+  const activeCheck = useRef<AbortController | null>(null)
   const channel = useRef<BroadcastChannel | null>(null)
 
-  const refresh = useCallback(async () => {
-    if (inFlight.current) return
-    inFlight.current = true
+  const checkAuthentication = useCallback(async (restart = false) => {
+    if (activeCheck.current && !restart) return
     const sequence = ++refreshSequence.current
+    activeCheck.current?.abort()
+    const controller = new AbortController()
+    activeCheck.current = controller
+    const signal = controller.signal
     const epoch = authenticationGeneration()
-    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
-      ? AbortSignal.timeout(AUTH_CHECK_TIMEOUT_MS)
-      : undefined
     try {
       await withTimeout((async () => {
-        const bootstrap = await api.bootstrapStatus(signal ? { signal } : undefined)
+        const bootstrap = await api.bootstrapStatus({ signal })
         if (sequence !== refreshSequence.current || epoch !== authenticationGeneration()) return
         setBootstrapRequired(bootstrap.required)
         setRegistration(bootstrap.registration === 'invite' ? 'invite' : 'closed')
         if (bootstrap.required) { if (currentSessionID()) invalidateAuthentication(); setUser(null); setSessionID(''); setError('') }
         else {
-          const result = await api.me(signal ? { signal } : undefined)
+          const result = await api.me({ signal })
           if (sequence !== refreshSequence.current || currentSessionID() !== result.session_id) return
           setUser(result.user)
           setSessionID(result.session_id)
           setError('')
         }
-      })())
+      })(), controller)
     } catch (reason) {
       if (sequence !== refreshSequence.current) return
       if (reason instanceof APIError && reason.status === 401) { setUser(null); setSessionID(''); setError('') }
@@ -74,15 +76,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setError(aborted || !(reason instanceof Error) ? '无法连接工作台，请重试' : reason.message)
       }
     } finally {
-      inFlight.current = false
+      if (activeCheck.current === controller) activeCheck.current = null
       if (sequence === refreshSequence.current) setLoading(false)
     }
   }, [])
+  // A user-requested reconnect replaces a stalled check; automatic events
+  // still share the current request to avoid a focus/online request burst.
+  const refresh = useCallback(() => checkAuthentication(true), [checkAuthentication])
 
   useEffect(() => {
     const off = onAuthEvent((event) => {
       if (event.kind === 'expired') {
         refreshSequence.current++
+        activeCheck.current?.abort(); activeCheck.current = null
         setUser(null); setSessionID(''); setLoading(false); setError('')
         setNotice(event.hadSession ? '登录已失效，请重新登录。远程任务仍在运行。' : '')
         if (event.hadSession) channel.current?.postMessage('revalidate')
@@ -93,26 +99,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof BroadcastChannel !== 'undefined') {
       const current = new BroadcastChannel('herdrx-auth')
       channel.current = current
-      current.onmessage = (event) => { if (event.data === 'revalidate') void refresh() }
+      current.onmessage = (event) => { if (event.data === 'revalidate') void checkAuthentication() }
     }
-    void refresh()
-    const revalidate = () => { if (!document.hidden) void refresh() }
+    void checkAuthentication()
+    const revalidate = () => { if (!document.hidden) void checkAuthentication() }
     window.addEventListener('focus', revalidate)
     window.addEventListener('online', revalidate)
     document.addEventListener('visibilitychange', revalidate)
-    return () => { refreshSequence.current++; off(); channel.current?.close(); channel.current = null; window.removeEventListener('focus', revalidate); window.removeEventListener('online', revalidate); document.removeEventListener('visibilitychange', revalidate) }
-  }, [refresh])
+    return () => { refreshSequence.current++; activeCheck.current?.abort(); activeCheck.current = null; off(); channel.current?.close(); channel.current = null; window.removeEventListener('focus', revalidate); window.removeEventListener('online', revalidate); document.removeEventListener('visibilitychange', revalidate) }
+  }, [checkAuthentication])
 
   // Some suspended PWA/browser windows miss the online event. Recover from a
   // failed initial login check as well as from an explicit network transition.
   useEffect(() => {
     if (!error || user || loading) return
-    const timer = window.setInterval(() => { if (navigator.onLine && !document.hidden) void refresh() }, 5000)
+    const timer = window.setInterval(() => { if (navigator.onLine && !document.hidden) void checkAuthentication() }, 5000)
     return () => window.clearInterval(timer)
-  }, [error, user, loading, refresh])
+  }, [error, user, loading, checkAuthentication])
 
   const setAuthenticated = useCallback((nextUser: User) => {
     refreshSequence.current++
+    activeCheck.current?.abort(); activeCheck.current = null
     setUser(nextUser); setSessionID(currentSessionID()); setBootstrapRequired(false)
     setLoading(false); setError(''); setNotice('')
     channel.current?.postMessage('revalidate')

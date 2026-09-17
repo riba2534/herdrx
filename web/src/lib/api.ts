@@ -43,6 +43,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.method && !['GET', 'HEAD'].includes(init.method)) headers.set('X-CSRF-Token', csrfToken)
   const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
   const payload = await response.json().catch(() => ({}))
+  // An aborted auth check must not publish a late session or revoke a newer one,
+  // even when the browser finishes reading its response after cancellation.
+  init.signal?.throwIfAborted()
   const publicAuth = ['/api/login', '/api/register', '/api/bootstrap', '/api/bootstrap/status', '/api/logout'].includes(path)
   if (!response.ok) {
     if (response.status === 401 && !publicAuth) invalidateAuthentication(epoch)

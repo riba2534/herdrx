@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package herdr
 
 import (
@@ -9,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,10 +26,12 @@ import (
 )
 
 func TestGeometryOnLocalSSHAndTailcatEndpoints(t *testing.T) {
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("Python 3 is required for basic SSH geometry")
+	// macOS Unix socket paths have a small limit; use a short isolated root.
+	dir, err := os.MkdirTemp("/tmp", "hxg-")
+	if err != nil {
+		t.Fatal(err)
 	}
-	dir := t.TempDir()
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	root := filepath.Join(dir, "herdr")
 	if err := os.Mkdir(root, 0700); err != nil {
@@ -115,6 +120,14 @@ func TestGeometryOnLocalSSHAndTailcatEndpoints(t *testing.T) {
 
 	for _, mode := range []string{"local", "ssh", "tailcat"} {
 		t.Run(mode, func(t *testing.T) {
+			if mode == "ssh" {
+				if runtime.GOOS != "linux" {
+					t.Skip("basic SSH geometry requires a Linux remote host")
+				}
+				if _, err := exec.LookPath("python3"); err != nil {
+					t.Skip("Python 3 is required for basic SSH geometry")
+				}
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			var endpoint NativeScrollEndpoint
