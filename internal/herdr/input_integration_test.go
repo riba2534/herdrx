@@ -13,6 +13,33 @@ import (
 	"time"
 )
 
+// Stop while the fixture's command context is still alive. A t.Cleanup callback
+// runs after deferred cancel (and after testing cancels t.Context), which would
+// SIGKILL the daemon before it can close its PTYs and reap the fixture children.
+func stopInputHerdrFixture(t *testing.T, binary, session string, server *exec.Cmd) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stopErr := exec.CommandContext(ctx, binary, "--session", session, "server", "stop").Run()
+	done := make(chan error, 1)
+	go func() { done <- server.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil && !t.Failed() {
+			t.Errorf("isolated Herdr did not exit cleanly: %v", err)
+		}
+	case <-ctx.Done():
+		_ = server.Process.Kill()
+		<-done
+		if !t.Failed() {
+			t.Error("isolated Herdr did not finish graceful shutdown before cleanup")
+		}
+	}
+	if stopErr != nil && !t.Failed() {
+		t.Errorf("stop isolated Herdr: %v", stopErr)
+	}
+}
+
 // Uses a separate Herdr server and raw PTY under t.TempDir. It never writes
 // into the user's existing panes. Opt in with HERDRX_TEST_HERDR.
 func TestInputWithRealHerdr(t *testing.T) {
@@ -32,11 +59,7 @@ func TestInputWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", "input-test", "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer stopInputHerdrFixture(t, binary, "input-test", server)
 	endpoint, err := NewLocalEndpoint(binary, "input-test")
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +85,7 @@ func TestInputWithRealHerdr(t *testing.T) {
 	if err := json.Unmarshal(created, &result); err != nil || result.RootPane.ID == "" {
 		t.Fatalf("create fixture: %s, %v", created, err)
 	}
-	program := "import os,tty\ntty.setraw(0)\nopen('ready','w').close()\nwhile True:\n data=os.read(0,4096)\n with open('received','ab') as f: f.write(data)\n os.write(1,data)\n"
+	program := "import os,tty\ntty.setraw(0)\nopen('ready','w').close()\nwhile True:\n data=os.read(0,4096)\n if not data: break\n with open('received','ab') as f: f.write(data)\n os.write(1,data)\n"
 	if err := os.WriteFile(filepath.Join(dir, "echo.py"), []byte(program), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -123,11 +146,7 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", session, "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer stopInputHerdrFixture(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +172,7 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 	if err := json.Unmarshal(created, &result); err != nil || result.RootPane.ID == "" {
 		t.Fatalf("create fixture: %s, %v", created, err)
 	}
-	program := "import os,tty\ntty.setraw(0)\nos.write(1,b'\\x1b[?2004h')\nopen('ready','w').close()\nwhile True:\n data=os.read(0,4096)\n with open('received','ab') as f: f.write(data)\n"
+	program := "import os,tty\ntty.setraw(0)\nos.write(1,b'\\x1b[?2004h')\nopen('ready','w').close()\nwhile True:\n data=os.read(0,4096)\n if not data: break\n with open('received','ab') as f: f.write(data)\n"
 	if err := os.WriteFile(filepath.Join(dir, "echo.py"), []byte(program), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -336,11 +355,7 @@ func TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", session, "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer stopInputHerdrFixture(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)
@@ -472,11 +487,7 @@ func TestComposerTwoLegSplitNeedsTheTargetToReadFirstWithRealHerdr(t *testing.T)
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", session, "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer stopInputHerdrFixture(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)

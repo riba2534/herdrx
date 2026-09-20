@@ -22,7 +22,7 @@ macOS 明确不选择 Linux 专用的 `TestScrollFlickerWithRealHerdr`，原因�
 | macOS amd64 | 0.9.1 | 当前机器未执行 | Intel runner，适用测试必需 |
 | macOS arm64 | 0.9.1 | 当前机器未执行 | Apple Silicon runner，适用测试必需 |
 
-六组真实 Herdr job 是候选 Docker 镜像构建的前置依赖，不再只有可选本地测试。工作流语法通过 actionlint 1.7.12。尚未运行的 GitHub Actions 平台结果不能被本地 Linux 测试替代；真实跨网、macOS launchd 和实体手机验收仍单独记录。
+六组真实 Herdr job 是候选 Docker 镜像构建的前置依赖，不再只有可选本地测试。工作流语法通过 actionlint 1.7.12。各 GitHub Actions 平台结果见 [PR #13](https://github.com/riba2534/herdrx/pull/13)，不能被本地 Linux 测试替代；真实跨网、macOS launchd 和实体手机验收仍单独记录。
 
 浏览器整链门禁使用同一清单下载并校验 0.9.1：执行器的 `--download-only` 只在摘要和版本均匹配后输出二进制路径，交给 `test-terminal-control.mjs`。不会回退到 PATH 中未校验的 Herdr。
 
