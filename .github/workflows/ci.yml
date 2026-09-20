@@ -71,6 +71,7 @@ jobs:
           node scripts/test-terminal-flicker.mjs
           node scripts/test-mobile-terminal-scroll.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-pwa.mjs
+          node scripts/test-pwa-network-recovery.mjs
       - name: 真实 Herdr 与双浏览器尺寸控制
         run: |
           HERDRX_TEST_HERDR="$(python3 scripts/test-herdr-compatibility.py --version 0.9.1 --download-only --cache "$RUNNER_TEMP/herdr-releases")"

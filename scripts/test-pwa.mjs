@@ -27,13 +27,14 @@ assert.ok(!workerPrecache.some(path => path.endsWith('.gz') || path.endsWith('.b
 let revision = 'one', denyAPI = false, failAsset = false, droppedNetwork = false
 const calls = []
 const authTrace = []
+const droppedPaths = new Set()
 function traceAuth(event, url, details = {}) {
   const path = new URL(url, 'http://localhost').pathname
   if (path === '/api/bootstrap/status' || path === '/api/me') authTrace.push({ at: Date.now(), event, path, ...details })
 }
 const server = createServer(async (req, res) => {
   traceAuth('server-request', req.url, { droppedNetwork, denyAPI })
-  if (droppedNetwork) { req.socket.destroy(); return }
+  if (droppedNetwork) { droppedPaths.add(new URL(req.url, 'http://localhost').pathname); req.socket.destroy(); return }
   const path = new URL(req.url, 'http://localhost').pathname
   res.setHeader('cache-control', 'no-store')
   // Match Go http.FileServer, including the redirected precache response.
@@ -72,7 +73,16 @@ const controllerReady = page => page.waitForFunction(() => Boolean(navigator.ser
 // /me/workbench-session when the offline path tears the socket down.
 function unexpectedErrors(engine, errors) {
   if (engine !== 'webkit') return errors
-  return errors.filter((message) => !/\/api\/\S+ due to access control checks\.?$/.test(message))
+  return errors.filter((message) => {
+    if (/\/api\/\S+ due to access control checks\.?$/.test(message)) return false
+    // WebKit also reports its automatic SW update when this fixture actually
+    // destroyed that request. Do not suppress other SW or cross-origin errors.
+    const expectedSWError = [
+      `Fetch API cannot load ${base}/sw.js due to access control checks.`,
+      `/${new URL(base).host}/sw.js due to access control checks.`,
+    ].includes(message)
+    return !(droppedPaths.has('/sw.js') && expectedSWError)
+  })
 }
 
 async function assertUnrelatedCache(page, phase) {
@@ -88,7 +98,7 @@ async function assertUnrelatedCache(page, phase) {
 }
 try {
   for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium', 'firefox', 'webkit']) {
-    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0
+    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0; droppedPaths.clear()
     const browser = await ({ chromium, firefox, webkit })[engine].launch()
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const page = await context.newPage(), errors = []
@@ -131,10 +141,20 @@ try {
       const offlineTimeout = engine === 'webkit' ? 30000 : 5000
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       assert.equal(new URL(page.url()).pathname, '/h/original-pane')
+      // Keep the offline document alive through recovery. Navigating a new
+      // document can hide a stalled React scheduler, and WebKit may abort that
+      // navigation while its Networking process is reconnecting.
+      const recoveryDocument = await page.evaluate(() => {
+        globalThis.__pwaRecoveryDocument = crypto.randomUUID()
+        history.pushState({}, '', '/')
+        window.dispatchEvent(new PopStateEvent('popstate'))
+        return globalThis.__pwaRecoveryDocument
+      })
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
       // Return to the host list after automatic auth recovery (fixture has no terminal).
-      await page.goto(base)
-      await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
+      // The existing 8s auth deadline and 5s retry can exceed Playwright's 5s default.
+      await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible({ timeout: engine === 'webkit' ? offlineTimeout : 12000 })
+      assert.equal(await page.evaluate(() => globalThis.__pwaRecoveryDocument), recoveryDocument)
       await assertUnrelatedCache(page, 'after offline recovery')
       const other = await context.newPage()
       await other.goto(base)
@@ -185,7 +205,7 @@ try {
       console.log(`${engine}: PWA offline shell, uncached auth, network recovery, deferred update, two tabs, failed precache, revoked session PASS`)
     } catch (error) {
       const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine })).catch(() => null)
-      console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), errors }, null, 2))
+      console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), droppedPaths: [...droppedPaths], errors }, null, 2))
       throw error
     } finally { await context.close(); await browser.close() }
   }

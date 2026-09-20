@@ -1,0 +1,94 @@
+diff --git a/cjs/scheduler.development.js b/cjs/scheduler.development.js
+index 44d756deabf4176cd69a0e7a3bcd9e9df50b5a18..61ded4ccd6f5c186d7d42c3885b7abe34e0ef403 100644
+--- a/cjs/scheduler.development.js
++++ b/cjs/scheduler.development.js
+@@ -219,10 +219,39 @@
+       };
+     else if ("undefined" !== typeof MessageChannel) {
+       var channel = new MessageChannel(),
+-        port = channel.port2;
+-      channel.port1.onmessage = performWorkUntilDeadline;
++        port = channel.port2,
++        pendingPost = 0,
++        nextPost = 0,
++        watchdog = null,
++        useTimer = false;
++      // WebKit can silently detach existing ports after its network process exits.
++      // Claim each wakeup once, then keep using the existing timer fallback.
++      function claimPost(id) {
++        if (useTimer || pendingPost !== id) return false;
++        pendingPost = 0;
++        localClearTimeout(watchdog);
++        watchdog = null;
++        return true;
++      }
++      channel.port1.onmessage = function (event) {
++        if (claimPost(event.data)) performWorkUntilDeadline();
++      };
+       schedulePerformWorkUntilDeadline = function () {
+-        port.postMessage(null);
++        if (useTimer) {
++          localSetTimeout(performWorkUntilDeadline, 0);
++          return;
++        }
++        var id = ++nextPost;
++        pendingPost = id;
++        watchdog = localSetTimeout(function () {
++          if (!claimPost(id)) return;
++          useTimer = true;
++          channel.port1.onmessage = null;
++          channel.port1.close();
++          port.close();
++          performWorkUntilDeadline();
++        }, 250);
++        port.postMessage(id);
+       };
+     } else
+       schedulePerformWorkUntilDeadline = function () {
+diff --git a/cjs/scheduler.production.js b/cjs/scheduler.production.js
+index b6a058400b2a20322b8363e8d3c886769bab0582..effcae7387849d9500b3247c04bbde079f4a9497 100644
+--- a/cjs/scheduler.production.js
++++ b/cjs/scheduler.production.js
+@@ -196,10 +196,39 @@ if ("function" === typeof localSetImmediate)
+   };
+ else if ("undefined" !== typeof MessageChannel) {
+   var channel = new MessageChannel(),
+-    port = channel.port2;
+-  channel.port1.onmessage = performWorkUntilDeadline;
++    port = channel.port2,
++    pendingPost = 0,
++    nextPost = 0,
++    watchdog = null,
++    useTimer = false;
++  // WebKit can silently detach existing ports after its network process exits.
++  // Claim each wakeup once, then keep using the existing timer fallback.
++  function claimPost(id) {
++    if (useTimer || pendingPost !== id) return false;
++    pendingPost = 0;
++    localClearTimeout(watchdog);
++    watchdog = null;
++    return true;
++  }
++  channel.port1.onmessage = function (event) {
++    if (claimPost(event.data)) performWorkUntilDeadline();
++  };
+   schedulePerformWorkUntilDeadline = function () {
+-    port.postMessage(null);
++    if (useTimer) {
++      localSetTimeout(performWorkUntilDeadline, 0);
++      return;
++    }
++    var id = ++nextPost;
++    pendingPost = id;
++    watchdog = localSetTimeout(function () {
++      if (!claimPost(id)) return;
++      useTimer = true;
++      channel.port1.onmessage = null;
++      channel.port1.close();
++      port.close();
++      performWorkUntilDeadline();
++    }, 250);
++    port.postMessage(id);
+   };
+ } else
+   schedulePerformWorkUntilDeadline = function () {

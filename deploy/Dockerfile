@@ -3,6 +3,7 @@ FROM --platform=$BUILDPLATFORM node:26.4.0-bookworm-slim AS web
 RUN npm install --global pnpm@11.25.0
 WORKDIR /src/web
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+COPY web/patches/ ./patches/
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
