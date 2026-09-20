@@ -35,17 +35,21 @@ if (typeof window !== 'undefined') {
 
 afterEach(cleanup)
 
-HTMLElement.prototype.scrollIntoView ||= () => {}
-HTMLElement.prototype.scrollTo ||= () => {}
-HTMLElement.prototype.hasPointerCapture ||= () => false
-HTMLElement.prototype.setPointerCapture ||= () => {}
-HTMLElement.prototype.releasePointerCapture ||= () => {}
+if (typeof HTMLElement !== 'undefined') {
+  HTMLElement.prototype.scrollIntoView ||= () => {}
+  HTMLElement.prototype.scrollTo ||= () => {}
+  HTMLElement.prototype.hasPointerCapture ||= () => false
+  HTMLElement.prototype.setPointerCapture ||= () => {}
+  HTMLElement.prototype.releasePointerCapture ||= () => {}
+}
 
 // jsdom has no top layer. nwsapi 2.2.27 delegates these native states back to
 // Element.matches and recurses; Floating UI probes them when positioning portals.
 // Keep real positioning/keyboard checks in the three-engine browser suite.
-const elementMatches = Element.prototype.matches
-Element.prototype.matches = function (selector: string) {
-  if ([':modal', ':fullscreen', ':popover-open'].includes(selector)) return false
-  return elementMatches.call(this, selector)
+if (typeof Element !== 'undefined') {
+  const elementMatches = Element.prototype.matches
+  Element.prototype.matches = function (selector: string) {
+    if ([':modal', ':fullscreen', ':popover-open'].includes(selector)) return false
+    return elementMatches.call(this, selector)
+  }
 }

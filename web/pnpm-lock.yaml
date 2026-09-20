@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  scheduler@0.27.0: 77cb33004ff7976dcb2788ab91828b10302838fbe9d9dac7d51c8d225942972e
+
 importers:
 
   .:
@@ -3459,7 +3462,7 @@ snapshots:
   react-dom@19.2.8(react@19.2.8):
     dependencies:
       react: 19.2.8
-      scheduler: 0.27.0
+      scheduler: 0.27.0(patch_hash=77cb33004ff7976dcb2788ab91828b10302838fbe9d9dac7d51c8d225942972e)
 
   react-is@17.0.2: {}
 
@@ -3591,7 +3594,7 @@ snapshots:
     dependencies:
       xmlchars: 2.2.0
 
-  scheduler@0.27.0: {}
+  scheduler@0.27.0(patch_hash=77cb33004ff7976dcb2788ab91828b10302838fbe9d9dac7d51c8d225942972e): {}
 
   semver@6.3.1: {}
 
