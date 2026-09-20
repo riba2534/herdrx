@@ -9,6 +9,8 @@ import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwrig
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const diagnostics = process.env.HERDRX_PWA_DIAGNOSTICS === '1'
+const runtimeDiagnostics = process.env.HERDRX_PWA_RUNTIME_DIAGNOSTICS || 'instrumented'
+assert.ok(['instrumented', 'native', 'none'].includes(runtimeDiagnostics), 'unknown PWA runtime diagnostics mode')
 const forceTimeouts = process.env.HERDRX_PWA_FORCE_TIMEOUTS === '1'
 assert.ok(!forceTimeouts || diagnostics, 'forced PWA timeouts require explicit diagnostics mode')
 const diagnosticsDir = process.env.HERDRX_PWA_DIAGNOSTICS_DIR
@@ -112,9 +114,10 @@ try {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const runtimeTrace = []
     if (diagnostics) {
-      // This collector is inert with a normal build. Only the explicit Vite
-      // diagnostic config emits events; no fetch/Abort methods are wrapped.
-      await context.addInitScript(({ prefix }) => {
+      // The default mode only collects explicit diagnostic-build hooks. Native
+      // mode observes browser boundaries while returning the original promises.
+      // None leaves every browser API untouched for a production-build control.
+      await context.addInitScript(({ prefix, mode }) => {
         const identities = new WeakMap()
         let nextIdentity = 0
         let count = 0
@@ -136,7 +139,88 @@ try {
             } catch { /* Diagnostics must never change authentication behavior. */ }
           },
         }
-      }, { prefix: diagnosticPrefix })
+        const collector = globalThis.__herdrxAuthDiagnostics
+        const record = (event, details = {}) => collector.record(event, details)
+        record('diagnostics.mode', { mode })
+        if (mode !== 'native') return
+        const reasonDetails = value => {
+          try {
+            return {
+              type: typeof value, tag: Object.prototype.toString.call(value),
+              constructor: value?.constructor?.name, name: value?.name,
+              message: typeof value?.message === 'string' ? value.message.slice(0, 500) : undefined,
+              text: typeof value === 'string' ? value.slice(0, 500) : undefined,
+              error: value instanceof Error, domException: value instanceof DOMException,
+            }
+          } catch { return { unreadable: true } }
+        }
+        const signalDetails = signal => ({ signal: collector.identity(signal), aborted: signal?.aborted, reason: reasonDetails(signal?.reason) })
+        const responses = new WeakMap()
+        const originalFetch = globalThis.fetch
+        globalThis.fetch = function (...args) {
+          let details
+          try {
+            const [input, init] = args
+            const path = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href).pathname
+            if (path === '/api/bootstrap/status' || path === '/api/me') {
+              const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+              details = { request: collector.identity({}), requestPath: path, signal }
+              record('native.fetch.begin', { request: details.request, requestPath: path, ...signalDetails(signal) })
+            }
+          } catch { /* Inspection must not affect the browser's request parsing. */ }
+          let promise
+          try { promise = Reflect.apply(originalFetch, this, args) }
+          catch (reason) {
+            if (details) record('native.fetch.throw', { request: details.request, reason: reasonDetails(reason) })
+            throw reason
+          }
+          if (details) promise.then(response => {
+            responses.set(response, details)
+            record('native.fetch.resolved', { request: details.request, status: response.status, responseType: response.type, ...signalDetails(details.signal) })
+          }, reason => record('native.fetch.rejected', { request: details.request, reason: reasonDetails(reason), ...signalDetails(details.signal) }))
+          return promise
+        }
+        const originalJSON = Response.prototype.json
+        Response.prototype.json = function (...args) {
+          const details = responses.get(this)
+          if (details) record('native.json.begin', { request: details.request, status: this.status, ...signalDetails(details.signal) })
+          let promise
+          try { promise = Reflect.apply(originalJSON, this, args) }
+          catch (reason) {
+            if (details) record('native.json.throw', { request: details.request, reason: reasonDetails(reason) })
+            throw reason
+          }
+          if (details) promise.then(
+            () => record('native.json.finished', { request: details.request, ...signalDetails(details.signal) }),
+            reason => record('native.json.rejected', { request: details.request, reason: reasonDetails(reason), ...signalDetails(details.signal) }),
+          )
+          return promise
+        }
+        const originalAbort = AbortController.prototype.abort
+        AbortController.prototype.abort = function (...args) {
+          record('native.abort.begin', { controller: collector.identity(this), suppliedReason: reasonDetails(args[0]), ...signalDetails(this.signal) })
+          try {
+            const result = Reflect.apply(originalAbort, this, args)
+            record('native.abort.end', { controller: collector.identity(this), ...signalDetails(this.signal) })
+            return result
+          } catch (reason) {
+            record('native.abort.throw', { controller: collector.identity(this), thrownReason: reasonDetails(reason), ...signalDetails(this.signal) })
+            throw reason
+          }
+        }
+        const originalThrowIfAborted = AbortSignal.prototype.throwIfAborted
+        AbortSignal.prototype.throwIfAborted = function (...args) {
+          record('native.signal.check.begin', signalDetails(this))
+          try {
+            const result = Reflect.apply(originalThrowIfAborted, this, args)
+            record('native.signal.check.end', signalDetails(this))
+            return result
+          } catch (reason) {
+            record('native.signal.check.throw', { ...signalDetails(this), thrownReason: reasonDetails(reason) })
+            throw reason
+          }
+        }
+      }, { prefix: diagnosticPrefix, mode: runtimeDiagnostics })
       context.on('console', message => {
         const text = message.text()
         if (!text.startsWith(diagnosticPrefix) || runtimeTrace.length >= 12000) return
@@ -154,7 +238,19 @@ try {
     try {
       await page.goto(base)
       await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
-      if (diagnostics) assert.ok(await page.evaluate(() => globalThis.__herdrxAuthDiagnostics.events.some(event => event.event === 'auth.render')), 'PWA diagnostics require vite.pwa-diagnostics.config.ts')
+      if (diagnostics) {
+        const events = await page.evaluate(() => globalThis.__herdrxAuthDiagnostics.events)
+        assert.ok(events.some(event => event.event === 'diagnostics.mode' && event.mode === runtimeDiagnostics), 'PWA diagnostic mode must be recorded')
+        if (runtimeDiagnostics === 'instrumented') {
+          assert.ok(events.some(event => event.event === 'auth.render'), 'instrumented PWA diagnostics require vite.pwa-diagnostics.config.ts')
+        } else {
+          assert.ok(!events.some(event => event.event === 'auth.render'), 'native/none PWA diagnostics require the normal production build')
+          if (runtimeDiagnostics === 'native') {
+            assert.ok(events.some(event => event.event === 'native.fetch.resolved'), 'native fetch boundary must be observed')
+            assert.ok(events.some(event => event.event === 'native.json.finished'), 'native JSON boundary must be observed')
+          } else assert.ok(!events.some(event => event.event.startsWith('native.')), 'none mode must not wrap browser APIs')
+        }
+      }
       await controllerReady(page)
       // A repeated controller notification for the same worker is not an update.
       await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')))
@@ -191,7 +287,9 @@ try {
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
       // Return to the host list after automatic auth recovery (fixture has no terminal).
       await page.goto(base)
-      await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
+      // A restored WebKit request can itself hit the 8s auth deadline before
+      // the existing 5s retry succeeds; a default 5s assertion ends too early.
+      await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible({ timeout: offlineTimeout })
       await assertUnrelatedCache(page, 'after offline recovery')
       const other = await context.newPage()
       await other.goto(base)
@@ -242,7 +340,13 @@ try {
       await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible({ timeout: engine === 'webkit' ? offlineTimeout : 12000 })
       if (forceTimeouts && engine === 'webkit') {
         for (const expectedPhase of ['second-offline', 'revoked-session-recovery']) {
-          assert.ok(runtimeTrace.some(event => event.phase === expectedPhase && event.event === 'timeout.fire'), `${expectedPhase} must exercise the native authentication timeout`)
+          if (runtimeDiagnostics === 'instrumented') {
+            assert.ok(runtimeTrace.some(event => event.phase === expectedPhase && event.event === 'timeout.fire'), `${expectedPhase} must exercise the native authentication timeout`)
+          } else if (runtimeDiagnostics === 'native') {
+            assert.ok(runtimeTrace.some(event => event.phase === expectedPhase && event.event === 'native.abort.begin' && event.suppliedReason?.message === '无法连接工作台，请重试'), `${expectedPhase} must exercise the native authentication timeout`)
+          } else {
+            assert.ok(authTrace.some(event => event.event === 'server-held-closed' && event.heldPhase === expectedPhase && event.elapsed >= 7900), `${expectedPhase} must hold the real request until the authentication deadline`)
+          }
         }
       }
       await assertUnrelatedCache(page, 'after session revocation')
@@ -260,7 +364,7 @@ try {
           const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine, heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })).catch(() => null)
           await mkdir(diagnosticsDir, { recursive: true })
           const output = join(diagnosticsDir, `${diagnosticRun}-${engine}-${Date.now()}.json`)
-          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, forceTimeouts, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
+          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, runtimeDiagnostics, forceTimeouts, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
           console.log(`${engine}: PWA auth diagnostics saved: ${output}`)
         }
       } finally { await context.close(); await browser.close() }

@@ -52,9 +52,11 @@ jobs:
         run: |
           pnpm --dir web install --frozen-lockfile
           make web-build
-          pnpm --dir web exec vite build --config vite.pwa-diagnostics.config.ts
           go build -o "$RUNNER_TEMP/herdrx-browser-test" ./cmd/herdrx-server
           pnpm --dir web exec playwright install --with-deps chromium firefox webkit
+      - name: 构建函数级诊断资源
+        if: matrix.mode != 'production' && matrix.mode != 'production-native'
+        run: pnpm --dir web exec vite build --config vite.pwa-diagnostics.config.ts
       - name: 重现完整浏览器套件之前置环境
         if: matrix.mode == 'after-browser-suite'
         run: |
@@ -80,8 +82,10 @@ jobs:
           HERDRX_PWA_DIAGNOSTICS_DIR: ${{ runner.temp }}/pwa-diagnostics
           HERDRX_TEST_ENGINES: chromium,firefox,webkit
           HERDRX_PWA_FORCE_TIMEOUTS: ${{ matrix.mode == 'forced-timeouts' && '1' || '0' }}
+          HERDRX_PWA_RUNTIME_DIAGNOSTICS: ${{ matrix.mode == 'production' && 'none' || matrix.mode == 'production-native' && 'native' || 'instrumented' }}
+          PWA_REPETITIONS: ${{ startsWith(matrix.mode, 'production') && '10' || '3' }}
         run: |
-          for attempt in 1 2 3; do
+          for ((attempt = 1; attempt <= PWA_REPETITIONS; attempt++)); do
             node scripts/test-pwa.mjs
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
