@@ -145,8 +145,10 @@ try {
   assert.deepEqual(ports, { old: false, fresh: true }, 'native NetworkProcess replacement must invalidate old MessagePorts')
   console.log(`webkit: owned Networking process ${terminated.pid} → ${replacement.pid}; old port stopped, fresh port and HTTP recovered`)
 
-  await page.getByRole('button', { name: '重新连接', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible({ timeout: 8000 })
+  // The automatic auth retry may already have recovered while HTTP/port probes
+  // ran. Await that same-document recovery instead of racing a disappearing
+  // reconnect button; allow the 8s request deadline plus the 5s retry interval.
+  await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible({ timeout: 20000 })
   assert.equal(await page.evaluate(() => globalThis.__pwaNetworkDocument), documentID, '200 recovery must keep the existing document')
   // A later 401 must still update the same React tree after the fallback has
   // drained its first pending task; a one-off synchronous render is insufficient.
