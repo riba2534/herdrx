@@ -34,7 +34,7 @@ func StopNative(t testing.TB, process *exec.Cmd, control io.Closer, diagnosticPa
 	_ = control.Close()
 	wait(t, ctx, process, "native terminal fixture")
 	logs, err := os.ReadFile(diagnosticPath)
-	for _, stage := range []string{"control EOF received", "reaped status=", "master closed; host exiting"} {
+	for _, stage := range []string{"control EOF received", "master closed", "reaped status=", "host exiting"} {
 		if !strings.Contains(string(logs), stage) {
 			t.Errorf("native terminal fixture exited without expected cleanup stage %q (read: %v)", stage, err)
 		}

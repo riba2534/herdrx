@@ -25,6 +25,7 @@ func TestNativeTerminalFixtureReapsChildAfterControlEOF(t *testing.T) {
 import os,signal,time
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
 signal.signal(signal.SIGINT,signal.SIG_IGN)
+signal.signal(signal.SIGHUP,signal.SIG_IGN)
 with open(os.path.join(os.path.dirname(__file__),'child.pid'),'w') as f: f.write(str(os.getpid()))
 while True: time.sleep(1)
 `

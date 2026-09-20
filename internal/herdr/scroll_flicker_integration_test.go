@@ -299,15 +299,23 @@ try:
 except (KeyboardInterrupt,OSError) as err: stage('terminal loop ended: '+repr(err))
 finally:
     faulthandler.dump_traceback_later(2.5,repeat=True,file=sys.stderr)
+    # The host no longer drains output. Release its PTY before waiting for the
+    # native client, including Darwin's tty teardown during process exit.
+    stage('closing master before terminating child=%d'%child.pid)
+    os.close(master)
+    stage('master closed')
     stage('terminating child=%d'%child.pid)
     child.terminate()
     try: child.wait(timeout=2)
     except subprocess.TimeoutExpired:
         stage('killing child=%d after graceful timeout'%child.pid)
-        child.kill();child.wait()
-    stage('child=%d reaped status=%s; closing master'%(child.pid,child.returncode))
-    os.close(master)
-    stage('master closed; host exiting')
+        child.kill()
+        try: child.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            stage('child still exists after SIGKILL; capturing process state')
+            subprocess.run(['ps','-o','pid=,ppid=,stat=,wchan=,command=','-p',str(child.pid)],stdout=sys.stderr,stderr=sys.stderr,timeout=.5)
+            child.wait()
+    stage('child=%d reaped status=%s; host exiting'%(child.pid,child.returncode))
     faulthandler.cancel_dump_traceback_later()
 `
 
