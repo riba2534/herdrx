@@ -15,6 +15,7 @@ import (
 	"github.com/riba2534/herdrx/internal/hostruntime"
 	"github.com/riba2534/herdrx/internal/store"
 	"github.com/riba2534/herdrx/internal/terminalwire"
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // Exercise browser wire -> API -> real Herdr -> SIGWINCH application, including
@@ -37,11 +38,7 @@ func TestResponsiveTerminalWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", "responsive-test", "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer testprocess.StopHerdr(t, binary, "responsive-test", server)
 	endpoint, err := herdr.NewLocalEndpoint(binary, "responsive-test")
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +86,7 @@ draw()
 data=b""
 while True:
     chunk=os.read(0,4096)
+    if not chunk: break
     received+=len(chunk)
     data+=chunk
     while True:

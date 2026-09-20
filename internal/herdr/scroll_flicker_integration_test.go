@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // This is intentionally a native-client fixture: a headless terminal with zero
@@ -56,13 +58,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 			if err := daemon.Start(); err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() {
-				stop, done := context.WithTimeout(context.Background(), 2*time.Second)
-				defer done()
-				_ = exec.CommandContext(stop, binary, "--session", session, "server", "stop").Run()
-				_ = daemon.Process.Kill()
-				_ = daemon.Wait()
-			})
+			defer testprocess.StopHerdr(t, binary, session, daemon)
 			endpoint, err := NewLocalEndpoint(binary, session)
 			if err != nil {
 				t.Fatal(err)
@@ -97,10 +93,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 			if err := native.Start(); err != nil {
 				t.Fatal(err)
 			}
-			defer func() {
-				_ = native.Process.Signal(os.Interrupt)
-				_ = native.Wait()
-			}()
+			defer testprocess.Stop(t, native)
 			var rect Rect
 			getRect := func() bool {
 				snapshot, err := endpoint.Snapshot(ctx)
@@ -295,7 +288,9 @@ os.write(1,b'\x1b[?1049h\x1b[?1000h\x1b[?1006h')
 record();draw()
 data=b''
 while True:
-    data+=os.read(0,4096)
+    chunk=os.read(0,4096)
+    if not chunk: break
+    data+=chunk
     while True:
         match=re.search(rb'\x1b\[<(64|65);\d+;\d+M',data)
         if not match: break

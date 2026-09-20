@@ -11,34 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// Stop while the fixture's command context is still alive. A t.Cleanup callback
-// runs after deferred cancel (and after testing cancels t.Context), which would
-// SIGKILL the daemon before it can close its PTYs and reap the fixture children.
-func stopInputHerdrFixture(t *testing.T, binary, session string, server *exec.Cmd) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	stopErr := exec.CommandContext(ctx, binary, "--session", session, "server", "stop").Run()
-	done := make(chan error, 1)
-	go func() { done <- server.Wait() }()
-	select {
-	case err := <-done:
-		if err != nil && !t.Failed() {
-			t.Errorf("isolated Herdr did not exit cleanly: %v", err)
-		}
-	case <-ctx.Done():
-		_ = server.Process.Kill()
-		<-done
-		if !t.Failed() {
-			t.Error("isolated Herdr did not finish graceful shutdown before cleanup")
-		}
-	}
-	if stopErr != nil && !t.Failed() {
-		t.Errorf("stop isolated Herdr: %v", stopErr)
-	}
-}
+	"github.com/riba2534/herdrx/internal/testprocess"
+)
 
 // Uses a separate Herdr server and raw PTY under t.TempDir. It never writes
 // into the user's existing panes. Opt in with HERDRX_TEST_HERDR.
@@ -59,7 +34,7 @@ func TestInputWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer stopInputHerdrFixture(t, binary, "input-test", server)
+	defer testprocess.StopHerdr(t, binary, "input-test", server)
 	endpoint, err := NewLocalEndpoint(binary, "input-test")
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +121,7 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer stopInputHerdrFixture(t, binary, session, server)
+	defer testprocess.StopHerdr(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)
@@ -355,7 +330,7 @@ func TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer stopInputHerdrFixture(t, binary, session, server)
+	defer testprocess.StopHerdr(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)
@@ -487,7 +462,7 @@ func TestComposerTwoLegSplitNeedsTheTargetToReadFirstWithRealHerdr(t *testing.T)
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer stopInputHerdrFixture(t, binary, session, server)
+	defer testprocess.StopHerdr(t, binary, session, server)
 	endpoint, err := NewLocalEndpoint(binary, session)
 	if err != nil {
 		t.Fatal(err)

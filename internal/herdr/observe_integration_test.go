@@ -4,13 +4,15 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"io"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // A viewer canvas is independent of the actual PTY. Verify the private observer
@@ -45,33 +47,44 @@ func TestNativeObserveViewportWithRealHerdr(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			const session = "observer-integration"
+			logPath := filepath.Join(dir, "daemon.log")
+			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer logFile.Close()
 			daemon := exec.CommandContext(ctx, binary, "--session", session, "server")
+			daemon.Stdout, daemon.Stderr = logFile, logFile
 			if err := daemon.Start(); err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() {
-				stop, done := context.WithTimeout(context.Background(), 2*time.Second)
-				defer done()
-				_ = exec.CommandContext(stop, binary, "--session", session, "server", "stop").Run()
-				_ = daemon.Process.Kill()
-				_ = daemon.Wait()
-			})
+			defer testprocess.StopHerdr(t, binary, session, daemon)
 			endpoint, err := NewLocalEndpoint(binary, session)
 			if err != nil {
 				t.Fatal(err)
 			}
-			wait := func(check func() bool) {
+			failFixture := func(stage string) {
+				t.Helper()
+				state, _ := os.ReadFile(filepath.Join(dir, "state.json"))
+				appError, _ := os.ReadFile(filepath.Join(dir, "app-error.log"))
+				logs, _ := os.ReadFile(logPath)
+				if len(logs) > 8192 {
+					logs = logs[len(logs)-8192:]
+				}
+				t.Fatalf("%s: %v; last app state/PID=%s; app stderr=%s; daemon stdout/stderr=%s", stage, ctx.Err(), state, appError, logs)
+			}
+			wait := func(stage string, check func() bool) {
 				t.Helper()
 				for !check() {
 					select {
 					case <-ctx.Done():
-						t.Fatal(ctx.Err())
+						failFixture(stage)
 					case <-time.After(10 * time.Millisecond):
 					}
 				}
 			}
 			var snapshot Snapshot
-			wait(func() bool { snapshot, err = endpoint.Snapshot(ctx); return err == nil })
+			wait("daemon ready", func() bool { snapshot, err = endpoint.Snapshot(ctx); return err == nil })
 			result, err := endpoint.Call(ctx, "workspace.create", map[string]any{"cwd": dir, "focus": true, "label": "Isolated observer fixture"})
 			if err != nil {
 				t.Fatal(err)
@@ -91,8 +104,8 @@ func TestNativeObserveViewportWithRealHerdr(t *testing.T) {
 				if err := native.Start(); err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = native.Process.Signal(os.Interrupt); _ = native.Wait() }()
-				wait(func() bool {
+				defer testprocess.Stop(t, native)
+				wait("native TUI layout", func() bool {
 					s, err := endpoint.Snapshot(ctx)
 					if err != nil {
 						return false
@@ -123,23 +136,53 @@ func TestNativeObserveViewportWithRealHerdr(t *testing.T) {
 				ok := err == nil && json.Unmarshal(data, &s) == nil && s.PID > 0
 				return s, ok
 			}
-			wait(func() bool { _, ok := readState(); return ok })
+			wait("application ready", func() bool { _, ok := readState(); return ok })
 			if scenario == "external-control" {
 				controller, err := endpoint.OpenTerminal(ctx, TerminalOpen{PaneID: pane, Mode: "control", Cols: 90, Rows: 30})
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer func() { _ = controller.Close(); _ = controller.Wait() }()
-				go func() { _, _ = io.Copy(io.Discard, controller.Stdout()) }()
+				ready := make(chan error, 1)
+				go func() {
+					scanner := bufio.NewScanner(controller.Stdout())
+					scanner.Buffer(make([]byte, 65536), 16<<20)
+					confirmed := false
+					for scanner.Scan() {
+						var frame struct {
+							Type          string
+							Full          bool
+							Width, Height uint16
+						}
+						if !confirmed && json.Unmarshal(scanner.Bytes(), &frame) == nil && frame.Type == "terminal.frame" && frame.Full && frame.Width == 90 && frame.Height == 30 {
+							confirmed = true
+							ready <- nil
+						}
+					}
+					if !confirmed {
+						ready <- fmt.Errorf("controller ended before its first full frame: %v", scanner.Err())
+					}
+				}()
+				select {
+				case err := <-ready:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					failFixture("controller first frame")
+				}
+				// Finish the attach's zero-pixel resize before testing a second,
+				// pixel-bearing resize. This also proves the app consumed SIGWINCH.
+				wait("controller initial PTY", func() bool { s, ok := readState(); return ok && s.Size == [4]uint16{30, 90, 0, 0} })
 				command := map[string]any{"type": "terminal.resize", "cols": 90, "rows": 30, "cell_width_px": 9, "cell_height_px": 18}
 				if err := json.NewEncoder(controller.Stdin()).Encode(command); err != nil {
 					t.Fatal(err)
 				}
-				wait(func() bool { s, ok := readState(); return ok && s.Size == [4]uint16{30, 90, 810, 540} })
+				wait("controller pixel PTY", func() bool { s, ok := readState(); return ok && s.Size == [4]uint16{30, 90, 810, 540} })
 			}
 			var baseline sourceState
 			stable := time.Now()
-			wait(func() bool {
+			wait("stable application state", func() bool {
 				s, ok := readState()
 				if !ok {
 					return false
@@ -238,22 +281,32 @@ func TestNativeObserveViewportWithRealHerdr(t *testing.T) {
 	}
 }
 
-const observerApplication = `import os,tty,json,signal,fcntl,termios,struct
+const observerApplication = `import os,tty,json,signal,fcntl,termios,struct,select,traceback
 tty.setraw(0)
 winches=0
+dirty=True
 def record():
     size=struct.unpack('HHHH',fcntl.ioctl(0,termios.TIOCGWINSZ,bytes(8)))
     with open('state.tmp','w') as f: json.dump(dict(pid=os.getpid(),winches=winches,size=size),f)
     os.replace('state.tmp','state.json')
 def resize(*args):
-    global winches
+    global winches,dirty
     winches+=1
-    record()
-    os.write(1,b'\x1b[Hresized')
+    dirty=True
 signal.signal(signal.SIGWINCH,resize)
-record()
-os.write(1,b'Observer fixture')
-while True:
-    data=os.read(0,4096)
-    os.write(1,data)
+# Signal callbacks never write files: consecutive SIGWINCH deliveries may nest
+# during Python I/O. One main loop serializes state.tmp/rename and PTY output.
+try:
+    while True:
+        if dirty:
+            dirty=False
+            record()
+            os.write(1,b'\x1b[HObserver fixture')
+        if not select.select([0],[],[],.02)[0]: continue
+        data=os.read(0,4096)
+        if not data: break
+        os.write(1,data)
+except BaseException:
+    with open('app-error.log','w') as output: traceback.print_exc(file=output)
+    raise
 `

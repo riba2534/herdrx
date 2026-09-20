@@ -58,6 +58,25 @@ python3 scripts/test-herdr-compatibility.py --version 0.9.1 --race \
 
 每个场景在同一观察连接验证 70×23 → 50×17 → 130×45 → 90×30，四次均收到序号递增的 full frame；同时验证 observer 拒绝 stdin 输入。0.8.2 原生 TUI 像素测试显式开启该版的实验性 Kitty graphics，与已有滚动夹具一致，不以零像素代替像素保持验证。该测试在 macOS 矩阵中同样为必需；本机只执行了 Linux amd64，其他平台须以 CI 实际结果为准。
 
+### 原生观察经 SSH / 旧受控端 Tailcat 的隔离核验
+
+本轮另以私有 Go overlay 加载 `v0.1.0-rc.2` 原样的 `internal/agent/commands.go` 和 `sshserver.go`，验证旧命令白名单与通道处理；未替换本机或远程已安装的 CLI。测试使用固定官方 0.8.2（协议 20）、0.9.1（协议 22），每版一个隔离 daemon 和持续运行的 Python PTY 任务。Tailcat 使用实际客户端、服务端及本地 DERP/STUN；基础 SSH 使用真实 SSH 连接与隔离接收端；System OpenSSH 通过本机 `ssh` 连接同一接收端。
+
+六组均通过。每组在同一原生观察连接收到初始画面和 71×23 新画布，任务的 PTY 行列及 SIGWINCH 计数均不变；随后中文恰好到达一次、SGR 滚轮计数增加一次，仍不改变 PTY。再显式建立 CLI control，确认任务实际变为各组不同的目标尺寸。关闭观察和控制连接后，原任务 PID 保持不变，心跳继续增长，再次发送输入仍被原任务接收。
+
+| Herdr / 协议 | 接入路径 | 观察、滚轮期间 PTY | 显式控制后 PTY | 关闭访问后心跳 | 结果 |
+|---|---|---|---|---|---|
+| 0.8.2 / 20 | 旧 rc.2 Tailcat 处理代码 | 93×39 | 83×27 | 13 → 17 | 通过 |
+| 0.8.2 / 20 | 基础 SSH | 83×27 | 90×29 | 25 → 29 | 通过 |
+| 0.8.2 / 20 | System OpenSSH | 90×29 | 97×31 | 39 → 43 | 通过 |
+| 0.9.1 / 22 | 旧 rc.2 Tailcat 处理代码 | 119×40 | 83×27 | 13 → 17 | 通过 |
+| 0.9.1 / 22 | 基础 SSH | 83×27 | 90×29 | 26 → 29 | 通过 |
+| 0.9.1 / 22 | System OpenSSH | 90×29 | 97×31 | 39 → 42 | 通过 |
+
+旧受控端拒绝新增 `herdr --version`、`herdr api schema --json` 诊断命令，但已允许 `herdr-client.sock` 转发、实际几何读取及终端 control 命令。因此其能力报告为 `limited`：`observe`、`input`、`preserve_scroll` 为 `available`，`resize` 为 `unknown`。这表示尺寸控制能力待确认，**不是已禁用尺寸控制**；用户显式申请时仍尝试旧版支持的 control 命令，本实验实际成功。基础 SSH 和 System OpenSSH 的诊断成功，以上四项均为 `available`。缺少诊断白名单不会把观察和输入整体禁用。
+
+覆盖边界：这是 Linux amd64 上的本机隔离网络核验，local DERP 不代表真实跨网；overlay 验证旧发布版相关处理代码，不代表整包旧 CLI 的升级或远端安装验收。该私有测试尚未纳入 CI，也未覆盖本组合的 CLI/daemon 错配整链、真实 macOS 或实体手机；错配能力判定继续由已有专项测试验证。
+
 ## C2：像素扩展继续禁用，有明确阻塞证据
 
 ### 浏览器度量
