@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../lib/api'
-import { WorkbenchClient } from '../lib/workbench'
+import { WorkbenchClient, type TerminalControlState } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
@@ -107,6 +107,30 @@ const mockPane: Pane = {
   focused: true,
   revision: 1,
   right_click_passthrough: false,
+}
+
+function enableSizing(client: WorkbenchClient) {
+  let handler: ((state: TerminalControlState) => void) | undefined
+  vi.spyOn(client, 'supportsTerminalControl').mockReturnValue(true)
+  vi.spyOn(client, 'onTerminalControl').mockImplementation((_pane, next) => {
+    handler = next
+    next({ pane_id: mockPane.pane_id, state: 'available' })
+    return () => { handler = undefined }
+  })
+  const acquire = vi.spyOn(client, 'acquireControl').mockImplementation(async (stream_id) => {
+    handler?.({ pane_id: mockPane.pane_id, state: 'owned', stream_id, stream_epoch: 'e1', control_generation: 'g1' })
+    return true
+  })
+  const release = vi.spyOn(client, 'releaseControl').mockImplementation(() => handler?.({ pane_id: mockPane.pane_id, state: 'available' }))
+  return { acquire, release, state: (state: TerminalControlState) => act(() => handler?.(state)) }
+}
+
+async function chooseWindowSize() {
+  fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
+  const acquire = await screen.findByRole('button', { name: '使用此窗口尺寸' })
+  await waitFor(() => expect(acquire).toBeEnabled())
+  fireEvent.click(acquire)
+  await screen.findByText(/由此窗口控制/)
 }
 
 describe('TerminalPane paste interception', () => {
@@ -313,7 +337,7 @@ describe('TerminalPane paste interception', () => {
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
-    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }}/>)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     const encode = (text: string) => new TextEncoder().encode(text)
     const visible = (data: string | Uint8Array) => {
@@ -342,7 +366,7 @@ describe('TerminalPane paste interception', () => {
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     const acknowledge = vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
-    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }}/>)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     const encode = (text: string) => new TextEncoder().encode(text)
     const visible = (data: string | Uint8Array) => {
@@ -379,7 +403,7 @@ describe('TerminalPane paste interception', () => {
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
     const read = vi.spyOn(client, 'call').mockResolvedValue({ read: { text: 'history-keep' } })
-    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'fixed' as const } }
     const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     const encode = (text: string) => new TextEncoder().encode(text)
@@ -416,7 +440,7 @@ describe('TerminalPane paste interception', () => {
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
-    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'fixed' as const } }
     const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     expect(terminalHarness.last!.cols).toBe(80)
@@ -435,7 +459,25 @@ describe('TerminalPane paste interception', () => {
     expect(terminalHarness.last!.cols).toBe(80)
     expect(terminalHarness.last!.rows).toBe(24)
   })
-  it('waits for an authoritative responsive frame before changing the live terminal grid', async () => {
+  it('rejects deltas and invalid full frames until a valid full frame initializes this stream', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const ack = vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const emit = (seq: bigint, full: boolean, cols: number) => act(() => frames.mock.calls[0][1]({ streamID: 7, seq, full, cols, rows: 24, ansi: new TextEncoder().encode(`frame-${seq}`) }))
+    emit(1n, false, 80)
+    emit(2n, true, 0)
+    expect(terminalHarness.writes).toHaveLength(0)
+    expect(ack).toHaveBeenCalledTimes(2)
+    emit(3n, true, 80)
+    expect(terminalHarness.writes).toHaveLength(1)
+    emit(4n, false, 80)
+    expect(terminalHarness.writes).toHaveLength(2)
+  })
+
+  it('waits for an authoritative controlled frame before changing the live terminal grid', async () => {
     let width = 673
     let height = 337
     vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
@@ -443,13 +485,15 @@ describe('TerminalPane paste interception', () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    enableSizing(client)
     const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
     vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
-    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'responsive' as const } }
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'fixed' as const } }
     const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     const emit = (seq: bigint, cols: number, rows: number) => act(() => frames.mock.calls[0][1]({ streamID: 7, seq, full: true, cols, rows, ansi: new TextEncoder().encode('authoritative frame') }))
     emit(1n, 80, 24)
+    await chooseWindowSize()
     width = 337
     height = 169
     rerender(<TerminalPane {...props} layoutVersion={1}/>)
@@ -624,23 +668,141 @@ describe('TerminalPane paste interception', () => {
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
     const client = new WorkbenchClient('hst_test')
     const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const sizing = enableSizing(client)
     const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
     const font = vi.fn()
     const props = { client, pane: mockPane, connectionEpoch: 1, active: true, sourceCols: 295, sourceRows: 40, onFocus: () => {}, onFontSizeChange: font, theme: {}, enhancedContrast: false }
-    const { rerender, unmount } = render(<TerminalPane {...props} display={{ mode: 'responsive', fontSize: 14, zoom: 100 }}/>)
+    const { rerender, unmount } = render(<TerminalPane {...props} display={{ mode: 'fixed', fontSize: 14, zoom: 100 }}/>)
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
-    expect(open).toHaveBeenCalledExactlyOnceWith('p1', 56, 42, true)
+    expect(open).toHaveBeenCalledExactlyOnceWith('p1', 295, 40)
+    expect(sizing.acquire).not.toHaveBeenCalled()
+    await chooseWindowSize()
+    expect(sizing.acquire).toHaveBeenCalledWith(7, 56, 42, false)
     expect(font).toHaveBeenLastCalledWith(14)
     width = 320; height = 300
-    rerender(<TerminalPane {...props} layoutVersion={1} display={{ mode: 'responsive', fontSize: 14, zoom: 100 }}/>)
+    rerender(<TerminalPane {...props} layoutVersion={1} display={{ mode: 'fixed', fontSize: 14, zoom: 100 }}/>)
     await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 37, 21))
     expect(font).toHaveBeenLastCalledWith(14)
-    rerender(<TerminalPane {...props} sourceCols={37} sourceRows={21} display={{ mode: 'responsive', fontSize: 18, zoom: 100 }}/>)
+    rerender(<TerminalPane {...props} sourceCols={37} sourceRows={21} display={{ mode: 'fixed', fontSize: 18, zoom: 100 }}/>)
     await waitFor(() => expect(resize).toHaveBeenLastCalledWith(7, 29, 16))
     expect(open).toHaveBeenCalledTimes(1)
     expect(font).toHaveBeenLastCalledWith(18)
     unmount()
+  })
+
+  it('requires a custom confirmation for a known-site handoff and ignores cancellation', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(680)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const sizing = enableSizing(client)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    sizing.state({ pane_id: 'p1', state: 'other' })
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
+    fireEvent.click(screen.getByRole('button', { name: '转到此窗口控制' }))
+    expect(sizing.acquire).not.toHaveBeenCalled()
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '取消' }))
+    expect(sizing.acquire).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '转到此窗口控制' }))
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '转到此窗口控制' }))
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledWith(7, expect.any(Number), expect.any(Number), true))
+    expect(screen.getByRole('button', { name: '释放尺寸控制' })).toBeVisible()
+  })
+
+  it('keeps a visible desktop pane controlled across focus changes and releases on chat', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(680)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360)
+    const client = new WorkbenchClient('hst_test')
+    const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const sizing = enableSizing(client)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false }
+    const { rerender } = render(<TerminalPane {...props}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    await chooseWindowSize()
+    sizing.release.mockClear()
+    rerender(<TerminalPane {...props} active={false}/>)
+    expect(sizing.release).not.toHaveBeenCalled()
+    rerender(<TerminalPane {...props}/>)
+    expect(sizing.acquire).toHaveBeenCalledTimes(1)
+    sizing.release.mockClear()
+    rerender(<TerminalPane {...props} viewMode="chat"/>)
+    expect(sizing.release).toHaveBeenCalledWith(7)
+    rerender(<TerminalPane {...props}/>)
+    expect(sizing.acquire).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('retains independent control and resize for two visible desktop panes after focus changes', async () => {
+    let width = 680
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'supportsTerminalControl').mockReturnValue(true)
+    vi.spyOn(client, 'openTerminal').mockImplementation(async (pane) => pane === 'p1' ? 7 : 8)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const handlers = new Map<string, (state: TerminalControlState) => void>()
+    vi.spyOn(client, 'onTerminalControl').mockImplementation((paneID, handler) => { handlers.set(paneID, handler); return () => { handlers.delete(paneID) } })
+    const acquire = vi.spyOn(client, 'acquireControl').mockImplementation(async (stream_id) => { const pane_id = stream_id === 7 ? 'p1' : 'p2'; handlers.get(pane_id)?.({ pane_id, state: 'owned', stream_id }); return true })
+    const release = vi.spyOn(client, 'releaseControl').mockImplementation(() => {})
+    const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
+    const props = { client, connectionEpoch: 1, onFocus: () => {}, theme: {}, enhancedContrast: false }
+    const panes = (secondActive: boolean, layoutVersion = 0) => <><TerminalPane {...props} pane={mockPane} active={!secondActive} layoutVersion={layoutVersion}/><TerminalPane {...props} pane={{ ...mockPane, pane_id: 'p2', terminal_id: 'term2' }} active={secondActive} layoutVersion={layoutVersion}/></>
+    const { rerender } = render(panes(false))
+    const sections = document.querySelectorAll('.terminal-pane')
+    for (const section of sections) {
+      fireEvent.click(within(section as HTMLElement).getByRole('button', { name: '终端工具' }))
+      const action = within(section as HTMLElement).getByRole('button', { name: '使用此窗口尺寸' })
+      await waitFor(() => expect(action).toBeEnabled())
+      fireEvent.click(action)
+    }
+    await waitFor(() => expect(acquire).toHaveBeenCalledTimes(2))
+    rerender(panes(true))
+    expect(release).not.toHaveBeenCalled()
+    expect(screen.getAllByRole('button', { name: '释放尺寸控制' })).toHaveLength(2)
+    width = 420
+    rerender(panes(true, 1))
+    await waitFor(() => expect(resize).toHaveBeenCalledWith(7, expect.any(Number), expect.any(Number)))
+    expect(resize).toHaveBeenCalledWith(8, expect.any(Number), expect.any(Number))
+  })
+
+  it('keeps an externally blocked controller retryable and never acquires a zero-sized viewport', async () => {
+    let width = 0
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(360)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const sizing = enableSizing(client)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    sizing.state({ pane_id: 'p1', state: 'blocked', reason: '请先在对应客户端释放尺寸控制。' })
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
+    const button = screen.getByRole('button', { name: '使用此窗口尺寸' })
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+    expect(sizing.acquire).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('窗口尺寸尚未就绪')
+    width = 680
+    fireEvent.click(button)
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledWith(7, expect.any(Number), expect.any(Number), false))
+  })
+
+  it('preserves observation and input against an old service without offering size control', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const acquire = vi.spyOn(client, 'acquireControl')
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: '终端工具' }))
+    expect(screen.getByText(/当前工作台不支持尺寸控制/)).toBeVisible()
+    expect(screen.queryByRole('button', { name: '使用此窗口尺寸' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeEnabled()
+    expect(acquire).not.toHaveBeenCalled()
   })
 
   it('follows observed frame cols/rows without reopening or resizing the remote PTY', async () => {
@@ -1010,8 +1172,8 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} sourceCols={80} sourceRows={40} onDisplayChange={onDisplayChange} layoutVersion={1}/>)
-    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '80×40 · 已裁切 → 适应窗口' }))
+    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '80×40 · 已裁切 → 完整显示' }))
     expect(onDisplayChange).toHaveBeenCalledWith({ mode: 'fit', zoom: 100 })
   })
 
@@ -1039,7 +1201,7 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane {...props} layoutVersion={1}/>)
-    const badge = await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })
+    const badge = await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })
     expect(badge).toBeInTheDocument()
     // The badge states the size it will produce, so the drop below the floor is a choice.
     expect(badge).toHaveAttribute('data-tooltip', expect.stringContaining('字号约 2 px'))
@@ -1070,13 +1232,17 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane {...props} layoutVersion={1}/>)
-    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 适应窗口' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })).toBeInTheDocument()
   })
 
-  it('does not show a crop badge in responsive mode', () => {
+  it('hides the crop badge only after explicitly obtaining size control', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(320)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300)
     const client = new WorkbenchClient('hst_test')
+    enableSizing(client)
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
-    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'responsive' }} sourceCols={80} sourceRows={40} layoutVersion={0}/>)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} sourceCols={80} sourceRows={40} layoutVersion={0}/>)
+    await chooseWindowSize()
     expect(screen.queryByRole('button', { name: /已裁切/ })).not.toBeInTheDocument()
   })
 })

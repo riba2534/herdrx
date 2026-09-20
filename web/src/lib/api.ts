@@ -1,4 +1,4 @@
-import type { Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession } from '../types'
+import type { HerdrCapabilities, Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession } from '../types'
 
 let csrfToken = ''
 let sessionID = ''
@@ -89,6 +89,7 @@ export const api = {
   workbenchSession: () => workbenchPositionRequest<{ session: WorkbenchSession | null }>(),
   saveWorkbenchSession: (input: WorkbenchSession & { writer_id?: string; sequence?: number }) => workbenchPositionRequest<{ session: WorkbenchSession }>({ method: 'PUT', body: JSON.stringify(input), keepalive: true }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
+  hostCapabilities: (id: string) => request<{ capabilities: HerdrCapabilities }>(`/api/hosts/${encodeURIComponent(id)}/capabilities`),
   hosts: () => request<{ hosts: Host[] }>('/api/hosts/'),
   host: (id: string) => request<{ host: Host }>(`/api/hosts/${encodeURIComponent(id)}/`),
   createHost: (input: Record<string, unknown>) =>

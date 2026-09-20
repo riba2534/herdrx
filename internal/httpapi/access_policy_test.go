@@ -126,7 +126,7 @@ func TestLocalAndRemoteHostHTTPAuthorization(t *testing.T) {
 	deny := func(id string) {
 		t.Helper()
 		root := srv.URL + "/api/hosts/" + id
-		for _, suffix := range []string{"", "/snapshot", "/ws"} {
+		for _, suffix := range []string{"", "/snapshot", "/capabilities", "/ws"} {
 			requestJSON(t, member, "GET", root+suffix, "", nil, 404)
 		}
 		requestJSON(t, member, "PATCH", root, mcsrf, map[string]any{"name": "Intruder"}, 404)

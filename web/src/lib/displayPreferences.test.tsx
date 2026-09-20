@@ -36,11 +36,10 @@ describe('display preferences', () => {
     expect(readDisplayProfiles()).toEqual({ desktop: { fontSize: 18, zoom: 130, mode: 'auto' }, mobile: { fontSize: 16, zoom: 120, mode: 'fixed' } })
   })
 
-  it('requires a new remote resize choice on the next visit while retaining font settings', () => {
+  it('persists only local display choices and keeps font settings across visits', () => {
     const { result, unmount } = renderHook(() => useTerminalDisplay(true))
-    act(() => result.current.update({ mode: 'responsive', fontSize: 18, zoom: 120 }))
-    expect(result.current.display.mode).toBe('responsive')
-    expect(JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY)!).mobile.mode).toBe('fixed')
+    act(() => result.current.update({ mode: 'fixed', fontSize: 18, zoom: 120 }))
+    expect(JSON.parse(localStorage.getItem(DISPLAY_STORAGE_KEY)!).mobile).toEqual({ mode: 'fixed', fontSize: 18, zoom: 120 })
     unmount()
     const next = renderHook(() => useTerminalDisplay(true))
     expect(next.result.current.display).toEqual({ mode: 'fixed', fontSize: 18, zoom: 120 })

@@ -175,10 +175,10 @@ func fakeHerdrSocket(t *testing.T) *atomic.Int32 {
 				if json.NewDecoder(conn).Decode(&request) != nil {
 					return
 				}
-				if request.Method != "session.snapshot" {
+				if request.Method != "session.snapshot" && request.Method != "ping" && request.Method != "pane.read" && request.Method != "pane.process_info" {
 					calls.Add(1)
 				}
-				_ = json.NewEncoder(conn).Encode(map[string]any{"id": "herdrx", "result": map[string]any{"type": "ok", "snapshot": map[string]any{}}})
+				_ = json.NewEncoder(conn).Encode(map[string]any{"id": "herdrx", "result": map[string]any{"type": "ok", "snapshot": map[string]any{"version": "0.9.1", "protocol": 22, "panes": []map[string]any{{"pane_id": "p_fixture", "terminal_id": "term_fixture"}}}}})
 			}()
 		}
 	}()
@@ -186,13 +186,17 @@ func fakeHerdrSocket(t *testing.T) *atomic.Int32 {
 }
 
 func fixtureSocket(t *testing.T, ctx context.Context, srv *httptest.Server, client *http.Client) *websocket.Conn {
+	return fixtureSocketHello(t, ctx, srv, client, `{"t":"hello","protocol":1,"browser_instance_id":"fixture-browser-0001"}`)
+}
+
+func fixtureSocketHello(t *testing.T, ctx context.Context, srv *httptest.Server, client *http.Client, helloJSON string) *websocket.Conn {
 	t.Helper()
 	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/api/hosts/hst_fixture/ws", &websocket.DialOptions{HTTPClient: client, HTTPHeader: http.Header{"Origin": []string{"http://example.test"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ws.CloseNow() })
-	hello := []byte(`{"t":"hello","protocol":1,"browser_instance_id":"fixture-browser-0001"}`)
+	hello := []byte(helloJSON)
 	if err := ws.Write(ctx, websocket.MessageText, hello); err != nil {
 		t.Fatal(err)
 	}

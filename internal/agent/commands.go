@@ -40,6 +40,11 @@ func ParseCommand(raw string) (CommandSpec, error) {
 		return CommandSpec{}, fmt.Errorf("command contains forbidden shell syntax")
 	}
 	fields := strings.Fields(raw)
+	// These diagnostics inspect the installed executable only; no session name,
+	// output file, lifecycle command or arbitrary argument is accepted.
+	if raw == "herdr --version" || raw == "herdr api schema --json" {
+		return CommandSpec{Args: fields}, nil
+	}
 	if len(fields) == 2 && fields[0] == "herdrx-terminal-geometry" {
 		pid, err := strconv.Atoi(fields[1])
 		if err != nil || pid <= 1 || pid > 1<<30 || strconv.Itoa(pid) != fields[1] {

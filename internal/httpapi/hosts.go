@@ -47,6 +47,7 @@ func (a *API) hostRoutes(router chi.Router) {
 		router.With(a.requireCSRF).Post("/endpoint", a.refreshTailcatEndpoint)
 		router.With(a.requireCSRF).Patch("/folder", a.moveHost)
 		router.Get("/snapshot", a.hostSnapshot)
+		router.Get("/capabilities", a.hostCapabilities)
 		router.With(a.requireOrigin).Get("/ws", a.workbench)
 		router.With(a.requireCSRF).Post("/trust-host-key", a.trustHostKey)
 		router.With(a.requireCSRF).Delete("/", a.deleteHost)

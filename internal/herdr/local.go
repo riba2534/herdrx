@@ -78,7 +78,7 @@ func (e *LocalEndpoint) Call(ctx context.Context, method string, params any) (js
 		return nil, fmt.Errorf("read herdr response: %w", err)
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("herdr %s: %s: %s", method, response.Error.Code, response.Error.Message)
+		return nil, fmt.Errorf("herdr %s: %w", method, response.Error)
 	}
 	return response.Result, nil
 }

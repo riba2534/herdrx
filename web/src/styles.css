@@ -693,3 +693,19 @@ html[data-appearance-scope="workbench"] .composer { touch-action: manipulation; 
 @media (prefers-reduced-motion: reduce) {
   .chat-view * { animation: none !important; transition: none !important; }
 }
+
+.terminal-sizing { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 6px 0; min-width: 0; }
+.terminal-sizing-state { font-size: 12px; }
+.terminal-sizing > .field-hint, .terminal-sizing > .field-error { flex-basis: 100%; margin: 0; }
+.host-capabilities dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 13px; }
+.host-capabilities dd { margin: 0; overflow-wrap: anywhere; }
+.host-capability-list { padding: 0; list-style: none; }
+.host-capability-list li { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 10px 0; border-top: 1px solid var(--border); }
+.host-capability-list li span { margin-left: auto; }
+.host-capability-list li p { flex-basis: 100%; margin: 0; font-size: 12px; }
+
+.terminal-titlebar { height: auto; min-height: var(--pane-bar-height); max-height: 100%; overflow: auto; flex-wrap: wrap; align-content: flex-start; padding-block: 4px; }
+.terminal-titlebar .terminal-tools { order: 2; margin-left: auto; min-width: 0; max-width: 100%; flex: 0 1 auto; flex-wrap: wrap; }
+.terminal-sizing { flex-basis: 100%; order: 3; line-height: 1.45; border-top: 1px solid var(--border); }
+.terminal-sizing-progress { display: block; flex-basis: 100%; min-height: 1.45em; }
+.sizing-owner-badge { flex: 0 1 auto; min-width: 24px; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--accent); font-size: 11px; }

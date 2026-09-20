@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export type TerminalDisplay = { fontSize: number; zoom: number; mode: 'auto' | 'fit' | 'fixed' | 'responsive' }
+export type TerminalDisplay = { fontSize: number; zoom: number; mode: 'auto' | 'fit' | 'fixed' }
 type DisplayProfiles = { desktop: TerminalDisplay; mobile: TerminalDisplay }
 export const DISPLAY_STORAGE_KEY = 'herdrx.terminal-display.v3'
 export const DISPLAY_MIGRATION_KEY = 'herdrx.terminal-display.default-migrated'
@@ -82,9 +82,7 @@ export function useTerminalDisplay(mobile: boolean) {
   const [profiles, setProfiles] = useState(readDisplayProfiles)
   const key = mobile ? 'mobile' : 'desktop'
   useEffect(() => {
-    const saved = Object.fromEntries(Object.entries(profiles).map(([name, profile]) => [name, {
-      ...profile, mode: profile.mode === 'responsive' ? DEFAULT_DISPLAY[name as keyof DisplayProfiles].mode : profile.mode,
-    }]))
+    const saved = profiles
     try { localStorage.setItem(DISPLAY_STORAGE_KEY, JSON.stringify(saved)) } catch { /* Private storage may be unavailable; keep this visit usable. */ }
     markDefaultMigrationDone()
   }, [profiles])

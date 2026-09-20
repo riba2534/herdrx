@@ -2,12 +2,11 @@ package httpapi
 
 import (
 	"bufio"
-	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -69,38 +68,50 @@ type workbenchMessage struct {
 	StreamID          uint32          `json:"stream_id,omitempty"`
 	Method            string          `json:"method,omitempty"`
 	Params            json.RawMessage `json:"params,omitempty"`
+	Capabilities      map[string]int  `json:"capabilities,omitempty"`
+	StreamEpoch       string          `json:"stream_epoch,omitempty"`
+	ControlGeneration string          `json:"control_generation,omitempty"`
+	ResizeSeq         uint64          `json:"resize_seq,omitempty"`
+	Transfer          bool            `json:"transfer,omitempty"`
 }
 
 type workbenchSession struct {
-	api       *API
-	hostID    string
-	owner     string
-	browserID string
-	endpoint  herdr.Endpoint
-	writer    *socketWriter
-	ctx       context.Context
-	access    *accessLease
-	streamsMu sync.Mutex
-	streams   map[uint32]*terminalStream
-	nextID    atomic.Uint32
+	api        *API
+	hostID     string
+	owner      string
+	browserID  string
+	endpoint   herdr.Endpoint
+	writer     *socketWriter
+	ctx        context.Context
+	access     *accessLease
+	streamsMu  sync.Mutex
+	streams    map[uint32]*terminalStream
+	nextID     atomic.Uint32
+	controlV2  bool
+	snapshotMu sync.Mutex
+	snapshot   herdr.Snapshot
 }
 
 type terminalStream struct {
-	id         uint32
-	paneID     string
-	mode       string
-	responsive bool
-	process    herdr.TerminalProcess
-	scroll     *herdr.ScrollController
-	input      *herdr.InputQueue
-	stdin      io.WriteCloser
-	lastAck    atomic.Uint64
-	closed     atomic.Bool
-	closing    atomic.Bool
-	creditMu   sync.Mutex
-	inFlight   int
-	pending    []pendingCredit
-	creditCh   chan struct{}
+	id               uint32
+	paneID           string
+	mode             string
+	process          herdr.TerminalProcess
+	scroll           *herdr.ScrollController
+	input            *herdr.InputQueue
+	lastAck          atomic.Uint64
+	closed           atomic.Bool
+	closing          atomic.Bool
+	acquirePending   atomic.Bool
+	creditMu         sync.Mutex
+	inFlight         int
+	pending          []pendingCredit
+	creditCh         chan struct{}
+	epoch            string
+	terminalID       string
+	geometry         *geometryEntry
+	viewportRequests chan terminalSize
+	viewportCancel   context.CancelFunc
 }
 
 type pendingCredit struct {
@@ -172,11 +183,12 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 		api: a, hostID: host.ID, owner: userFromContext(request.Context()).ID,
 		browserID: hello.BrowserInstanceID, endpoint: endpoint, writer: socketWriter,
 		ctx: ctx, access: lease, streams: make(map[uint32]*terminalStream),
+		controlV2: hello.Capabilities["terminal_control"] == 1 && hello.Capabilities["terminal_resize_v2"] == 1,
 	}
 	defer session.closeStreams()
 	if err := socketWriter.JSON(ctx, map[string]any{
 		"t": "server_info", "protocol": 1, "version": Version, "host_id": host.ID,
-		"features": map[string]any{"terminal_binary": 1, "terminal_ack": 1, "multi_writer": 1},
+		"features": map[string]any{"terminal_binary": 1, "terminal_ack": 1, "multi_writer": 1, "terminal_control": 1, "terminal_resize_v2": 1},
 	}); err != nil {
 		return
 	}
@@ -240,6 +252,8 @@ func (s *workbenchSession) sendSnapshot() error {
 	if err != nil {
 		return err
 	}
+	s.updateGeometrySnapshot(snapshot)
+	s.refreshViewports()
 	return s.writer.JSON(s.ctx, map[string]any{"t": "snapshot", "snapshot": snapshot, "at": time.Now().UTC()})
 }
 
@@ -286,6 +300,26 @@ func (s *workbenchSession) handleText(message workbenchMessage) {
 		s.openTerminal(message)
 	case "terminal.close":
 		s.finishStream(message.StreamID)
+	case "terminal.control.acquire":
+		// Keep reading release/close while remote attach waits for its first frame.
+		// Only one acquisition per stream may wait, bounding asynchronous work.
+		s.streamsMu.Lock()
+		stream := s.streams[message.StreamID]
+		s.streamsMu.Unlock()
+		if stream == nil {
+			s.handleGeometry(message)
+			return
+		}
+		if !stream.acquirePending.CompareAndSwap(false, true) {
+			s.writeGeometryError(message, "control_pending", "尺寸控制正在连接，请等待完成或先释放控制")
+			return
+		}
+		go func() {
+			defer stream.acquirePending.Store(false)
+			s.handleGeometry(message)
+		}()
+	case "terminal.control.release", "terminal.control.renew", "terminal.resize_v2":
+		s.handleGeometry(message)
 	case "call":
 		s.call(message)
 	default:
@@ -316,23 +350,17 @@ func (s *workbenchSession) handleBinary(encoded []byte) {
 			return
 		}
 		if stream.input != nil {
+			if err := s.checkTerminalFeature("input", false); err != nil {
+				s.failInput(stream, err)
+				return
+			}
 			if err := stream.input.Enqueue(frame.Payload); err != nil && s.ctx.Err() == nil {
 				s.failInput(stream, err)
 			}
 		}
 	case terminalwire.OpcodeResize:
-		if !stream.responsive || stream.closing.Load() {
-			return
-		}
-		cols, rows, err := terminalwire.Dimensions(frame.Payload)
-		if err != nil || cols < 10 || cols > 1000 || rows < 3 || rows > 500 {
-			return
-		}
-		if err := s.writeTerminalCommand(stream, map[string]any{"type": "terminal.resize", "cols": cols, "rows": rows}); err != nil {
-			if s.closeStream(stream.id) {
-				_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.closed", "stream_id": stream.id, "reason": "终端尺寸调整失败，请重连终端：" + err.Error()})
-			}
-		}
+		// Version 1 carries neither a stream epoch nor a control generation.
+		// It must never mutate a shared PTY, even after a v2 controller exists.
 	case terminalwire.OpcodeRelease:
 		s.finishStream(stream.id)
 	}
@@ -347,31 +375,46 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 		s.writeRequestError(message.RequestID, "invalid_terminal_size", "terminal dimensions are out of range")
 		return
 	}
+	if message.Responsive && message.ResizeRemote {
+		s.writeRequestError(message.RequestID, "client_update_required", "尺寸控制协议已更新，请刷新页面后选择“使用此窗口尺寸”")
+		return
+	}
+	s.snapshotMu.Lock()
+	protocol := s.snapshot.Protocol
+	s.snapshotMu.Unlock()
+	if protocol != 20 && protocol != 22 {
+		s.writeRequestError(message.RequestID, "herdr_incompatible", "工作台尚未适配此 Herdr 终端协议，请检查主机能力详情")
+		return
+	}
+	if err := s.checkTerminalFeature("observe", s.controlV2); err != nil {
+		s.writeRequestError(message.RequestID, "herdr_incompatible", err.Error())
+		return
+	}
 	streamID := s.nextID.Add(1)
 	// Old browser bundles restore responsive automatically. They must reconnect
 	// as observers after an update; only a current-visit choice opts into resize.
-	responsive := message.Responsive && message.ResizeRemote
 	mode := "observe"
-	if responsive {
-		mode = "control"
-	}
-	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: mode, responsive: responsive, creditCh: make(chan struct{}, 1)}
+	stream := &terminalStream{id: streamID, paneID: message.PaneID, mode: mode, epoch: rand.Text(), creditCh: make(chan struct{}, 1)}
 	// Direct control changes the shared PTY, including what native Herdr renders.
 	// takeover=false only protects another direct controller, not a native TUI.
-	process, err := s.endpoint.OpenTerminal(s.ctx, herdr.TerminalOpen{PaneID: message.PaneID, Mode: mode, Takeover: false, Cols: message.Cols, Rows: message.Rows})
+	process, err := s.openObserver(stream, protocol, message.Cols, message.Rows)
 	if err != nil {
 		s.writeRequestError(message.RequestID, "terminal_open_failed", err.Error())
 		return
 	}
 	stream.process = process
+	s.startViewportSync(stream)
 	stream.scroll = herdr.NewScrollController(s.ctx, s.endpoint, message.PaneID)
 	stream.input = herdr.NewInputQueue(s.ctx, s.endpoint, message.PaneID, func(err error) { s.failInput(stream, err) })
-	stream.stdin = process.Stdin()
 	s.api.store.Audit(s.ctx, s.owner, "terminal.connected", "pane", stream.paneID, "", `{"mode":"`+stream.mode+`"}`)
+	s.registerGeometry(stream)
 	s.streamsMu.Lock()
 	s.streams[streamID] = stream
 	s.streamsMu.Unlock()
-	_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.opened", "id": message.RequestID, "stream_id": streamID, "stream_epoch": time.Now().UnixNano(), "pane_id": message.PaneID, "mode": mode})
+	_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.opened", "id": message.RequestID, "stream_id": streamID, "stream_epoch": stream.epoch, "terminal_id": stream.terminalID, "pane_id": message.PaneID, "mode": mode})
+	if stream.geometry != nil {
+		stream.geometry.publish()
+	}
 	go s.forwardTerminal(stream)
 }
 
@@ -379,6 +422,7 @@ func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 	scanner := bufio.NewScanner(stream.process.Stdout())
 	scanner.Buffer(make([]byte, 64*1024), 16<<20)
 	closedReason := ""
+	installedFull := false
 	for scanner.Scan() {
 		var source struct {
 			Type   string `json:"type"`
@@ -396,10 +440,15 @@ func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 			closedReason = source.Reason
 			break
 		}
+		if source.Type != "terminal.frame" || source.Width == 0 || source.Height == 0 || (!installedFull && !source.Full) {
+			continue
+		}
 		ansi, err := base64.StdEncoding.DecodeString(source.Bytes)
 		if err != nil || len(ansi) > 8<<20 {
 			continue
 		}
+		installedFull = true
+		s.geometryObserved(stream, source.Width, source.Height)
 		flags := byte(0)
 		if source.Full {
 			flags |= terminalwire.FlagFull
@@ -474,24 +523,6 @@ func (stream *terminalStream) acknowledge(seq uint64) {
 	}
 }
 
-func (s *workbenchSession) writeTerminalCommand(stream *terminalStream, commands ...any) error {
-	var batch bytes.Buffer
-	encoder := json.NewEncoder(&batch)
-	for _, command := range commands {
-		if err := encoder.Encode(command); err != nil {
-			return err
-		}
-	}
-	// A dead controller must not block the workbench WebSocket indefinitely.
-	timer := time.AfterFunc(5*time.Second, func() { _ = stream.process.Close() })
-	defer timer.Stop()
-	n, err := stream.stdin.Write(batch.Bytes())
-	if err == nil && n != batch.Len() {
-		err = io.ErrShortWrite
-	}
-	return err
-}
-
 func (s *workbenchSession) call(message workbenchMessage) {
 	if message.Method == "terminal.scroll" {
 		var params struct {
@@ -511,26 +542,7 @@ func (s *workbenchSession) call(message workbenchMessage) {
 			s.writeRequestError(message.RequestID, "terminal_unavailable", "终端已断开，请重新连接")
 			return
 		}
-		ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
-		defer cancel()
-		var err error
-		if stream.responsive {
-			// Reuse the attached controller: a second attachment cannot acquire
-			// the same pane, and must not resize it back to the desktop layout.
-			direction, lines := "down", params.Lines
-			if lines < 0 {
-				direction, lines = "up", -lines
-			}
-			var commands []any
-			for lines > 0 {
-				step := min(lines, 3)
-				commands = append(commands, map[string]any{"type": "terminal.scroll", "direction": direction, "lines": step, "source": "wheel", "column": params.Column, "row": params.Row})
-				lines -= step
-			}
-			err = s.writeTerminalCommand(stream, commands...)
-		} else {
-			err = stream.scroll.Send(ctx, params.Lines, params.Column, params.Row)
-		}
+		err := s.geometryScroll(stream, params.Lines, params.Column, params.Row)
 		if err != nil {
 			s.writeRequestError(message.RequestID, "scroll_failed", "终端滚动失败，请稍后重试："+err.Error())
 			return
@@ -581,6 +593,14 @@ func (s *workbenchSession) finishStream(id uint32) {
 	if stream == nil || !stream.closing.CompareAndSwap(false, true) {
 		return
 	}
+	if stream.geometry != nil {
+		stream.geometry.mu.Lock()
+		l := stream.geometry.lease
+		stream.geometry.mu.Unlock()
+		if l != nil && l.session == s && l.stream == stream {
+			stream.geometry.release(l, "已释放此窗口的尺寸控制")
+		}
+	}
 	if stream.input == nil {
 		s.closeStream(id)
 		return
@@ -623,6 +643,10 @@ func (s *workbenchSession) removeStream(id uint32) {
 	delete(s.streams, id)
 	s.streamsMu.Unlock()
 	if stream != nil {
+		if stream.viewportCancel != nil {
+			stream.viewportCancel()
+		}
+		s.unregisterGeometry(stream)
 		stream.closed.Store(true)
 		if stream.input != nil {
 			stream.input.Close()

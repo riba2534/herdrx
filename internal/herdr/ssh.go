@@ -409,7 +409,7 @@ func (e *SSHEndpoint) Call(ctx context.Context, method string, params any) (json
 		return nil, fmt.Errorf("read remote herdr response: %w", err)
 	}
 	if response.Error != nil {
-		return nil, fmt.Errorf("herdr %s: %s: %s", method, response.Error.Code, response.Error.Message)
+		return nil, fmt.Errorf("herdr %s: %w", method, response.Error)
 	}
 	return response.Result, nil
 }

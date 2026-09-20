@@ -54,7 +54,7 @@ func TestSlowInputDoesNotBlockWebSocketAndFailureStopsPendingInput(t *testing.T)
 					_ = json.NewEncoder(conn).Encode(map[string]any{"error": map[string]string{"code": "unavailable", "message": "input response failed"}})
 					return
 				}
-				_ = json.NewEncoder(conn).Encode(map[string]any{"result": map[string]any{"snapshot": map[string]any{}}})
+				_ = json.NewEncoder(conn).Encode(map[string]any{"result": map[string]any{"snapshot": map[string]any{"version": "0.9.1", "protocol": 22}}})
 			}()
 		}
 	}()
@@ -90,6 +90,9 @@ func TestSlowInputDoesNotBlockWebSocketAndFailureStopsPendingInput(t *testing.T)
 			}
 			if message["t"] == want {
 				return message
+			}
+			if message["t"] == "error" {
+				t.Fatalf("unexpected workbench error: %s", raw)
 			}
 		}
 	}

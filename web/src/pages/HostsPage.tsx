@@ -1,3 +1,4 @@
+import { HostCapabilities } from '../components/HostCapabilities'
 import { useConfirm } from '../components/useConfirm'
 import { Input, Form, Textarea } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
@@ -69,6 +70,7 @@ export function HostsPage() {
   const auth = useAuth()
   const TASK_KEY = `herdrx.enrollmentTask.${auth.user?.id}`
   const [hosts, setHosts] = useState<Host[]>([])
+  const [capabilityHost, setCapabilityHost] = useState<Host | null>(null)
   const [lastSession, setLastSession] = useState<WorkbenchSession | null>(null)
   const [folders, setFolders] = useState<HostFolder[]>([])
   const [keys, setKeys] = useState<SSHKey[]>([])
@@ -424,6 +426,7 @@ export function HostsPage() {
           <p className="host-address">{host.transport === 'local' ? '工作台主机 · 仅管理员可用' : host.transport === 'tailcat' ? 'Tailcat 加密连接' : host.auth_method === 'system_ssh' ? `${host.hostname} · System OpenSSH` : `${host.username}@${host.hostname}:${host.port}`}{host.folder_id && <span className="host-folder-label">{options.find((folder) => folder.id === host.folder_id)?.path}</span>}</p>
           {host.pending_host_key && <div className="host-warning"><ShieldAlert size={15}/><span>首次连接需要确认 SSH 指纹</span></div>}
           <div className="host-card-actions">
+            <Button className="button-secondary" aria-label={`查看 Herdr 能力 ${host.name}`} onClick={() => setCapabilityHost(host)}>Herdr 能力</Button>
             {host.pending_host_key && <Button className="button-secondary" onClick={async () => { await api.trustHostKey(host.id); await load() }}>确认指纹</Button>}
             <Button className="button-secondary host-open" onClick={() => navigate(`/h/${host.id}`)}>打开<ArrowRight size={16}/></Button>
             <Button className="button-ghost" aria-label={`重命名 ${host.name}`} data-tooltip="重命名主机" disabled={renamePending} onClick={(event) => { renameTrigger.current = event.currentTarget; setRenamingID(host.id); setRenameDraft(host.name); setRenameError('') }}><Pencil size={15}/>重命名</Button>
@@ -436,6 +439,7 @@ export function HostsPage() {
       </div></div>
     </main>
 
+    {capabilityHost && <HostCapabilities host={capabilityHost} onClose={() => setCapabilityHost(null)}/>}
     {showAdd && <Modal title={editingHost ? 'SSH 连接设置' : '添加主机'} busy={pending} allowCloseWhileBusy={draft.transport === 'tailcat'} onClose={draft.transport === 'tailcat' && (pending || waiting) ? dismissAdd : closeAdd} className={draft.transport === 'tailcat' ? 'tailcat-modal' : ''}>
         <Form onSubmit={submit} className="form-stack">
           <label className="field"><span className="field-label">连接方式</span><Select aria-label="连接方式" className="input" value={draft.transport} disabled={Boolean(editingHost) || pending} onChange={(event) => setDraft({ ...draft, transport: event.target.value as HostDraft['transport'] })}><SelectOption value="tailcat">Tailcat 内网穿透（推荐）</SelectOption><SelectOption value="ssh">SSH</SelectOption>{auth.user?.role === 'admin' && <SelectOption value="local">本机 Herdr</SelectOption>}</Select></label>

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -25,13 +26,18 @@ const (
 )
 
 type PreflightResult struct {
-	Status        PreflightStatus `json:"status"`
-	HerdrPath     string          `json:"herdr_path,omitempty"`
-	Version       string          `json:"version,omitempty"`
-	ServerRunning bool            `json:"server_running"`
-	SocketPath    string          `json:"socket_path,omitempty"`
-	Details       string          `json:"details"`
-	Suggestion    string          `json:"suggestion,omitempty"`
+	Status                PreflightStatus `json:"status"`
+	HerdrPath             string          `json:"herdr_path,omitempty"`
+	Version               string          `json:"version,omitempty"`
+	CLIProtocol           int             `json:"cli_protocol,omitempty"`
+	DaemonVersion         string          `json:"daemon_version,omitempty"`
+	DaemonProtocol        int             `json:"daemon_protocol,omitempty"`
+	DaemonVerified        bool            `json:"daemon_verified"`
+	TerminalProtocolMatch *bool           `json:"terminal_protocol_match,omitempty"`
+	ServerRunning         bool            `json:"server_running"`
+	SocketPath            string          `json:"socket_path,omitempty"`
+	Details               string          `json:"details"`
+	Suggestion            string          `json:"suggestion,omitempty"`
 }
 
 var versionSemverRegex = regexp.MustCompile(`\b\d+\.\d+\.\d+\b`)
@@ -137,12 +143,13 @@ func RunPreflight(env Environment) PreflightResult {
 			HerdrPath:  absPath,
 			Version:    verStr,
 			Details:    fmt.Sprintf("执行 herdr api schema --json 失败或输出为空: %v", err),
-			Suggestion: "请确保使用 0.8.0 以上版本的 Herdr",
+			Suggestion: "请核对 Herdr 安装文件，并检查工作台的 Herdr 兼容性支持矩阵",
 		}
 	}
 
 	var rootSchema struct {
-		Schemas struct {
+		Protocol int `json:"protocol"`
+		Schemas  struct {
 			Request struct {
 				OneOf []struct {
 					Properties struct {
@@ -245,14 +252,44 @@ func RunPreflight(env Environment) PreflightResult {
 			Suggestion:    "Herdr 服务可能异常中断，请重新启动: herdr server",
 		}
 	}
-	_ = conn.Close()
-
-	return PreflightResult{
+	defer conn.Close()
+	result := PreflightResult{
 		Status:        PreflightOK,
 		HerdrPath:     absPath,
 		Version:       verStr,
+		CLIProtocol:   rootSchema.Protocol,
 		ServerRunning: true,
 		SocketPath:    socketVal,
-		Details:       "Herdr 可执行文件、接口能力与后台服务均正常就绪",
+		Details:       "Herdr 安装文件与 API socket 可用；尚未验证后台运行版本，请在工作台查看主机能力详情",
 	}
+	// The schema belongs to the installed executable. Only a read-only ping on
+	// this exact socket can identify the daemon; `status` text is not substituted
+	// when the daemon does not reply or omits optional fields.
+	_ = conn.SetDeadline(time.Now().Add(time.Second))
+	if err := json.NewEncoder(conn).Encode(map[string]any{"id": "herdrx-preflight", "method": "ping", "params": map[string]any{}}); err != nil {
+		return result
+	}
+	var pong struct {
+		Result struct {
+			Version  string `json:"version"`
+			Protocol int    `json:"protocol"`
+		} `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.NewDecoder(io.LimitReader(conn, 64<<10)).Decode(&pong) != nil || (len(pong.Error) > 0 && string(pong.Error) != "null") || pong.Result.Version == "" || pong.Result.Protocol <= 0 {
+		return result
+	}
+	result.DaemonVersion, result.DaemonProtocol, result.DaemonVerified = pong.Result.Version, pong.Result.Protocol, true
+	result.Details = "Herdr 安装文件与后台运行版本已分别读取，功能兼容性由工作台按接口判断"
+	if result.CLIProtocol > 0 {
+		matches := result.CLIProtocol == result.DaemonProtocol
+		result.TerminalProtocolMatch = &matches
+		if !matches {
+			// Pairing/JSON access remains useful even when a private terminal
+			// handshake cannot work. The workbench gates that feature separately.
+			result.Details = fmt.Sprintf("JSON 接口可连接，但已安装 CLI 的协议 %d 与后台协议 %d 不一致；基于 CLI 的终端功能受限，原生只读观察由工作台另行判断", result.CLIProtocol, result.DaemonProtocol)
+			result.Suggestion = "请由管理员核对 CLI 与后台运行版本并安排兼容性处理；herdrx 不会升级、重启 Herdr 或停止任务"
+		}
+	}
+	return result
 }

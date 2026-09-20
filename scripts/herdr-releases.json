@@ -1,0 +1,36 @@
+{
+  "repository": "herdrdev/herdr",
+  "versions": {
+    "0.8.2": {
+      "linux-amd64": {"asset": "herdr-linux-x86_64", "sha256": "976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4"}
+    },
+    "0.9.0": {
+      "linux-amd64": {"asset": "herdr-linux-x86_64", "sha256": "4fa1a01158dd8043da92d31b270780b0dcc10603038d9b61cac4d81ab63fb71f"}
+    },
+    "0.9.1": {
+      "linux-amd64": {"asset": "herdr-linux-x86_64", "sha256": "2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7"},
+      "linux-arm64": {"asset": "herdr-linux-aarch64", "sha256": "f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e"},
+      "darwin-amd64": {"asset": "herdr-macos-x86_64", "sha256": "053be0639935fe54ab5efbdb46651054e4f6a753a5b43153c88bd6912bce1e94"},
+      "darwin-arm64": {"asset": "herdr-macos-aarch64", "sha256": "5fc7a7e7adfaca56fa80aa89dcb025693357268dab8285b9ce2d08a2313c89de"}
+    }
+  },
+  "required_tests": {
+    "github.com/riba2534/herdrx/internal/herdr": [
+      "TestInputWithRealHerdr",
+      "TestComposerSendInputWithRealHerdr",
+      "TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr",
+      "TestComposerTwoLegSplitNeedsTheTargetToReadFirstWithRealHerdr",
+      "TestScrollWithRealHerdr",
+      "TestScrollFlickerWithRealHerdr",
+      "TestNativeObserveViewportWithRealHerdr"
+    ],
+    "github.com/riba2534/herdrx/internal/httpapi": [
+      "TestResponsiveTerminalWithRealHerdr"
+    ]
+  },
+  "not_applicable": {
+    "darwin": {
+      "TestScrollFlickerWithRealHerdr": "Linux PTY geometry fixture; macOS input, observe/control and lifecycle tests remain required."
+    }
+  }
+}
