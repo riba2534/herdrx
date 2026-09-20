@@ -18,7 +18,7 @@ jobs:
   verify:
     name: 测试与部署配置检查
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -71,11 +71,76 @@ jobs:
           node scripts/test-terminal-flicker.mjs
           node scripts/test-mobile-terminal-scroll.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-pwa.mjs
+      - name: 真实 Herdr 与双浏览器尺寸控制
+        run: |
+          HERDRX_TEST_HERDR="$(python3 scripts/test-herdr-compatibility.py --version 0.9.1 --download-only --cache "$RUNNER_TEMP/herdr-releases")"
+          export HERDRX_TEST_HERDR
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-control.mjs "$RUNNER_TEMP/herdrx-browser-test"
       - name: 检查目录挂载与部署配置
         run: |
           python3 scripts/check-deployment.py
           python3 scripts/test-publish-images.py
           python3 scripts/test-cli-installer.py
+          python3 scripts/test-herdr-compatibility-runner.py
+
+  verify-herdr:
+    name: 真实 Herdr ${{ matrix.version }} (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 0.8.2
+            platform: linux-amd64
+            runner: ubuntu-24.04
+          - version: 0.9.0
+            platform: linux-amd64
+            runner: ubuntu-24.04
+          - version: 0.9.1
+            platform: linux-amd64
+            runner: ubuntu-24.04
+          - version: 0.9.1
+            platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - version: 0.9.1
+            platform: darwin-amd64
+            runner: macos-15-intel
+          - version: 0.9.1
+            platform: darwin-arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      TMPDIR: /tmp
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/herdr-releases
+          key: herdr-${{ matrix.version }}-${{ matrix.platform }}-${{ hashFiles('scripts/herdr-releases.json') }}
+      - name: 校验实际运行平台
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: test "$(go env GOOS)-$(go env GOARCH)" = "$EXPECTED_PLATFORM"
+      - name: 校验固定二进制并强制执行真实终端回归
+        env:
+          HERDR_VERSION: ${{ matrix.version }}
+        run: |
+          python3 scripts/test-herdr-compatibility.py \
+            --version "$HERDR_VERSION" --race \
+            --cache "$RUNNER_TEMP/herdr-releases" \
+            --output "$RUNNER_TEMP/herdr-results"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: herdr-${{ matrix.version }}-${{ matrix.platform }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/herdr-results/
+          if-no-files-found: warn
+          retention-days: 14
 
   verify-macos:
     name: macOS 终端尺寸与接入回归 (${{ matrix.arch }})
@@ -113,7 +178,7 @@ jobs:
 
   images:
     name: 构建并验收 ${{ matrix.arch }} 镜像
-    needs: [verify, verify-macos]
+    needs: [verify, verify-macos, verify-herdr]
     strategy:
       fail-fast: false
       matrix:

@@ -32,6 +32,15 @@ export type Host = {
 
 export type SSHKey = { id: string; name: string; public_key: string; fingerprint: string; algorithm: string; certificate?: string; encrypted: boolean; revision: number; host_count: number; created_at: string; updated_at: string }
 export type HostFolder = { id: string; name: string; parent_id?: string; created_at: string; updated_at: string }
+export type HerdrCapabilities = {
+  cli: { version: string; protocol: number; methods?: string[] }
+  daemon: { version: string; protocol: number; capabilities?: Record<string, unknown> }
+  generation: string
+  checked_at: string
+  status: 'available' | 'limited' | 'unavailable'
+  coverage: 'tested' | 'untested'
+  features: Record<'snapshot' | 'observe' | 'input' | 'resize' | 'preserve_scroll' | 'history', { state: 'available' | 'unavailable' | 'unknown'; reason: string; evidence?: string[] }>
+}
 
 export type WorkbenchSession = {
   host_id: string

@@ -147,6 +147,8 @@ const FAKE_HERDR_CLI = `#!/usr/bin/env node
 // 每次启动都追加一行 spawn 记录，验收脚本据此断言「切视图不会重开终端流」。
 const { appendFileSync } = require('node:fs')
 const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('herdr 0.8.2'); process.exit(0) }
+if (args.join(' ') === 'api schema --json') { console.log(JSON.stringify({ protocol: 20, schemas: { request: { oneOf: [{ properties: { method: { const: 'session.snapshot' } } }] } } })); process.exit(0) }
 appendFileSync(process.env.HERDRX_FAKE_HERDR_SPAWNS, JSON.stringify({ kind: 'spawn', args }) + '\\n')
 if (args[0] !== 'terminal') process.exit(1)
 const pane = args[3] || 'unknown'
@@ -163,7 +165,7 @@ setInterval(function () {}, 1 << 30)
 function snapshotFixture({ width }) {
   const half = Math.floor(width / 2)
   return {
-    version: 'mock-0.8.2', protocol: 1,
+    version: '0.8.2', protocol: 20,
     focused_workspace_id: 'w1', focused_tab_id: 't1', focused_pane_id: 'p1',
     workspaces: [{ workspace_id: 'w1', label: '结构化对话验收', number: 1, active_tab_id: 't1', agent_status: 'idle', focused: true, pane_count: 2, tab_count: 1 }],
     tabs: [{ workspace_id: 'w1', tab_id: 't1', label: '1', number: 1, pane_count: 2, agent_status: 'idle', focused: true }],

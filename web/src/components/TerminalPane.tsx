@@ -18,12 +18,13 @@ import { isLocalInputTarget } from '../lib/keymap'
 import { paneDisplayName } from '../lib/labels'
 import { composerSubmitParams } from '../lib/composerDrafts'
 import type { PaneViewMode } from '../lib/paneViewMode'
-import type { WorkbenchClient } from '../lib/workbench'
+import type { TerminalControlState, TerminalResizeStatus, WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
 import { Button, StatusDot } from './ui'
 
 // Only the workbench passes a display profile; anything else must not silently
 // fall back to the cropped fixed-size view this component once shipped.
+const pageVisible = () => document.visibilityState !== 'hidden'
 const defaultDisplay: TerminalDisplay = { ...DEFAULT_DISPLAY.desktop }
 
 export type PaneSurfaceHandle = {
@@ -83,13 +84,40 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const termRef = useRef<Terminal | null>(null)
   const fontMeasureRef = useRef<ReturnType<typeof createFontMeasure> | null>(null)
   const streamRef = useRef<number | null>(null)
-  const responsive = display.mode === 'responsive'
+  const [controlState, setControlState] = useState<TerminalControlState>({ pane_id: pane.pane_id, state: 'available' })
+  const controlStateRef = useRef(controlState)
+  const [controlError, setControlError] = useState('')
+  const [resizeStatus, setResizeStatus] = useState<TerminalResizeStatus | null>(null)
+  const [observedGrid, setObservedGrid] = useState<{ cols: number; rows: number } | null>(null)
+  const controlling = controlState.state === 'owned'
+  const controlSupported = client.supportsTerminalControl()
+  const releaseSizing = () => {
+    window.clearTimeout(resizeTimerRef.current)
+    if (streamRef.current !== null) client.releaseControl(streamRef.current)
+    setResizeStatus(null)
+  }
+  const acquireSizing = async () => {
+    if (controlStateRef.current.state === 'pending') return
+    const streamID = streamRef.current
+    if (streamID === null || !connected || (compact && !activeRef.current) || chatModeRef.current || !pageVisible()) return
+    const transfer = controlStateRef.current.state === 'other'
+    if (transfer && !await confirm('另一个本站窗口将恢复保持远端尺寸。此终端会按当前窗口重新排版，其他窗口也会看到变化。', { title: '转到此窗口控制尺寸', confirmLabel: '转到此窗口控制', danger: false })) return
+    if (streamRef.current !== streamID || (compact && !activeRef.current) || !pageVisible() || chatModeRef.current) return
+    fitRef.current()
+    const size = desiredSizeRef.current
+    if (!size) { setControlError('窗口尺寸尚未就绪，请展开终端后重试。'); return }
+    setControlError('')
+    setResizeStatus(null)
+    sentSizeRef.current = size
+    try { await client.acquireControl(streamID, size.cols, size.rows, transfer) }
+    catch (error) { if (mountedRef.current && streamRef.current === streamID) setControlError(error instanceof Error ? error.message : '无法取得尺寸控制，请重试。') }
+  }
   const sourceColsRef = useRef(sourceCols)
   const sourceRowsRef = useRef(sourceRows)
   sourceColsRef.current = sourceCols
   sourceRowsRef.current = sourceRows
   const observedGridRef = useRef<{ cols: number; rows: number } | null>(null)
-  const desiredSizeRef = useRef({ cols: 80, rows: 24 })
+  const desiredSizeRef = useRef<{ cols: number; rows: number } | null>(null)
   const sentSizeRef = useRef({ cols: 0, rows: 0 })
   const resizeTimerRef = useRef(0)
   const fitRef = useRef<() => void>(() => {})
@@ -412,10 +440,12 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     // the result is rendered as-is, so a raised zoom can never push the grid
     // past the pane. Below the zoom ceiling only the fixed-size view scrolls.
     const maxFontSize = display.fontSize * display.zoom / 100
-    const size = responsive ? responsiveTerminalSize(bounds, fontMeasureRef.current.measure, maxFontSize) : null
+    const size = responsiveTerminalSize(bounds, fontMeasureRef.current.measure, maxFontSize)
+    desiredSizeRef.current = size
+    const controlsSize = controlStateRef.current.state === 'owned'
     const observed = observedGridRef.current
-    const cols = size?.cols ?? Math.max(10, observed?.cols || sourceCols || terminal.cols)
-    const rows = size?.rows ?? Math.max(3, observed?.rows || sourceRows || terminal.rows)
+    const cols = Math.max(10, observed?.cols || sourceCols || terminal.cols)
+    const rows = Math.max(3, observed?.rows || sourceRows || terminal.rows)
     const grid = { ...bounds, cols, rows }
     // Auto keeps the complete terminal visible while the fitted font stays
     // readable; below the floor it falls back to the fixed, scrollable view.
@@ -423,29 +453,29 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       : display.mode === 'auto' ? autoFitFont(grid, fontMeasureRef.current.measure, maxFontSize)
         : null
     const cropToFixedSize = display.mode === 'fixed' || (display.mode === 'auto' && fitted === null)
-    const baseSize = display.mode === 'responsive' || cropToFixedSize ? maxFontSize : fitted
+    const baseSize = controlsSize || cropToFixedSize ? maxFontSize : fitted
     const fontSize = baseSize === null ? null : Math.round(baseSize * 100) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
     const applyResize = () => {
       if (termRef.current !== terminal || writeSessionRef.current.closed) return
       if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows)
     }
-    // A responsive live grid belongs to the incoming frame. Speculatively
-    // shrinking it can discard rows before a debounced remote resize arrives,
-    // and interleave local reflow with an older frame's parser state.
-    if (!responsive || streamRef.current === null) {
+    // Only authoritative frames change the live grid, including while a
+    // controller is waiting for Herdr to apply its newly measured target.
+    if (!controlsSize || streamRef.current === null) {
       const sizeChanged = terminal.cols !== cols || terminal.rows !== rows
       const hasQueuedFit = writeSessionRef.current.waiters.some((waiter) => waiter.kind === 'fit')
       if (writeSessionRef.current.pending === 0) applyResize()
       else if (sizeChanged || hasQueuedFit) whenTerminalIdle(applyResize, { kind: 'fit' })
     }
-    if (size) {
-      desiredSizeRef.current = size
-      if (streamRef.current !== null && (sentSizeRef.current.cols !== cols || sentSizeRef.current.rows !== rows)) {
+    if (size && controlsSize) {
+      if (streamRef.current !== null && (sentSizeRef.current.cols !== size.cols || sentSizeRef.current.rows !== size.rows)) {
         window.clearTimeout(resizeTimerRef.current)
         resizeTimerRef.current = window.setTimeout(() => {
-          if (streamRef.current === null) return
+          if (streamRef.current === null || controlStateRef.current.state !== 'owned' || !pageVisible() || chatModeRef.current) return
           const next = desiredSizeRef.current
+          if (!next) return
+          setResizeStatus(null)
           client.resize(streamRef.current, next.cols, next.rows)
           sentSizeRef.current = next
         }, 80)
@@ -454,7 +484,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (fontSize !== null) onFontSizeChange?.(fontSize)
     // Compact panes are told too: on a phone the overlay scrollbars hide the
     // cut just as well, and the badge is the only way back to a complete grid.
-    if (cropToFixedSize && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
+    if (!controlsSize && cropToFixedSize && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
       const metrics = fontMeasureRef.current.measure(fontSize)
       const cropped = Boolean(metrics && (cols * metrics.width > bounds.width + 0.5 || rows * metrics.height > bounds.height + 0.5))
       // State the size the badge would produce, so the jump below the readable
@@ -473,7 +503,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   // Fit the final sidebar layout before the next paint, so xterm's scheduled
   // render sees only the final font instead of several visible trial sizes.
-  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode])
+  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode, controlling])
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -616,6 +646,39 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   }, [theme, enhancedContrast, optionAsMeta, screenReaderMode])
 
   useEffect(() => {
+    const unsubscribe = client.onTerminalControl(pane.pane_id, (state) => {
+      controlStateRef.current = state
+      setControlState(state)
+      if (state.state !== 'owned') {
+        window.clearTimeout(resizeTimerRef.current)
+        setResizeStatus(null)
+      }
+    })
+    const unsubscribeResize = client.onTerminalResize((next) => {
+      if (next.stream_id === streamRef.current) setResizeStatus(next)
+    })
+    return () => { unsubscribe(); unsubscribeResize() }
+  }, [client, pane.pane_id, connectionEpoch])
+
+  useEffect(() => {
+    if ((compact && !active) || chatMode || !connected) releaseSizing()
+  }, [active, compact, chatMode, connected])
+
+  useEffect(() => {
+    const visibility = () => { if (!pageVisible()) releaseSizing() }
+    const hide = () => releaseSizing()
+    document.addEventListener('visibilitychange', visibility)
+    window.addEventListener('pagehide', hide)
+    const fit = () => fitRef.current()
+    window.visualViewport?.addEventListener('resize', fit)
+    return () => {
+      document.removeEventListener('visibilitychange', visibility)
+      window.removeEventListener('pagehide', hide)
+      window.visualViewport?.removeEventListener('resize', fit)
+    }
+  }, [client])
+
+  useEffect(() => {
     if (!connectionEpoch || !termRef.current) return
     let cancelled = false
     let firstFrame = true
@@ -628,6 +691,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       setStreamFailed(false)
       setStatus('正在连接终端…')
       observedGridRef.current = null
+      setObservedGrid(null)
       fitRef.current()
       const terminal = termRef.current!
       applyStdin()
@@ -638,14 +702,14 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         terminal.options.disableStdin = true
         pendingInputRef.current = []
         pendingInputSizeRef.current = 0
-        setStatus('终端连接已关闭：' + (responsive && reason.includes('already has an attached client') ? '此终端正在其他窗口自适应显示，请关闭那个窗口后重连，或切换为“固定字号”。' : reason))
+        setStatus('终端连接已关闭：' + reason)
         setStreamFailed(true)
       }
       try {
-        const cols = responsive ? desiredSizeRef.current.cols : Math.max(10, sourceColsRef.current || terminal.cols)
-        const rows = responsive ? desiredSizeRef.current.rows : Math.max(3, sourceRowsRef.current || terminal.rows)
+        const cols = Math.max(10, sourceColsRef.current || terminal.cols)
+        const rows = Math.max(3, sourceRowsRef.current || terminal.rows)
         sentSizeRef.current = { cols, rows }
-        const streamID = await (responsive ? client.openTerminal(pane.pane_id, cols, rows, true) : client.openTerminal(pane.pane_id, cols, rows))
+        const streamID = await client.openTerminal(pane.pane_id, cols, rows)
         if (cancelled) { client.closeTerminal(streamID); return }
         streamRef.current = streamID
         setStatus('可输入')
@@ -653,13 +717,17 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
           const ack = () => client.acknowledge(streamID, frame.seq)
           const validFrame = frame.cols >= 10 && frame.rows >= 3
-          const followObserved = !responsive && validFrame
+          if (resetStream && (!frame.full || !validFrame)) { ack(); return }
+          const followObserved = validFrame
           const needsResize = validFrame && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)
           const deliver = () => {
             if (cancelled || writeSessionRef.current.closed || termRef.current !== terminal) return
             if (historyRef.current.active) { ack(); return }
-            if (followObserved) observedGridRef.current = { cols: frame.cols, rows: frame.rows }
-            if (validFrame && (responsive || followObserved) && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) {
+            if (followObserved) {
+              observedGridRef.current = { cols: frame.cols, rows: frame.rows }
+              setObservedGrid((current) => current?.cols === frame.cols && current.rows === frame.rows ? current : { cols: frame.cols, rows: frame.rows })
+            }
+            if (validFrame && (terminal.cols !== frame.cols || terminal.rows !== frame.rows)) {
               terminal.resize(frame.cols, frame.rows)
               if (followObserved) fitRef.current()
             }
@@ -707,7 +775,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         streamRef.current = null
       }
     }
-  }, [client, pane.pane_id, connectionEpoch, responsive, streamGeneration])
+  }, [client, pane.pane_id, connectionEpoch, streamGeneration])
 
   useEffect(() => {
     applyStdin()
@@ -882,6 +950,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   }}>
     {/* 紧凑 header 固定在 pane 布局流中：Agent 名称可截断/隐藏，视图开关永远不会被它遮盖。 */}
     <div className="pane-header">
+      {controlling && <Button className="tool-button sizing-owner-badge" aria-label="释放尺寸控制" data-tooltip="由此窗口控制任务尺寸 · 点击恢复保持远端尺寸" onClick={releaseSizing}>此窗口控制尺寸</Button>}
       {!compact && <span className="pane-header-name" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
       {onViewModeChange && <PaneViewToggle mode={viewMode} onChange={(mode) => { setToolbarOpen(false); onViewModeChange(mode) }}/>}
       {!compact && <span className="pane-header-tools">
@@ -893,6 +962,16 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
         <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={paneDisplayName(pane)}>{paneDisplayName(pane)}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>
         {headerControls}
+        <div className="terminal-sizing" role="group" aria-label="任务尺寸" data-control-state={controlState.state}>
+          <span className="terminal-sizing-state" aria-live="polite">{observedGrid ? `当前 ${observedGrid.cols}×${observedGrid.rows} · ` : ''}{controlling ? '由此窗口控制' : controlState.state === 'other' ? '本站其他窗口控制' : controlState.state === 'pending' ? '正在申请尺寸控制…' : controlState.state === 'blocked' ? '尺寸控制暂不可用' : '保持远端尺寸'}</span>
+          {controlSupported ? <>
+            {controlling || controlState.state === 'pending' ? <Button className="tool-button" onClick={releaseSizing}>保持远端尺寸</Button>
+              : <Button className="tool-button" disabled={streamFailed || status !== '可输入' || chatMode || !connected} onClick={() => void acquireSizing()}>{controlState.state === 'other' ? '转到此窗口控制' : '使用此窗口尺寸'}</Button>}
+            <small className="field-hint">{controlling ? '按所选字号调整任务；释放后恢复本地显示偏好。' : '会让此终端按当前窗口重新排版，其他窗口也会看到变化。'}</small>
+          </> : <small className="field-hint">当前工作台不支持尺寸控制，请更新工作台后刷新页面。仍可查看和输入。</small>}
+          <small className="terminal-sizing-progress" role="status">{resizeStatus ? `${resizeStatus.status === 'observed' ? '已观察到目标尺寸' : '已提交目标尺寸'} ${resizeStatus.cols}×${resizeStatus.rows}` : controlling ? '窗口变化时会自动调整任务尺寸' : ''}</small>
+          {(controlError || controlState.reason) && <small className={controlError || controlState.state === 'blocked' ? 'field-error' : 'field-hint'} role={controlError || controlState.state === 'blocked' ? 'alert' : 'status'}>{controlError || controlState.reason}</small>}
+        </div>
         <div className="terminal-tools">
           {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
           <Button className="tool-button" aria-label="选择文本" aria-pressed={textSelectMode} data-tooltip={textSelectMode ? '关闭文本选择' : '选择终端文本后可复制'} onClick={() => setTextSelectMode((value) => !value)}><Type size={14}/></Button>
@@ -904,7 +983,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
           <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
         </div>
       </header>
-      {!chatMode && cropHint && <button type="button" className="pane-crop-badge" data-tooltip={`当前 ${cropHint.cols}×${cropHint.rows} 未完整显示；点击改为适应窗口${cropHint.fit === null ? '' : `，字号约 ${cropHint.fit.toFixed(1).replace(/\.0$/, '')} px`}`} onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 适应窗口</button>}
+      {!chatMode && cropHint && <button type="button" className="pane-crop-badge" data-tooltip={`当前 ${cropHint.cols}×${cropHint.rows} 未完整显示；点击改为完整显示${cropHint.fit === null ? '' : `，字号约 ${cropHint.fit.toFixed(1).replace(/\.0$/, '')} px`}`} onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 完整显示</button>}
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
       {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}

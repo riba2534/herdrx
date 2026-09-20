@@ -1,7 +1,10 @@
 package agentcli
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/riba2534/herdrx/internal/testpaths"
 	"net"
 	"os"
 	"path/filepath"
@@ -125,6 +128,17 @@ func TestPreflight_FullSuccess(t *testing.T) {
 		t.Fatalf("listen mock unix socket: %v", err)
 	}
 	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var request map[string]any
+		if json.NewDecoder(conn).Decode(&request) == nil && request["method"] == "ping" {
+			_ = json.NewEncoder(conn).Encode(map[string]any{"result": map[string]any{"type": "pong", "version": "0.8.2", "protocol": 20}})
+		}
+	}()
 
 	env := Environment{
 		HerdrBin: herdrBin,
@@ -150,5 +164,74 @@ func TestPreflight_FullSuccess(t *testing.T) {
 	}
 	if !res.ServerRunning || res.SocketPath != realSocket {
 		t.Fatalf("unexpected preflight result: %+v", res)
+	}
+	if !res.DaemonVerified || res.DaemonVersion != "0.8.2" || res.DaemonProtocol != 20 {
+		t.Fatalf("live identity missing: %+v", res)
+	}
+}
+
+func TestPreflightSeparatesInstalledAndLiveProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		cliProtocol, liveProtocol int
+		liveVersion               string
+		want                      PreflightStatus
+	}{
+		{"different-product-compatible", 22, 22, "0.9.1", PreflightOK},
+		{"protocol-mismatch-keeps-json-access", 20, 22, "0.9.1", PreflightOK},
+		{"missing-live-identity", 22, 0, "", PreflightOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := testpaths.ShortTempDir(t)
+			binary, socket := filepath.Join(dir, "herdr"), filepath.Join(dir, "api.sock")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			listener, err := net.Listen("unix", socket)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				defer conn.Close()
+				var request map[string]any
+				if json.NewDecoder(conn).Decode(&request) != nil {
+					return
+				}
+				if request["method"] != "ping" {
+					return
+				}
+				_ = json.NewEncoder(conn).Encode(map[string]any{"result": map[string]any{"type": "pong", "version": tc.liveVersion, "protocol": tc.liveProtocol}})
+			}()
+			env := Environment{HerdrBin: binary, HomeDir: dir, CommandRunner: func(_ string, args ...string) ([]byte, error) {
+				switch args[0] {
+				case "--version":
+					return []byte("herdr 0.9.0"), nil
+				case "api":
+					return []byte(fmt.Sprintf(`{"protocol":%d,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"session.snapshot"}}}]}}}`, tc.cliProtocol)), nil
+				case "status":
+					return []byte("status: running\nversion: 0.9.0\nsocket: " + socket + "\n"), nil
+				default:
+					return nil, fmt.Errorf("unexpected command %q", args)
+				}
+			}}
+			result := RunPreflight(env)
+			if result.Status != tc.want || result.CLIProtocol != tc.cliProtocol || result.Version != "herdr 0.9.0" || result.DaemonVersion != tc.liveVersion || result.DaemonProtocol != tc.liveProtocol {
+				t.Fatalf("identity conflated: %+v", result)
+			}
+			if result.DaemonVerified != (tc.liveProtocol > 0) {
+				t.Fatalf("fabricated daemon verification: %+v", result)
+			}
+			if tc.liveProtocol == 0 && result.TerminalProtocolMatch != nil {
+				t.Fatal("incomplete daemon identity became a compatibility claim")
+			}
+			if tc.liveProtocol > 0 && (result.TerminalProtocolMatch == nil || *result.TerminalProtocolMatch != (tc.cliProtocol == tc.liveProtocol)) {
+				t.Fatalf("incorrect private protocol diagnostic: %+v", result)
+			}
+		})
 	}
 }

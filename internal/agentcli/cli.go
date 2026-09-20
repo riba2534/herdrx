@@ -507,8 +507,19 @@ func runDoctor(args []string, stdout, stderr io.Writer, env Environment, default
 
 	fmt.Fprintln(stdout, "=== herdrx 诊断报告 ===")
 	fmt.Fprintf(stdout, "后台守护进程: running=%v\n", doc.DaemonRunning)
-	fmt.Fprintf(stdout, "Herdr 检测: %s (版本: %s, 路径: %s, 运行中: %v)\n",
+	fmt.Fprintf(stdout, "Herdr 检测: %s (CLI 版本: %s, 路径: %s, 运行中: %v)\n",
 		doc.HerdrCheck.Status, doc.HerdrCheck.Version, doc.HerdrCheck.HerdrPath, doc.HerdrCheck.ServerRunning)
+	if doc.HerdrCheck.DaemonVerified {
+		fmt.Fprintf(stdout, "Herdr 后台版本: %s (CLI 协议: %d, 后台协议: %d)\n", doc.HerdrCheck.DaemonVersion, doc.HerdrCheck.CLIProtocol, doc.HerdrCheck.DaemonProtocol)
+	} else {
+		fmt.Fprintln(stdout, "Herdr 后台版本: 尚未验证，请在工作台查看主机能力详情")
+	}
+	if doc.HerdrCheck.Details != "" {
+		fmt.Fprintf(stdout, "Herdr 能力说明: %s\n", doc.HerdrCheck.Details)
+	}
+	if doc.HerdrCheck.Suggestion != "" {
+		fmt.Fprintf(stdout, "Herdr 建议: %s\n", doc.HerdrCheck.Suggestion)
+	}
 	fmt.Fprintf(stdout, "配置状态: valid=%v (路径: %s)\n", doc.ConfigValid, doc.ConfigPath)
 	fmt.Fprintf(stdout, "配对授权: paired=%v, revoked=%v\n", doc.Paired, doc.Revoked)
 	for _, probe := range doc.DERP {

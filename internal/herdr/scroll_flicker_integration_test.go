@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // This is intentionally a native-client fixture: a headless terminal with zero
@@ -56,13 +58,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 			if err := daemon.Start(); err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() {
-				stop, done := context.WithTimeout(context.Background(), 2*time.Second)
-				defer done()
-				_ = exec.CommandContext(stop, binary, "--session", session, "server", "stop").Run()
-				_ = daemon.Process.Kill()
-				_ = daemon.Wait()
-			})
+			defer testprocess.StopHerdr(t, binary, session, daemon)
 			endpoint, err := NewLocalEndpoint(binary, session)
 			if err != nil {
 				t.Fatal(err)
@@ -90,17 +86,8 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 			pane := created.RootPane.ID
 			// Emulate an actual Ghostty host with a PTY, consuming Herdr's TUI
 			// output and responding to host-geometry/terminal-identity queries.
-			if err := os.WriteFile(filepath.Join(dir, "native.py"), []byte(flickerNativeHost), 0600); err != nil {
-				t.Fatal(err)
-			}
-			native := exec.CommandContext(ctx, "python3", filepath.Join(dir, "native.py"), binary, session)
-			if err := native.Start(); err != nil {
-				t.Fatal(err)
-			}
-			defer func() {
-				_ = native.Process.Signal(os.Interrupt)
-				_ = native.Wait()
-			}()
+			stopNative := startNativeTerminalFixture(t, ctx, dir, binary, session)
+			defer stopNative()
 			var rect Rect
 			getRect := func() bool {
 				snapshot, err := endpoint.Snapshot(ctx)
@@ -243,16 +230,51 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 	}
 }
 
-const flickerNativeHost = `import os,sys,pty,fcntl,termios,struct,subprocess,select,signal
+func startNativeTerminalFixture(t *testing.T, ctx context.Context, dir, binary, session string) func() {
+	t.Helper()
+	path := filepath.Join(dir, "native.py")
+	if err := os.WriteFile(path, []byte(flickerNativeHost), 0600); err != nil {
+		t.Fatal(err)
+	}
+	diagnosticPath := filepath.Join(dir, "native.log")
+	logFile, err := os.OpenFile(diagnosticPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := exec.CommandContext(ctx, "python3", path, binary, session)
+	native.Stdout, native.Stderr = logFile, logFile
+	control, err := native.StdinPipe()
+	if err != nil {
+		_ = logFile.Close()
+		t.Fatal(err)
+	}
+	if err := native.Start(); err != nil {
+		_ = control.Close()
+		_ = logFile.Close()
+		t.Fatal(err)
+	}
+	return func() {
+		defer logFile.Close()
+		testprocess.StopNative(t, native, control, diagnosticPath)
+	}
+}
+
+const flickerNativeHost = `import os,sys,pty,fcntl,termios,struct,subprocess,select,signal,faulthandler,time
+faulthandler.enable(file=sys.stderr)
+def stage(message): print('%.6f host=%d %s'%(time.monotonic(),os.getpid(),message),file=sys.stderr,flush=True)
+stage('opening terminal')
 master,slave=pty.openpty()
+os.set_blocking(master,False)
+os.set_blocking(0,False)
 fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',50,160,1280,800))
 def prepare():
     os.setsid()
     fcntl.ioctl(0,termios.TIOCSCTTY,0)
 child=subprocess.Popen([sys.argv[1],'--session',sys.argv[2]],stdin=slave,stdout=slave,stderr=slave,preexec_fn=prepare)
+stage('child=%d started'%child.pid)
+faulthandler.dump_traceback_later(3,repeat=True,file=sys.stderr)
 os.close(slave)
-def stop(*args): raise KeyboardInterrupt()
-signal.signal(signal.SIGTERM,stop)
+pending=b''
 try:
     while child.poll() is None:
         marker=os.path.join(os.path.dirname(__file__),'refresh-native')
@@ -260,17 +282,41 @@ try:
             os.unlink(marker)
             os.kill(child.pid,signal.SIGWINCH)
             open(marker+'-done','w').close()
-        if not select.select([master],[],[],.2)[0]: continue
-        data=os.read(master,65536)
-        if not data: break
-        for query,response in [(b'\x1b[16t',b'\x1b[6;16;8t'),(b'\x1b[14t',b'\x1b[4;800;1280t'),(b'\x1b[18t',b'\x1b[8;50;160t'),(b'\x1b[6n',b'\x1b[1;1R'),(b'\x1b[c',b'\x1b[?1;2c'),(b'\x1b[>c',b'\x1b[>1;4000;0c')]:
-            if query in data: os.write(master,response)
-except (KeyboardInterrupt,OSError): pass
+        readable,writable,_=select.select([0,master],[master] if pending else [],[],.2)
+        if 0 in readable and not os.read(0,4096):
+            stage('control EOF received')
+            break
+        if master in readable:
+            try: data=os.read(master,65536)
+            except BlockingIOError: data=None
+            if data==b'': break
+            if data:
+                for query,response in [(b'\x1b[16t',b'\x1b[6;16;8t'),(b'\x1b[14t',b'\x1b[4;800;1280t'),(b'\x1b[18t',b'\x1b[8;50;160t'),(b'\x1b[6n',b'\x1b[1;1R'),(b'\x1b[c',b'\x1b[?1;2c'),(b'\x1b[>c',b'\x1b[>1;4000;0c')]:
+                    if query in data: pending+=response
+        if master in writable:
+            try: pending=pending[os.write(master,pending):]
+            except BlockingIOError: pass
+except (KeyboardInterrupt,OSError) as err: stage('terminal loop ended: '+repr(err))
 finally:
+    faulthandler.dump_traceback_later(2.5,repeat=True,file=sys.stderr)
+    # The host no longer drains output. Release its PTY before waiting for the
+    # native client, including Darwin's tty teardown during process exit.
+    stage('closing master before terminating child=%d'%child.pid)
+    os.close(master)
+    stage('master closed')
+    stage('terminating child=%d'%child.pid)
     child.terminate()
     try: child.wait(timeout=2)
-    except subprocess.TimeoutExpired: child.kill();child.wait()
-    os.close(master)
+    except subprocess.TimeoutExpired:
+        stage('killing child=%d after graceful timeout'%child.pid)
+        child.kill()
+        try: child.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            stage('child still exists after SIGKILL; capturing process state')
+            subprocess.run(['ps','-o','pid=,ppid=,stat=,wchan=,command=','-p',str(child.pid)],stdout=sys.stderr,stderr=sys.stderr,timeout=.5)
+            child.wait()
+    stage('child=%d reaped status=%s; host exiting'%(child.pid,child.returncode))
+    faulthandler.cancel_dump_traceback_later()
 `
 
 const flickerApplication = `import os,tty,re,json,signal,time,fcntl,termios,struct
@@ -295,7 +341,9 @@ os.write(1,b'\x1b[?1049h\x1b[?1000h\x1b[?1006h')
 record();draw()
 data=b''
 while True:
-    data+=os.read(0,4096)
+    chunk=os.read(0,4096)
+    if not chunk: break
+    data+=chunk
     while True:
         match=re.search(rb'\x1b\[<(64|65);\d+;\d+M',data)
         if not match: break

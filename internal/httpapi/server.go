@@ -59,6 +59,7 @@ type API struct {
 	relay              *workbenchRelay
 	scriptHashes       string
 	voice              *voicegateway.Gateway
+	geometry           geometryRegistry
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {

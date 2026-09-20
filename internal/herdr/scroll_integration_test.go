@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // Opt in with HERDRX_TEST_HERDR=/path/to/herdr. All processes, sockets, panes
@@ -32,11 +34,7 @@ func TestScrollWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", "wheel-test", "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer testprocess.StopHerdr(t, binary, "wheel-test", server)
 	endpoint, err := NewLocalEndpoint(binary, "wheel-test")
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +58,11 @@ func TestScrollWithRealHerdr(t *testing.T) {
 	if err := json.Unmarshal(result, &created); err != nil || created.RootPane.ID == "" {
 		t.Fatalf("create isolated pane: %s %v", result, err)
 	}
-	t.Cleanup(func() {
+	defer func() {
 		closeCtx, stop := context.WithTimeout(context.Background(), time.Second)
 		defer stop()
 		_, _ = endpoint.Call(closeCtx, "pane.close", map[string]any{"pane_id": created.RootPane.ID})
-	})
+	}()
 	// A headless fixture starts at the default 120x40 PTY size until a native
 	// view claims its layout. Establish that view before launching the app, as
 	// on an already-open Herdr workspace, then measure across wheel gestures.
@@ -100,7 +98,9 @@ os.write(1,b"\x1b[?1049h\x1b[?1000h\x1b[?1006h")
 record()
 data=b""
 while True:
-    data+=os.read(0,4096)
+    chunk=os.read(0,4096)
+    if not chunk: break
+    data+=chunk
     while True:
         match=re.search(rb"\x1b\[<(64|65);\d+;\d+M",data)
         if not match: break

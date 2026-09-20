@@ -45,6 +45,8 @@ async function fixture(browser, options, fixtureSnapshot = snapshot, storedDispl
     let streamID = 0
     const paneStreams = new Map()
     const sizes = new Map()
+    const leases = new Map()
+    let controlGeneration = 0
     closePane = (paneID, reason) => {
       assert.ok(paneStreams.has(paneID), 'fixture pane has no terminal stream')
       ws.send(JSON.stringify({ t: 'terminal.closed', stream_id: paneStreams.get(paneID), reason }))
@@ -69,15 +71,34 @@ async function fixture(browser, options, fixtureSnapshot = snapshot, storedDispl
       const message = JSON.parse(raw)
       messages.push(message)
       if (message.t === 'hello') {
-        ws.send(JSON.stringify({ t: 'server_info' }))
+        ws.send(JSON.stringify({ t: 'server_info', features: { terminal_control: 1, terminal_resize_v2: 1 } }))
         ws.send(JSON.stringify({ t: 'conn', state: 'ready' }))
         ws.send(JSON.stringify({ t: 'snapshot', snapshot: fixtureSnapshot }))
       } else if (message.t === 'terminal.open') {
         const id = ++streamID
         paneStreams.set(message.pane_id, id)
-        sizes.set(id, { cols: message.cols, rows: message.rows, responsive: message.responsive })
-        ws.send(JSON.stringify({ t: 'terminal.opened', id: message.id, stream_id: id }))
-        emitFrame(id, message.responsive ? responsiveANSI(message.cols, message.rows) : ansi)
+        sizes.set(id, { cols: message.cols, rows: message.rows })
+        ws.send(JSON.stringify({ t: 'terminal.opened', id: message.id, pane_id: message.pane_id, stream_id: id, stream_epoch: `stream-${id}`, terminal_id: `terminal-${message.pane_id}` }))
+        emitFrame(id, ansi)
+      } else if (message.t === 'terminal.control.acquire') {
+        assert.equal(message.stream_epoch, `stream-${message.stream_id}`)
+        const lease = { stream_id: message.stream_id, stream_epoch: message.stream_epoch, control_generation: String(++controlGeneration) }
+        leases.set(message.stream_id, lease)
+        sizes.set(message.stream_id, { cols: message.cols, rows: message.rows })
+        ws.send(JSON.stringify({ t: 'terminal.control.acquired', id: message.id, ...lease, expires_in_ms: 20000 }))
+        emitFrame(message.stream_id, responsiveANSI(message.cols, message.rows))
+      } else if (message.t === 'terminal.resize_v2') {
+        const lease = leases.get(message.stream_id)
+        assert.ok(lease, 'resize requires an explicit control lease')
+        assert.equal(message.stream_epoch, lease.stream_epoch)
+        assert.equal(message.control_generation, lease.control_generation)
+        assert.ok(message.resize_seq > (lease.lastSequence || 0), 'resize sequence must increase')
+        lease.lastSequence = message.resize_seq
+        sizes.set(message.stream_id, { cols: message.cols, rows: message.rows })
+        emitFrame(message.stream_id, responsiveANSI(message.cols, message.rows))
+        ws.send(JSON.stringify({ ...message, t: 'terminal.resize.status', status: 'observed' }))
+      } else if (message.t === 'terminal.control.release') {
+        leases.delete(message.stream_id)
       } else if (message.t === 'call') {
         if (message.method === 'workspace.create') {
           const workspace = { ...fixtureSnapshot.workspaces[0], workspace_id: 'created-workspace', active_tab_id: 'created-tab', number: 2, label: '新建工作区', pane_count: 1, tab_count: 1 }
@@ -240,6 +261,31 @@ async function setDisplayMode(page, mode) {
   await page.getByRole('button', { name: '完成', exact: true }).click()
 }
 
+async function controlTaskSize(page) {
+  await openPaneTools(page)
+  const group = page.locator('.terminal-pane').first().getByRole('group', { name: '任务尺寸', exact: true })
+  if (await group.getAttribute('data-control-state') !== 'owned') {
+    try {
+      await group.getByRole('button', { name: '使用此窗口尺寸', exact: true }).click({ timeout: 5000 })
+    } catch (error) {
+      await screenshot(page, `control-failure-${page.viewportSize().width}x${page.viewportSize().height}`)
+      throw error
+    }
+    await expect(group).toHaveAttribute('data-control-state', 'owned')
+  }
+  await closePaneTools(page)
+}
+
+async function releaseTaskSize(page) {
+  await openPaneTools(page)
+  const group = page.locator('.terminal-pane').first().getByRole('group', { name: '任务尺寸', exact: true })
+  if (await group.getAttribute('data-control-state') === 'owned') {
+    await group.getByRole('button', { name: '保持远端尺寸', exact: true }).click()
+    await expect(group).toHaveAttribute('data-control-state', 'available')
+  }
+  await closePaneTools(page)
+}
+
 async function assertNoReservedHeaders(page) {
   await expect(page.locator('.workbench-main > .display-toolbar')).toHaveCount(0)
   const panes = await page.locator('.terminal-pane').all()
@@ -258,7 +304,11 @@ async function assertNoReservedHeaders(page) {
     assert.equal(await header.evaluate(el => getComputedStyle(el).position), 'absolute', 'terminal tools must float above the terminal')
     const box = await header.boundingBox()
     const children = await header.locator('button, .terminal-title').evaluateAll((els) => els.filter((el) => el.getClientRects().length).map((el) => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom } }))
-    for (const child of children) assert.ok(child.x >= box.x - 1 && child.right <= box.x + box.width + 1 && child.y >= box.y - 1 && child.bottom <= box.y + box.height + 1, `control escaped its pane header: ${JSON.stringify({ box, child })}`)
+    for (const child of children) {
+      const inside = child.x >= box.x - 1 && child.right <= box.x + box.width + 1 && child.y >= box.y - 1 && child.bottom <= box.y + box.height + 1
+      if (!inside) await screenshot(page, `toolbar-failure-${page.viewportSize().width}x${page.viewportSize().height}`)
+      assert.ok(inside, `control escaped its pane header: ${JSON.stringify({ box, child })}`)
+    }
     await closePaneTools(page, index)
     assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'closing terminal tools changed terminal geometry')
   }
@@ -314,16 +364,36 @@ try {
           desktop: { mode: 'responsive', fontSize: 14, zoom: 100 },
           mobile: { mode: 'responsive', fontSize: 14, zoom: 100 },
         })
-        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'saved responsive profile took native geometry on open')
+        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'saved responsive profile took native geometry on open')
         await restored.page.setViewportSize({ ...viewport, height: viewport.height - 100 })
         await restored.page.waitForTimeout(150)
-        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'local window resizing changed native geometry')
-        await setDisplayMode(restored.page, 'responsive')
-        await expect.poll(() => restored.messages.filter(m => m.t === 'terminal.open').at(-1)?.resize_remote).toBe(true)
+        assert.equal(restored.messages.some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'local window resizing changed native geometry')
+        await controlTaskSize(restored.page)
+        await expect.poll(() => restored.messages.filter(m => m.t === 'terminal.control.acquire').length).toBe(1)
+        await releaseTaskSize(restored.page)
+        await expect.poll(() => restored.messages.filter(m => m.t === 'terminal.control.release').length).toBe(1)
+        const afterRelease = restored.messages.length
+        await restored.page.setViewportSize(viewport)
+        await restored.page.waitForTimeout(150)
+        assert.equal(restored.messages.slice(afterRelease).some(m => m.t === 'terminal.resize_v2' || m.t === 'terminal.control.acquire'), false, 'released window silently reacquired geometry')
+        await controlTaskSize(restored.page)
+        const beforeHidden = restored.messages.length
+        await restored.page.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        await expect.poll(() => restored.messages.slice(beforeHidden).filter(m => m.t === 'terminal.control.release').length).toBe(1)
+        await restored.page.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        await restored.page.waitForTimeout(150)
+        assert.equal(restored.messages.slice(beforeHidden).some(m => m.t === 'terminal.control.acquire'), false, 'foreground restore silently reacquired geometry')
+        await controlTaskSize(restored.page)
         const beforeReload = restored.messages.length
         await restored.page.reload()
         await expect(restored.page.locator('.terminal-pane').first()).toHaveAttribute('data-terminal-status', '可输入')
-        assert.equal(restored.messages.slice(beforeReload).some(m => m.responsive || m.resize_remote || m.op === 4), false, 'reload silently resumed remote resize')
+        assert.equal(restored.messages.slice(beforeReload).some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'reload silently resumed remote resize')
         assert.deepEqual(restored.errors, [])
         await restored.context.close()
       }
@@ -430,7 +500,7 @@ try {
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'page has horizontal overflow')
       await assertNoReservedHeaders(page)
       await openPaneTools(page)
-      await expect(page.getByRole('button', { name: '适应窗口', exact: true })).toHaveAttribute('aria-pressed', 'false')
+      await expect(page.getByRole('button', { name: '完整显示', exact: true })).toHaveAttribute('aria-pressed', 'false')
       await expect(page.locator('.terminal-pane-active > .pane-body > .terminal-titlebar > .display-toolbar')).toHaveCount(1)
       await closePaneTools(page)
       const originalTerminals = await page.locator('.terminal-host > .xterm').elementHandles()
@@ -493,7 +563,7 @@ try {
       assert.ok(await page.locator('.terminal-viewport').first().evaluate((el) => el.scrollLeft > 0 && el.scrollTop > 0), 'enlarged frame cannot be panned')
       await page.reload()
       await expect.poll(async () => (await metrics(page)).font).toBe(22)
-      await clickPaneTool(page, '适应窗口')
+      await clickPaneTool(page, '完整显示')
       await expect.poll(async () => { const m = await metrics(page); return m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
       await page.getByRole('button', { name: '工作台设置', exact: true }).click()
       await page.getByRole('button', { name: '关闭设置' }).focus()
@@ -532,7 +602,7 @@ try {
       const nativeSnapshot = { ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, scroll: { max_offset_from_bottom: 0, offset_from_bottom: 0, viewport_rows: 40 } })) }
       const native = await fixture(browser, { viewport: { width: 1440, height: 900 } }, nativeSnapshot)
       const nativePane = native.page.locator('.terminal-pane').first()
-      await clickPaneTool(native.page, '适应窗口')
+      await clickPaneTool(native.page, '完整显示')
       await closePaneTools(native.page)
       await expect.poll(async () => { const m = await metrics(native.page); return m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }).toBe(true)
       await nativePane.locator('.xterm-rows > div').nth(5).hover()
@@ -566,12 +636,12 @@ try {
           return Boolean(row.textContent.includes('END') && edge && viewport && edge.width > 0 && edge.right <= viewport.right + 1)
         })).toBe(true)
       }
-      assert.equal(reflow.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'opening mobile must preserve native geometry')
-      await setDisplayMode(reflow.page, 'responsive')
+      assert.equal(reflow.messages.some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'opening mobile must preserve native geometry')
+      await controlTaskSize(reflow.page)
       await assertReflow()
-      assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).resize_remote, true)
-      assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).responsive, true)
-      assert.ok(reflow.messages.filter(m => m.t === 'terminal.open').at(-1).cols < 70)
+      assert.equal(reflow.messages.filter(m => m.t === 'terminal.control.acquire').length, 1)
+      assert.equal(reflow.messages.some(m => m.responsive || m.resize_remote), false, 'new control path must not use legacy responsive open')
+      assert.ok(reflow.messages.filter(m => m.t === 'terminal.control.acquire').at(-1).cols < 70)
       await screenshot(reflow.page, `${name}-295cols-responsive-479x847`)
       const openCount = reflow.messages.filter(m => m.t === 'terminal.open').length
       for (const [width, height] of [[390, 844], [320, 720], [700, 390], [479, 847]]) {
@@ -600,7 +670,7 @@ try {
       await hideAuxiliaryKeys(reflow.page)
       await expect.poll(() => reflow.page.getByRole('button', { name: '发送', exact: true }).evaluate(el => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(360)
       await assertReflow()
-      await expect.poll(() => reflow.messages.filter(m => m.op === 4).length).toBeGreaterThan(0)
+      await expect.poll(() => reflow.messages.filter(m => m.t === 'terminal.resize_v2').length).toBeGreaterThan(0)
       assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').length, openCount, 'rotation or keyboard reopened the responsive terminal')
       assert.deepEqual(reflow.errors, [])
       await reflow.context.close()
@@ -647,9 +717,9 @@ try {
             await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
             await expect(f.page.locator('.switcher').getByRole('button', { name: '新建工作区', exact: true })).toBeVisible()
             await f.page.getByRole('button', { name: '关闭切换位置', exact: true }).click()
-            assert.equal(f.messages.some(m => m.responsive || m.resize_remote || m.op === 4), false, 'mobile opening must not claim remote geometry')
+            assert.equal(f.messages.some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'mobile opening must not claim remote geometry')
             await setDisplayMode(f.page, 'fixed')
-            await setDisplayMode(f.page, 'responsive')
+            await controlTaskSize(f.page)
             await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
           }
         }
@@ -663,9 +733,16 @@ try {
         await closePaneTools(f.page)
         await screenshot(f.page, `${name}-${width}x${height}`)
         if (name === 'chromium' && width === 390) {
+          await releaseTaskSize(f.page)
           await setDisplayMode(f.page, 'fixed')
+          // Releasing preserves the last remote grid. Enlarge the local font
+          // explicitly so this remains a real horizontal-panning regression.
+          await f.page.getByRole('button', { name: '工作台设置', exact: true }).click()
+          await setSlider(f.page, '终端字号', 18)
+          await f.page.getByRole('button', { name: '完成', exact: true }).click()
+          await expect.poll(async () => { const m = await metrics(f.page); return m.contentWidth - m.width }).toBeGreaterThan(40)
           await touchAndKeyboardChecks(f.context, f.page)
-          await setDisplayMode(f.page, 'responsive')
+          await controlTaskSize(f.page)
         }
         await f.page.getByRole('button', { name: '工作台设置', exact: true }).click()
         await expect(f.page.getByRole('slider', { name: '终端字号', exact: true })).toBeVisible()

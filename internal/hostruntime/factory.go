@@ -37,11 +37,12 @@ type Factory struct {
 }
 
 type sharedEndpoint struct {
-	endpoint  herdr.Endpoint
-	refs      int
-	idle      *time.Timer
-	closed    bool
-	idleSince time.Time
+	endpoint     herdr.Endpoint
+	capabilities herdr.CapabilityCache
+	refs         int
+	idle         *time.Timer
+	closed       bool
+	idleSince    time.Time
 }
 
 func (f *Factory) Open(ctx context.Context, host store.Host) (herdr.Endpoint, error) {
@@ -65,17 +66,19 @@ func (f *Factory) Open(ctx context.Context, host store.Host) (herdr.Endpoint, er
 		if user.Role != "admin" || user.Disabled {
 			return nil, store.ErrAdminRequired
 		}
-		endpoint, err := herdr.NewLocalEndpoint(f.Config.HerdrBinary, host.SessionName)
-		if err != nil {
-			return nil, err
+		f.mu.Lock()
+		if f.closed {
+			f.mu.Unlock()
+			return nil, net.ErrClosed
 		}
-		return endpoint, nil
 	}
 	return f.openSharedLocked(ctx, host)
 }
 
 func (f *Factory) openUncached(ctx context.Context, host store.Host) (herdr.Endpoint, error) {
 	switch host.Transport {
+	case "local":
+		return herdr.NewLocalEndpoint(f.Config.HerdrBinary, host.SessionName)
 	case "ssh":
 		if host.AuthMethod == "system_ssh" {
 			user, err := f.Store.UserByID(ctx, host.OwnerID)
@@ -247,14 +250,22 @@ func (f *Factory) Close() {
 }
 
 func (h *sharedHandle) Snapshot(ctx context.Context) (herdr.Snapshot, error) {
+	generation := h.entry.capabilities.RuntimeGeneration()
 	value, err := h.entry.endpoint.Snapshot(ctx)
+	if err == nil {
+		h.entry.capabilities.ObserveSnapshot(value)
+	} else {
+		h.entry.capabilities.RecordFailureAt(generation, "session.snapshot", err)
+	}
 	if ctx.Err() == nil && isTransportError(err) {
 		h.invalidate()
 	}
 	return value, err
 }
 func (h *sharedHandle) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	generation := h.entry.capabilities.RuntimeGeneration()
 	value, err := h.entry.endpoint.Call(ctx, method, params)
+	h.entry.capabilities.RecordFailureAt(generation, method, err)
 	if ctx.Err() == nil && isTransportError(err) {
 		h.invalidate()
 	}

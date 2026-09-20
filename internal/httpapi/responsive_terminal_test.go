@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"github.com/riba2534/herdrx/internal/hostruntime"
 	"github.com/riba2534/herdrx/internal/store"
 	"github.com/riba2534/herdrx/internal/terminalwire"
+	"github.com/riba2534/herdrx/internal/testprocess"
 )
 
 // Exercise browser wire -> API -> real Herdr -> SIGWINCH application, including
@@ -38,11 +38,7 @@ func TestResponsiveTerminalWithRealHerdr(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = exec.Command(binary, "--session", "responsive-test", "server", "stop").Run()
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
+	defer testprocess.StopHerdr(t, binary, "responsive-test", server)
 	endpoint, err := herdr.NewLocalEndpoint(binary, "responsive-test")
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +86,7 @@ draw()
 data=b""
 while True:
     chunk=os.read(0,4096)
+    if not chunk: break
     received+=len(chunk)
     data+=chunk
     while True:
@@ -120,7 +117,7 @@ while True:
 	if err := db.CreateHost(ctx, store.Host{ID: "hst_fixture", OwnerID: owner, Name: "Responsive fixture", Transport: "local", SessionName: "responsive-test", Port: 22}); err != nil {
 		t.Fatal(err)
 	}
-	ws := fixtureSocket(t, ctx, srv, client)
+	ws := fixtureSocketHello(t, ctx, srv, client, `{"t":"hello","protocol":1,"browser_instance_id":"fixture-browser-0001","capabilities":{"terminal_control":1,"terminal_resize_v2":1}}`)
 	write := func(typ websocket.MessageType, data []byte) {
 		t.Helper()
 		if err := ws.Write(ctx, typ, data); err != nil {
@@ -144,11 +141,14 @@ while True:
 				write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeAck, StreamID: frame.StreamID, Seq: frame.Seq}))
 				continue
 			}
+			if typ == websocket.MessageBinary {
+				continue
+			}
 			var msg map[string]any
 			if err := json.Unmarshal(data, &msg); err != nil {
 				t.Fatal(err)
 			}
-			if msg["t"] == "error" {
+			if msg["t"] == "error" && want != "error" {
 				t.Fatalf("unexpected API error: %s", data)
 			}
 			if msg["t"] == want {
@@ -156,12 +156,33 @@ while True:
 			}
 		}
 	}
+	epochs := make(map[uint32]string)
+	generations := make(map[uint32]string)
+	sendJSON := func(m map[string]any) { t.Helper(); data, _ := json.Marshal(m); write(websocket.MessageText, data) }
+	acquire := func(id uint32, cols, rows int, transfer bool, want string) map[string]any {
+		t.Helper()
+		sendJSON(map[string]any{"t": "terminal.control.acquire", "id": "acquire", "stream_id": id, "stream_epoch": epochs[id], "cols": cols, "rows": rows, "transfer": transfer})
+		reply := read(want)
+		if gen, ok := reply["control_generation"].(string); ok {
+			generations[id] = gen
+		}
+		return reply
+	}
 	open := func(responsive bool, cols, rows int) uint32 {
 		t.Helper()
-		data, _ := json.Marshal(map[string]any{"t": "terminal.open", "id": "open", "pane_id": created.RootPane.ID, "mode": "observe", "responsive": responsive, "resize_remote": responsive, "takeover": true, "cols": cols, "rows": rows})
-		write(websocket.MessageText, data)
-		return uint32(read("terminal.opened")["stream_id"].(float64))
+		sendJSON(map[string]any{"t": "terminal.open", "id": "open", "pane_id": created.RootPane.ID, "mode": "observe", "cols": cols, "rows": rows})
+		reply := read("terminal.opened")
+		id := uint32(reply["stream_id"].(float64))
+		epochs[id] = reply["stream_epoch"].(string)
+		if responsive {
+			acquire(id, cols, rows, false, "terminal.control.acquired")
+		}
+		return id
 	}
+	resize := func(id uint32, seq, cols, rows int) {
+		sendJSON(map[string]any{"t": "terminal.resize_v2", "stream_id": id, "stream_epoch": epochs[id], "control_generation": generations[id], "resize_seq": seq, "cols": cols, "rows": rows})
+	}
+
 	before := state()
 	desktop := open(false, 295, 40)
 	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"terminal.open","id":"legacy","pane_id":%q,"mode":"control","responsive":true,"takeover":true,"cols":142,"rows":81}`, created.RootPane.ID)))
@@ -184,7 +205,7 @@ while True:
 	}
 	mobile := open(true, 56, 30)
 	until(func() bool { value := state(); return value.Cols == 56 && value.Rows == 30 })
-	write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: mobile, Payload: terminalwire.TerminalPayload(40, 18, nil)}))
+	resize(mobile, 1, 40, 18)
 	until(func() bool { value := state(); return value.Cols == 40 && value.Rows == 18 })
 	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"call","id":"wheel","method":"terminal.scroll","params":{"stream_id":%d,"lines":-9,"column":10,"row":5}}`, mobile)))
 	read("res")
@@ -192,16 +213,36 @@ while True:
 	if got := state(); got.Cols != 40 || got.Rows != 18 || got.PID != pid {
 		t.Fatalf("wheel changed geometry/process: %+v", got)
 	}
-	// A second responsive window must never steal the first one's attachment,
-	// even if an untrusted browser requests takeover.
-	second := open(true, 70, 25)
-	closed := read("terminal.closed")
-	if uint32(closed["stream_id"].(float64)) != second || !strings.Contains(closed["reason"].(string), "already has an attached client") {
-		t.Fatal(closed)
+	// A second observation cannot acquire without explicit site-local transfer.
+	second := open(false, 70, 25)
+	conflict := acquire(second, 70, 25, false, "error")
+	if conflict["code"] != "control_conflict" {
+		t.Fatal(conflict)
 	}
 	if got := state(); got.Cols != 40 || got.Rows != 18 {
 		t.Fatalf("second view stole dimensions: %+v", got)
 	}
+	// A wheel from another observer must use the existing controller.
+	sendJSON(map[string]any{"t": "call", "id": "wheel-other", "method": "terminal.scroll", "params": map[string]any{"stream_id": second, "lines": 3, "column": 10, "row": 5}})
+	read("res")
+	until(func() bool { return state().Position == -2 })
+	acquire(second, 70, 25, true, "terminal.control.acquired")
+	until(func() bool { return state().Cols == 70 && state().Rows == 25 })
+	resize(mobile, 2, 22, 10)
+	if stale := read("error"); stale["code"] != "control_expired" {
+		t.Fatal(stale)
+	}
+	resize(second, 2, 64, 24)
+	until(func() bool { return state().Cols == 64 && state().Rows == 24 })
+	resize(second, 1, 22, 10) // out-of-order requests cannot restore an older target.
+	sendJSON(map[string]any{"t": "ping"})
+	read("pong")
+	if state().Cols != 64 {
+		t.Fatal("stale resize changed grid")
+	}
+	sendJSON(map[string]any{"t": "terminal.control.release", "id": "release", "stream_id": second, "stream_epoch": epochs[second], "control_generation": generations[second]})
+	read("terminal.control.released")
+
 	// Returning from history and changing display mode close then reopen the
 	// same pane; the previous controller must release its attachment in time.
 	for i := 0; i < 4; i++ {
@@ -230,103 +271,40 @@ while True:
 	t.Fatal("browser detachment removed remote pane")
 }
 
-// Keep wire-mode and controller reuse coverage in CI without requiring Herdr.
+// Exercise the Web contract independently of the native viewport wire tests.
 func TestResponsiveTerminalCommands(t *testing.T) {
-	calls := fakeHerdrSocket(t)
-	a, db, srv, client, admin := authFixture(t)
-	dir := t.TempDir()
-	t.Setenv("HERDRX_RESPONSIVE_TEST_ARGS", filepath.Join(dir, "args"))
-	t.Setenv("HERDRX_RESPONSIVE_TEST_COMMANDS", filepath.Join(dir, "commands"))
-	binary := filepath.Join(dir, "terminal")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HERDRX_RESPONSIVE_TEST_ARGS\"\ncat >> \"$HERDRX_RESPONSIVE_TEST_COMMANDS\"\n"
-	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
-		t.Fatal(err)
-	}
-	a.hosts.(*hostruntime.Factory).Config.HerdrBinary = binary
-	owner := admin["user"].(map[string]any)["id"].(string)
-	if err := db.CreateHost(t.Context(), store.Host{ID: "hst_fixture", OwnerID: owner, Name: "Responsive commands", Transport: "local", Port: 22}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	ws := fixtureSocket(t, ctx, srv, client)
-	write := func(typ websocket.MessageType, data []byte) {
-		t.Helper()
-		if err := ws.Write(ctx, typ, data); err != nil {
+	_, endpoint, srv, client, ctx := geometryFixture(t)
+	desktop := newGeometryBrowser(t, ctx, srv, client)
+	mobile := newGeometryBrowser(t, ctx, srv, client)
+	mobile.acquire(false)
+	for _, b := range []*geometryBrowser{desktop, mobile} {
+		if err := b.ws.Write(ctx, websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: b.stream, Payload: terminalwire.TerminalPayload(22, 10, nil)})); err != nil {
 			t.Fatal(err)
 		}
 	}
-	read := func(want string) map[string]any {
-		t.Helper()
-		for {
-			_, data, err := ws.Read(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var msg map[string]any
-			if err := json.Unmarshal(data, &msg); err != nil {
-				t.Fatal(err)
-			}
-			if msg["t"] == "error" {
-				t.Fatalf("unexpected error: %s", data)
-			}
-			if msg["t"] == want {
-				return msg
-			}
-		}
+	mobile.command("terminal.resize_v2", map[string]any{"resize_seq": 1, "cols": 40, "rows": 18})
+	mobile.read("terminal.resize.status")
+	desktop.send(map[string]any{"t": "call", "id": "wheel", "method": "terminal.scroll", "params": map[string]any{"stream_id": desktop.stream, "lines": -7, "column": 10, "row": 5}})
+	desktop.read("res")
+	endpoint.mu.Lock()
+	defer endpoint.mu.Unlock()
+	if len(endpoint.commands) != 4 {
+		t.Fatal(endpoint.commands)
 	}
-	open := func(responsive, resizeRemote bool) uint32 {
-		t.Helper()
-		write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"terminal.open","id":"open","pane_id":"p_fixture","mode":"observe","responsive":%t,"resize_remote":%t,"takeover":true,"cols":56,"rows":30}`, responsive, resizeRemote)))
-		return uint32(read("terminal.opened")["stream_id"].(float64))
-	}
-	desktop := open(false, false)
-	legacy := open(true, false)
-	mobile := open(true, true)
-	for _, id := range []uint32{desktop, legacy, mobile} {
-		write(websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeResize, StreamID: id, Payload: terminalwire.TerminalPayload(40, 18, nil)}))
-	}
-	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"call","id":"wheel","method":"terminal.scroll","params":{"stream_id":%d,"lines":-7,"column":10,"row":5}}`, mobile)))
-	read("res")
-	var commands, args string
-	for {
-		raw, _ := os.ReadFile(filepath.Join(dir, "commands"))
-		commands = string(raw)
-		raw, _ = os.ReadFile(filepath.Join(dir, "args"))
-		args = string(raw)
-		if strings.Count(commands, "\n") == 4 && strings.Count(args, "\n") == 3 {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("incomplete controller capture: %q %q", args, commands)
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-	if strings.Count(args, "session control") != 1 || strings.Count(args, "session observe") != 2 || strings.Contains(args, "--takeover") {
-		t.Fatalf("unexpected attachment modes: %s", args)
-	}
-	var total int
-	for index, line := range strings.Split(strings.TrimSpace(commands), "\n") {
-		var command struct {
-			Type, Direction, Source        string
-			Cols, Rows, Lines, Column, Row int
-		}
-		if err := json.Unmarshal([]byte(line), &command); err != nil {
-			t.Fatal(err)
-		}
-		if index == 0 {
-			if command.Type != "terminal.resize" || command.Cols != 40 || command.Rows != 18 {
-				t.Fatal(command)
+	total := 0
+	for i, m := range endpoint.commands {
+		if i == 0 {
+			if m["type"] != "terminal.resize" || m["cols"] != float64(40) || m["rows"] != float64(18) {
+				t.Fatal(m)
 			}
 			continue
 		}
-		if command.Type != "terminal.scroll" || command.Direction != "up" || command.Source != "wheel" || command.Column != 10 || command.Row != 5 || command.Lines > 3 {
-			t.Fatal(command)
+		if m["type"] != "terminal.scroll" || m["direction"] != "up" || m["source"] != "wheel" || m["column"] != float64(10) || m["row"] != float64(5) || m["lines"].(float64) > 3 {
+			t.Fatal(m)
 		}
-		total += command.Lines
+		total += int(m["lines"].(float64))
 	}
-	if total != 7 || calls.Load() != 0 {
-		t.Fatalf("scroll total=%d, unexpected Herdr mutations=%d", total, calls.Load())
+	if total != 7 || len(endpoint.processes) != 3 {
+		t.Fatalf("scroll=%d processes=%d", total, len(endpoint.processes))
 	}
 }
