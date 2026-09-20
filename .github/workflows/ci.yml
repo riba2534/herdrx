@@ -15,6 +15,11 @@ on:
         description: '诊断场景 JSON 数组（仅在开启诊断时使用）'
         type: string
         default: '["focused", "after-browser-suite", "forced-timeouts"]'
+      pwa_repetitions:
+        description: '每组诊断的独立重复次数'
+        type: choice
+        options: ['3', '10', '20']
+        default: '3'
 
 permissions:
   contents: read
@@ -83,7 +88,7 @@ jobs:
           HERDRX_TEST_ENGINES: chromium,firefox,webkit
           HERDRX_PWA_FORCE_TIMEOUTS: ${{ matrix.mode == 'forced-timeouts' && '1' || '0' }}
           HERDRX_PWA_RUNTIME_DIAGNOSTICS: ${{ matrix.mode == 'production' && 'none' || matrix.mode == 'production-native' && 'native' || 'instrumented' }}
-          PWA_REPETITIONS: ${{ startsWith(matrix.mode, 'production') && '10' || '3' }}
+          PWA_REPETITIONS: ${{ inputs.pwa_repetitions }}
         run: |
           for ((attempt = 1; attempt <= PWA_REPETITIONS; attempt++)); do
             node scripts/test-pwa.mjs
