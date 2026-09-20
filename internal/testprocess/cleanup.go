@@ -5,8 +5,10 @@ package testprocess
 
 import (
 	"context"
+	"io"
+	"os"
 	"os/exec"
-	"syscall"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,14 +25,26 @@ func StopHerdr(t testing.TB, binary, session string, server *exec.Cmd) {
 	}
 }
 
-// Stop sends the signal installed by our Python native-terminal fixtures.
-// SIGINT can be inherited as ignored on macOS runners; SIGTERM is explicit.
-func Stop(t testing.TB, process *exec.Cmd) {
+// StopNative closes the fixture's control pipe. Its host must reap the native
+// terminal child before exiting, independently of inherited signal handling.
+func StopNative(t testing.TB, process *exec.Cmd, control io.Closer, diagnosticPath string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = process.Process.Signal(syscall.SIGTERM)
+	_ = control.Close()
 	wait(t, ctx, process, "native terminal fixture")
+	logs, err := os.ReadFile(diagnosticPath)
+	for _, stage := range []string{"control EOF received", "reaped status=", "master closed; host exiting"} {
+		if !strings.Contains(string(logs), stage) {
+			t.Errorf("native terminal fixture exited without expected cleanup stage %q (read: %v)", stage, err)
+		}
+	}
+	if t.Failed() {
+		if len(logs) > 16384 {
+			logs = logs[len(logs)-16384:]
+		}
+		t.Logf("native terminal fixture PID %d cleanup stages/Python stacks (read: %v):\n%s", process.Process.Pid, err, logs)
+	}
 }
 
 func wait(t testing.TB, ctx context.Context, process *exec.Cmd, name string) {

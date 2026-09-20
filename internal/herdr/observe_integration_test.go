@@ -97,14 +97,8 @@ func TestNativeObserveViewportWithRealHerdr(t *testing.T) {
 			}
 			pane := created.RootPane.ID
 			if scenario == "native-tui" {
-				if err := os.WriteFile(filepath.Join(dir, "native.py"), []byte(flickerNativeHost), 0600); err != nil {
-					t.Fatal(err)
-				}
-				native := exec.CommandContext(ctx, "python3", filepath.Join(dir, "native.py"), binary, session)
-				if err := native.Start(); err != nil {
-					t.Fatal(err)
-				}
-				defer testprocess.Stop(t, native)
+				stopNative := startNativeTerminalFixture(t, ctx, dir, binary, session)
+				defer stopNative()
 				wait("native TUI layout", func() bool {
 					s, err := endpoint.Snapshot(ctx)
 					if err != nil {
