@@ -132,7 +132,12 @@ try {
           record(event, details) {
             try {
               if (count++ >= 3000) return
-              const entry = { at: Date.now(), documentID, path: location.pathname, event, ...details }
+              let browserEvent
+              try {
+                const current = window.event
+                browserEvent = current === null ? { kind: 'null' } : current === undefined ? { kind: 'undefined' } : { kind: typeof current, type: current.type }
+              } catch { browserEvent = { kind: 'unreadable' } }
+              const entry = { at: Date.now(), documentID, path: location.pathname, event, browserEvent, ...details }
               this.events.push(entry)
               if (this.events.length > 400) this.events.shift()
               console.debug(prefix + JSON.stringify(entry))
@@ -154,7 +159,7 @@ try {
             }
           } catch { return { unreadable: true } }
         }
-        const signalDetails = signal => ({ signal: collector.identity(signal), aborted: signal?.aborted, reason: reasonDetails(signal?.reason) })
+        const signalDetails = signal => ({ signal: collector.identity(signal), aborted: signal?.aborted, signalReason: reasonDetails(signal?.reason) })
         const responses = new WeakMap()
         const originalFetch = globalThis.fetch
         globalThis.fetch = function (...args) {
@@ -229,6 +234,7 @@ try {
     }
     const page = await context.newPage(), errors = []
     let diagnosticResult = 'failed'
+    let failureProbe = null
     page.on('pageerror', error => errors.push(error.message))
     page.on('request', request => traceAuth('request', request.url()))
     page.on('response', response => traceAuth('response', response.url(), { status: response.status() }))
@@ -357,6 +363,41 @@ try {
     } catch (error) {
       const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine })).catch(() => null)
       console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), errors, ...(diagnostics ? { runtimeTrace } : {}) }, null, 2))
+      if (diagnostics) {
+        // Observe scheduling only after the original assertion has failed. A
+        // click may release a stuck render, but can never turn this run green.
+        failureProbe = { startedAt: Date.now() }
+        let deadline
+        try {
+          failureProbe.clocks = await Promise.race([
+            page.evaluate(() => new Promise(resolve => {
+              const snapshot = () => ({ heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })
+              const before = snapshot(), events = [], started = performance.now()
+              const record = event => events.push({ event, elapsed: performance.now() - started })
+              const channel = new MessageChannel()
+              channel.port1.onmessage = () => record('message-channel')
+              channel.port2.postMessage('probe')
+              const frame = requestAnimationFrame(() => record('animation-frame'))
+              const timer = setTimeout(() => record('timer'), 0)
+              globalThis.__herdrxAuthDiagnostics?.record('diagnostics.failure-probe.begin', {})
+              setTimeout(() => {
+                channel.port1.close(); channel.port2.close(); cancelAnimationFrame(frame); clearTimeout(timer)
+                resolve({ before, events, after: snapshot() })
+              }, 500)
+            })),
+            new Promise(resolve => { deadline = setTimeout(() => resolve({ timedOut: true }), 1500) }),
+          ])
+          const reconnect = page.getByRole('button', { name: '重新连接', exact: true })
+          if (await reconnect.isVisible()) {
+            failureProbe.clickedAt = Date.now()
+            await reconnect.click({ timeout: 1000 })
+            await page.waitForTimeout(250)
+            failureProbe.afterClick = await page.evaluate(() => ({ heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent }))
+          }
+        } catch (probeError) { failureProbe.error = String(probeError) }
+        finally { clearTimeout(deadline) }
+        console.error(`${engine}: PWA post-failure scheduling probe`, JSON.stringify(failureProbe))
+      }
       throw error
     } finally {
       try {
@@ -364,7 +405,7 @@ try {
           const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine, heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })).catch(() => null)
           await mkdir(diagnosticsDir, { recursive: true })
           const output = join(diagnosticsDir, `${diagnosticRun}-${engine}-${Date.now()}.json`)
-          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, runtimeDiagnostics, forceTimeouts, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
+          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, runtimeDiagnostics, forceTimeouts, phase, state, failureProbe, authTrace, runtimeTrace, errors }, null, 2) + '\n')
           console.log(`${engine}: PWA auth diagnostics saved: ${output}`)
         }
       } finally { await context.close(); await browser.close() }

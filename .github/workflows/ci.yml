@@ -90,9 +90,13 @@ jobs:
           HERDRX_PWA_RUNTIME_DIAGNOSTICS: ${{ matrix.mode == 'production' && 'none' || matrix.mode == 'production-native' && 'native' || 'instrumented' }}
           PWA_REPETITIONS: ${{ inputs.pwa_repetitions }}
         run: |
+          failures=0
           for ((attempt = 1; attempt <= PWA_REPETITIONS; attempt++)); do
-            node scripts/test-pwa.mjs
+            if ! node scripts/test-pwa.mjs; then
+              failures=$((failures + 1))
+            fi
           done
+          test "$failures" -eq 0
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
