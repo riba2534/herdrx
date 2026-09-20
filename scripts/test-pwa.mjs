@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chooseOption } from './browser-controls.mjs'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
+const diagnostics = process.env.HERDRX_PWA_DIAGNOSTICS === '1'
+const diagnosticsDir = process.env.HERDRX_PWA_DIAGNOSTICS_DIR
+const diagnosticPrefix = '__HERDRX_AUTH_DIAG__'
+const diagnosticRun = `${Date.now()}-${process.pid}`
 const worker = await readFile(join(dist, 'sw.js'), 'utf8')
 assert.ok(!worker.includes('__BUILD_ID__') && !worker.includes('__PRECACHE__'), 'build must generate complete PWA precache')
 const manifest = JSON.parse(await readFile(join(dist, 'manifest.webmanifest'), 'utf8'))
@@ -25,11 +29,12 @@ assert.ok(!workerPrecache.includes('/boot.js'), 'inlined boot.js stays out of pr
 assert.ok(!workerPrecache.some(path => /logo|icon-1024|icon-256/.test(path)), 'unused brand files stay out of precache')
 assert.ok(!workerPrecache.some(path => path.endsWith('.gz') || path.endsWith('.br')))
 let revision = 'one', denyAPI = false, failAsset = false, droppedNetwork = false
+let phase = 'initial'
 const calls = []
 const authTrace = []
 function traceAuth(event, url, details = {}) {
   const path = new URL(url, 'http://localhost').pathname
-  if (path === '/api/bootstrap/status' || path === '/api/me') authTrace.push({ at: Date.now(), event, path, ...details })
+  if (path === '/api/bootstrap/status' || path === '/api/me') authTrace.push({ at: Date.now(), phase, event, path, ...details })
 }
 const server = createServer(async (req, res) => {
   traceAuth('server-request', req.url, { droppedNetwork, denyAPI })
@@ -88,18 +93,54 @@ async function assertUnrelatedCache(page, phase) {
 }
 try {
   for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium', 'firefox', 'webkit']) {
-    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0
+    revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0; phase = 'initial'
     const browser = await ({ chromium, firefox, webkit })[engine].launch()
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
+    const runtimeTrace = []
+    if (diagnostics) {
+      // This collector is inert with a normal build. Only the explicit Vite
+      // diagnostic config emits events; no fetch/Abort methods are wrapped.
+      await context.addInitScript(({ prefix }) => {
+        const identities = new WeakMap()
+        let nextIdentity = 0
+        let count = 0
+        const documentID = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        globalThis.__herdrxAuthDiagnostics = {
+          events: [],
+          identity(value) {
+            if ((typeof value !== 'object' || value === null) && typeof value !== 'function') return null
+            if (!identities.has(value)) identities.set(value, ++nextIdentity)
+            return identities.get(value)
+          },
+          record(event, details) {
+            try {
+              if (count++ >= 3000) return
+              const entry = { at: Date.now(), documentID, path: location.pathname, event, ...details }
+              this.events.push(entry)
+              if (this.events.length > 400) this.events.shift()
+              console.debug(prefix + JSON.stringify(entry))
+            } catch { /* Diagnostics must never change authentication behavior. */ }
+          },
+        }
+      }, { prefix: diagnosticPrefix })
+      context.on('console', message => {
+        const text = message.text()
+        if (!text.startsWith(diagnosticPrefix) || runtimeTrace.length >= 12000) return
+        try { runtimeTrace.push({ phase, ...JSON.parse(text.slice(diagnosticPrefix.length)) }) } catch { /* Keep the test's original result. */ }
+      })
+    }
     const page = await context.newPage(), errors = []
+    let diagnosticResult = 'failed'
     page.on('pageerror', error => errors.push(error.message))
     page.on('request', request => traceAuth('request', request.url()))
     page.on('response', response => traceAuth('response', response.url(), { status: response.status() }))
     page.on('requestfailed', request => traceAuth('failed', request.url(), { error: request.failure()?.errorText }))
+    if (diagnostics) page.on('requestfinished', request => traceAuth('finished', request.url()))
     page.on('dialog', dialog => { errors.push(`Unexpected dialog: ${dialog.type()}`); void dialog.dismiss() })
     try {
       await page.goto(base)
       await expect(page.getByRole('heading', { name: '主机', exact: true })).toBeVisible()
+      if (diagnostics) assert.ok(await page.evaluate(() => globalThis.__herdrxAuthDiagnostics.events.some(event => event.event === 'auth.render')), 'PWA diagnostics require vite.pwa-diagnostics.config.ts')
       await controllerReady(page)
       // A repeated controller notification for the same worker is not an update.
       await page.evaluate(() => navigator.serviceWorker.dispatchEvent(new Event('controllerchange')))
@@ -124,6 +165,7 @@ try {
       await assertUnrelatedCache(page, 'after seed')
       await page.reload(); await controllerReady(page)
       await assertUnrelatedCache(page, 'after initial reload')
+      phase = 'first-offline'
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true)
       await page.goto(base + '/h/original-pane')
       // WebKit uses real socket failures here; hung /api/me is released by the
@@ -131,6 +173,7 @@ try {
       const offlineTimeout = engine === 'webkit' ? 30000 : 5000
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       assert.equal(new URL(page.url()).pathname, '/h/original-pane')
+      phase = 'first-recovery'
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
       // Return to the host list after automatic auth recovery (fixture has no terminal).
       await page.goto(base)
@@ -143,6 +186,7 @@ try {
       await chooseOption(other.getByRole('combobox', { name: '连接方式' }), 'ssh')
       await other.getByRole('textbox', { name: '名称', exact: true }).fill('保留未提交内容')
       // Install two while both pages are still on one; never silently refresh.
+      phase = 'successful-update'
       revision = 'two'; await checkUpdate(page)
       await expect(page.getByRole('complementary', { name: '应用更新' })).toBeVisible()
       assert.equal(await page.locator('html').getAttribute('data-test-build'), 'one')
@@ -163,13 +207,16 @@ try {
           globalThis.__failedUpdateWorker = registration.installing
         }, { once: true })
       })
+      phase = 'failed-update'
       revision = 'three'; failAsset = true; await checkUpdate(page)
       await page.waitForFunction(() => globalThis.__failedUpdateWorker?.state === 'redundant')
       assert.equal(await page.evaluate(async () => (await caches.keys()).includes('herdrx-shell-test-three')), false)
       await assertUnrelatedCache(page, 'after failed precache')
+      phase = 'second-offline'
       droppedNetwork = true; if (engine !== 'webkit') await context.setOffline(true); await page.reload()
       await expect(page.getByRole('heading', { name: engine === 'webkit' ? '无法读取登录状态' : '当前处于离线状态' })).toBeVisible({ timeout: offlineTimeout })
       await expect(page.locator('html')).toHaveAttribute('data-test-build', 'two')
+      phase = 'revoked-session-recovery'
       failAsset = false; revision = 'two'; denyAPI = true
       droppedNetwork = false; if (engine !== 'webkit') await context.setOffline(false)
       // Destroying fixture sockets does not send WebKit an online event.
@@ -182,11 +229,22 @@ try {
       await assertUnrelatedCache(page, 'after session revocation')
       assert.ok(!calls.some(call => call.method !== 'GET'), 'offline and update paths must never replay mutations')
       assert.deepEqual(unexpectedErrors(engine, errors), [])
+      diagnosticResult = 'passed'
       console.log(`${engine}: PWA offline shell, uncached auth, network recovery, deferred update, two tabs, failed precache, revoked session PASS`)
     } catch (error) {
       const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine })).catch(() => null)
-      console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), errors }, null, 2))
+      console.error(`${engine}: PWA failure diagnostics`, JSON.stringify({ state, authTrace: authTrace.slice(-80), errors, ...(diagnostics ? { runtimeTrace } : {}) }, null, 2))
       throw error
-    } finally { await context.close(); await browser.close() }
+    } finally {
+      try {
+        if (diagnostics && diagnosticsDir) {
+          const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine, heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })).catch(() => null)
+          await mkdir(diagnosticsDir, { recursive: true })
+          const output = join(diagnosticsDir, `${diagnosticRun}-${engine}-${Date.now()}.json`)
+          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
+          console.log(`${engine}: PWA auth diagnostics saved: ${output}`)
+        }
+      } finally { await context.close(); await browser.close() }
+    }
   }
 } finally { await new Promise(done => server.close(done)) }

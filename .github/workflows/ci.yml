@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      pwa_diagnostics:
+        description: '仅运行 PWA 认证诊断，不构建或发布镜像'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +20,75 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  pwa-diagnostics:
+    name: PWA 认证诊断 (${{ matrix.mode }})
+    if: github.event_name == 'workflow_dispatch' && inputs.pwa_diagnostics
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [focused, after-browser-suite]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26.4.0
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: 准备独立诊断构建与浏览器
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          make web-build
+          pnpm --dir web exec vite build --config vite.pwa-diagnostics.config.ts
+          go build -o "$RUNNER_TEMP/herdrx-browser-test" ./cmd/herdrx-server
+          pnpm --dir web exec playwright install --with-deps chromium firefox webkit
+      - name: 重现完整浏览器套件之前置环境
+        if: matrix.mode == 'after-browser-suite'
+        run: |
+          node scripts/test-browser-auth.mjs "$RUNNER_TEMP/herdrx-browser-test"
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-tailcat-onboarding.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-keys-folders.mjs "$RUNNER_TEMP/herdrx-browser-test"
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-app-appearance.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-custom-controls.mjs
+          node scripts/test-terminal-rendering.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-composer.mjs
+          HERDRX_TEST_ENGINES=chromium node scripts/test-chat-mode.mjs
+          HERDRX_TEST_ENGINES=chromium node scripts/test-chat-media.mjs "$RUNNER_TEMP/herdrx-browser-test"
+          node scripts/test-structured-chat.mjs "$RUNNER_TEMP/herdrx-browser-test"
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-desktop-display.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-space.mjs
+          node scripts/test-terminal-flicker.mjs
+          node scripts/test-mobile-terminal-scroll.mjs
+      - name: 重复原始 PWA 回归并记录认证时序
+        env:
+          HERDRX_PWA_DIAGNOSTICS: '1'
+          HERDRX_PWA_DIAGNOSTICS_DIR: ${{ runner.temp }}/pwa-diagnostics
+          HERDRX_TEST_ENGINES: chromium,firefox,webkit
+        run: |
+          for attempt in 1 2 3; do
+            node scripts/test-pwa.mjs
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pwa-diagnostics-${{ matrix.mode }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pwa-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
   verify:
+    if: github.event_name != 'workflow_dispatch' || !inputs.pwa_diagnostics
     name: 测试与部署配置检查
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -84,6 +157,7 @@ jobs:
           python3 scripts/test-herdr-compatibility-runner.py
 
   verify-herdr:
+    if: github.event_name != 'workflow_dispatch' || !inputs.pwa_diagnostics
     name: 真实 Herdr ${{ matrix.version }} (${{ matrix.platform }})
     strategy:
       fail-fast: false
@@ -143,6 +217,7 @@ jobs:
           retention-days: 14
 
   verify-macos:
+    if: github.event_name != 'workflow_dispatch' || !inputs.pwa_diagnostics
     name: macOS 终端尺寸与接入回归 (${{ matrix.arch }})
     strategy:
       fail-fast: false
