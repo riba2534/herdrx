@@ -11,6 +11,10 @@ on:
         description: '仅运行 PWA 认证诊断，不构建或发布镜像'
         type: boolean
         default: false
+      pwa_diagnostic_modes:
+        description: '诊断场景 JSON 数组（仅在开启诊断时使用）'
+        type: string
+        default: '["focused", "after-browser-suite", "forced-timeouts"]'
 
 permissions:
   contents: read
@@ -28,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [focused, after-browser-suite]
+        mode: ${{ fromJSON(inputs.pwa_diagnostic_modes) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -75,6 +79,7 @@ jobs:
           HERDRX_PWA_DIAGNOSTICS: '1'
           HERDRX_PWA_DIAGNOSTICS_DIR: ${{ runner.temp }}/pwa-diagnostics
           HERDRX_TEST_ENGINES: chromium,firefox,webkit
+          HERDRX_PWA_FORCE_TIMEOUTS: ${{ matrix.mode == 'forced-timeouts' && '1' || '0' }}
         run: |
           for attempt in 1 2 3; do
             node scripts/test-pwa.mjs

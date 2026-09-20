@@ -9,6 +9,8 @@ import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwrig
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const diagnostics = process.env.HERDRX_PWA_DIAGNOSTICS === '1'
+const forceTimeouts = process.env.HERDRX_PWA_FORCE_TIMEOUTS === '1'
+assert.ok(!forceTimeouts || diagnostics, 'forced PWA timeouts require explicit diagnostics mode')
 const diagnosticsDir = process.env.HERDRX_PWA_DIAGNOSTICS_DIR
 const diagnosticPrefix = '__HERDRX_AUTH_DIAG__'
 const diagnosticRun = `${Date.now()}-${process.pid}`
@@ -30,6 +32,7 @@ assert.ok(!workerPrecache.some(path => /logo|icon-1024|icon-256/.test(path)), 'u
 assert.ok(!workerPrecache.some(path => path.endsWith('.gz') || path.endsWith('.br')))
 let revision = 'one', denyAPI = false, failAsset = false, droppedNetwork = false
 let phase = 'initial'
+let currentEngine = '', forcedRecoveryHeld = false
 const calls = []
 const authTrace = []
 function traceAuth(event, url, details = {}) {
@@ -38,8 +41,18 @@ function traceAuth(event, url, details = {}) {
 }
 const server = createServer(async (req, res) => {
   traceAuth('server-request', req.url, { droppedNetwork, denyAPI })
-  if (droppedNetwork) { req.socket.destroy(); return }
   const path = new URL(req.url, 'http://localhost').pathname
+  if (forceTimeouts && currentEngine === 'webkit' && path === '/api/bootstrap/status' &&
+      (phase === 'second-offline' || (phase === 'revoked-session-recovery' && !forcedRecoveryHeld))) {
+    // Leave the real HTTP response pending until the application's existing
+    // eight-second deadline aborts fetch. Do not patch fetch, clocks or signals.
+    if (phase === 'revoked-session-recovery') forcedRecoveryHeld = true
+    const heldPhase = phase, heldAt = Date.now()
+    traceAuth('server-held', req.url, { heldPhase })
+    res.once('close', () => traceAuth('server-held-closed', req.url, { heldPhase, elapsed: Date.now() - heldAt }))
+    return
+  }
+  if (droppedNetwork) { req.socket.destroy(); return }
   res.setHeader('cache-control', 'no-store')
   // Match Go http.FileServer, including the redirected precache response.
   if (path === '/index.html') { res.writeHead(301, { location: '/' }); res.end(); return }
@@ -94,6 +107,7 @@ async function assertUnrelatedCache(page, phase) {
 try {
   for (const engine of process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium', 'firefox', 'webkit']) {
     revision = 'one'; denyAPI = false; failAsset = false; droppedNetwork = false; calls.length = 0; authTrace.length = 0; phase = 'initial'
+    currentEngine = engine; forcedRecoveryHeld = false
     const browser = await ({ chromium, firefox, webkit })[engine].launch()
     const context = await browser.newContext({ viewport: { width: 390, height: 844 } })
     const runtimeTrace = []
@@ -226,6 +240,11 @@ try {
         if (await reconnect.isVisible()) await reconnect.click()
       }
       await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible({ timeout: engine === 'webkit' ? offlineTimeout : 12000 })
+      if (forceTimeouts && engine === 'webkit') {
+        for (const expectedPhase of ['second-offline', 'revoked-session-recovery']) {
+          assert.ok(runtimeTrace.some(event => event.phase === expectedPhase && event.event === 'timeout.fire'), `${expectedPhase} must exercise the native authentication timeout`)
+        }
+      }
       await assertUnrelatedCache(page, 'after session revocation')
       assert.ok(!calls.some(call => call.method !== 'GET'), 'offline and update paths must never replay mutations')
       assert.deepEqual(unexpectedErrors(engine, errors), [])
@@ -241,7 +260,7 @@ try {
           const state = await page.evaluate(() => ({ hidden: document.hidden, visibility: document.visibilityState, online: navigator.onLine, heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })).catch(() => null)
           await mkdir(diagnosticsDir, { recursive: true })
           const output = join(diagnosticsDir, `${diagnosticRun}-${engine}-${Date.now()}.json`)
-          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
+          await writeFile(output, JSON.stringify({ result: diagnosticResult, engine, browserVersion: browser.version(), node: process.version, forceTimeouts, phase, state, authTrace, runtimeTrace, errors }, null, 2) + '\n')
           console.log(`${engine}: PWA auth diagnostics saved: ${output}`)
         }
       } finally { await context.close(); await browser.close() }
