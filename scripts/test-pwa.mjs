@@ -249,6 +249,8 @@ try {
         assert.ok(events.some(event => event.event === 'diagnostics.mode' && event.mode === runtimeDiagnostics), 'PWA diagnostic mode must be recorded')
         if (runtimeDiagnostics === 'instrumented') {
           assert.ok(events.some(event => event.event === 'auth.render'), 'instrumented PWA diagnostics require vite.pwa-diagnostics.config.ts')
+          assert.ok(events.some(event => event.event === 'scheduler.post'), 'scheduler must record its original MessageChannel request')
+          assert.ok(events.some(event => event.event === 'scheduler.work.begin'), 'scheduler must record execution of its original callback')
         } else {
           assert.ok(!events.some(event => event.event === 'auth.render'), 'native/none PWA diagnostics require the normal production build')
           if (runtimeDiagnostics === 'native') {
@@ -369,6 +371,68 @@ try {
         failureProbe = { startedAt: Date.now() }
         let deadline
         try {
+          failureProbe.scheduler = await page.evaluate(() => globalThis.__herdrxAuthDiagnostics?.schedulerSnapshot?.() ?? null)
+          failureProbe.fiber = await page.evaluate(() => {
+            // Read only the committed tree and bounded scheduler metadata.
+            // Never serialize user/session objects, callbacks or credentials.
+            try {
+              const container = document.getElementById('root')
+              const key = container && Object.keys(container).find(name => name.startsWith('__reactContainer$'))
+              const root = key ? container[key]?.stateNode : null
+              if (!root?.current) return { available: false }
+              const nodes = [root.current]
+              let provider = null, visited = 0
+              while (nodes.length && visited++ < 2000) {
+                const node = nodes.pop(), value = node.memoizedProps?.value
+                if (node.tag === 10 && typeof value?.refresh === 'function' && typeof value?.signOut === 'function' && typeof value?.bootstrapRequired === 'boolean') {
+                  provider = node
+                  break
+                }
+                if (node.sibling) nodes.push(node.sibling)
+                if (node.child) nodes.push(node.child)
+              }
+              const errorText = value => typeof value === 'string' ? value.slice(0, 500) : { type: typeof value }
+              const updates = tail => {
+                const result = []
+                const first = tail?.next || tail
+                let update = first
+                while (update && result.length < 8) {
+                  result.push({ lane: update.lane, actionType: typeof update.action, ...(typeof update.action === 'string' ? { error: errorText(update.action) } : {}) })
+                  update = update.next
+                  if (update === first) break
+                }
+                return result
+              }
+              const providerState = fiber => {
+                if (!fiber) return null
+                // AuthProvider's sixth useState is its network error. Do not
+                // inspect the preceding user and session state values.
+                let errorHook = fiber.memoizedState
+                for (let index = 0; index < 5 && errorHook; index++) errorHook = errorHook.next
+                return {
+                  tag: fiber.tag, lanes: fiber.lanes, childLanes: fiber.childLanes,
+                  error: errorHook ? {
+                    memoizedState: errorText(errorHook.memoizedState), baseState: errorText(errorHook.baseState),
+                    lastRenderedState: errorText(errorHook.queue?.lastRenderedState),
+                    pending: updates(errorHook.queue?.pending), baseQueue: updates(errorHook.baseQueue),
+                  } : null,
+                }
+              }
+              const value = provider?.memoizedProps?.value, callback = root.callbackNode
+              return {
+                available: true, at: performance.now(), visited,
+                root: {
+                  pendingLanes: root.pendingLanes, suspendedLanes: root.suspendedLanes,
+                  pingedLanes: root.pingedLanes, expiredLanes: root.expiredLanes,
+                  callbackPriority: root.callbackPriority, cancelPendingCommit: Boolean(root.cancelPendingCommit),
+                  timeoutPending: root.timeoutHandle !== -1, hasAlternate: Boolean(root.current.alternate),
+                  callback: callback ? { id: callback.id, priorityLevel: callback.priorityLevel, sortIndex: callback.sortIndex, startTime: callback.startTime, expirationTime: callback.expirationTime, callbackType: typeof callback.callback } : null,
+                },
+                context: value ? { loading: value.loading, error: errorText(value.error), signedIn: Boolean(value.user), hasSession: Boolean(value.sessionID) } : null,
+                provider: providerState(provider?.return), alternate: providerState(provider?.return?.alternate),
+              }
+            } catch (reason) { return { available: false, error: String(reason).slice(0, 500) } }
+          })
           failureProbe.clocks = await Promise.race([
             page.evaluate(() => new Promise(resolve => {
               const snapshot = () => ({ heading: document.querySelector('h1')?.textContent, alert: document.querySelector('[role="alert"]')?.textContent })

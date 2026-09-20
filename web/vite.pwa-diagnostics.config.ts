@@ -80,6 +80,32 @@ function instrumentAPI(source: string) {
   return runtime + source
 }
 
+function instrumentScheduler(source: string) {
+  source = replaceOnce(source, '"use strict";', '"use strict";\n' + runtime + `
+var __pwaPost = 0;
+function __pwaSchedulerState() {
+  var head = taskQueue[0];
+  return { now: exports.unstable_now(), posts: __pwaPost, tasks: taskQueue.length,
+    timers: timerQueue.length, looping: isMessageLoopRunning, working: isPerformingWork,
+    scheduled: isHostCallbackScheduled,
+    head: head ? { id: head.id, start: head.startTime, expiration: head.expirationTime,
+      priority: head.priorityLevel, callback: typeof head.callback } : null };
+}
+try {
+  if (globalThis.__herdrxAuthDiagnostics)
+    globalThis.__herdrxAuthDiagnostics.schedulerSnapshot = __pwaSchedulerState;
+} catch {}
+`)
+  source = replaceOnce(source, 'function performWorkUntilDeadline() {',
+    `function performWorkUntilDeadline() {
+  __pwaTrace('scheduler.work.begin', __pwaSchedulerState());`)
+  source = replaceOnce(source, 'port.postMessage(null);',
+    `__pwaPost++;
+    __pwaTrace('scheduler.post', __pwaSchedulerState());
+    port.postMessage(null);`)
+  return source
+}
+
 function instrumentAuth(source: string) {
   const replace = (original: string, replacement: string) => { source = replaceOnce(source, original, replacement) }
   replace("const timer = window.setTimeout(() => controller.abort(new Error('无法连接工作台，请重试')), AUTH_CHECK_TIMEOUT_MS)", `const timer = window.setTimeout(() => {
@@ -120,6 +146,10 @@ export default defineConfig({
     name: 'pwa-auth-ci-diagnostics',
     enforce: 'pre',
     transform(source, id) {
+      if (id.endsWith('/scheduler/cjs/scheduler.production.js')) {
+        transformed.add('scheduler')
+        return instrumentScheduler(source)
+      }
       if (id.endsWith('/src/lib/api.ts')) {
         transformed.add('api')
         return instrumentAPI(source)
@@ -130,7 +160,7 @@ export default defineConfig({
       }
     },
     generateBundle() {
-      if (transformed.size !== 2) throw new Error('PWA diagnostic build must instrument both auth and API')
+      if (transformed.size !== 3) throw new Error('PWA diagnostic build must instrument auth, API and scheduler')
     },
   }, ...(base.plugins ?? [])],
 })
