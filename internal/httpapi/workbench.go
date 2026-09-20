@@ -26,11 +26,15 @@ type socketWriter struct {
 }
 
 func (w *socketWriter) JSON(ctx context.Context, value any) error {
+	return w.jsonBeforeWrite(ctx, value, nil)
+}
+
+func (w *socketWriter) jsonBeforeWrite(ctx context.Context, value any, beforeWrite func()) error {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	return w.write(ctx, websocket.MessageText, encoded)
+	return w.writeBefore(ctx, websocket.MessageText, encoded, beforeWrite)
 }
 
 func (w *socketWriter) Binary(ctx context.Context, encoded []byte) error {
@@ -38,6 +42,10 @@ func (w *socketWriter) Binary(ctx context.Context, encoded []byte) error {
 }
 
 func (w *socketWriter) write(ctx context.Context, typ websocket.MessageType, encoded []byte) error {
+	return w.writeBefore(ctx, typ, encoded, nil)
+}
+
+func (w *socketWriter) writeBefore(ctx context.Context, typ websocket.MessageType, encoded []byte, beforeWrite func()) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -49,6 +57,9 @@ func (w *socketWriter) write(ctx context.Context, typ websocket.MessageType, enc
 	// bounds a stalled write while access remains valid.
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	if beforeWrite != nil {
+		beforeWrite()
+	}
 	return w.conn.Write(writeCtx, typ, encoded)
 }
 
@@ -307,19 +318,20 @@ func (s *workbenchSession) handleText(message workbenchMessage) {
 		stream := s.streams[message.StreamID]
 		s.streamsMu.Unlock()
 		if stream == nil {
-			s.handleGeometry(message)
+			s.handleGeometry(message, nil)
 			return
 		}
-		if !stream.acquirePending.CompareAndSwap(false, true) {
+		finish, admitted := stream.beginGeometryAcquire()
+		if !admitted {
 			s.writeGeometryError(message, "control_pending", "尺寸控制正在连接，请等待完成或先释放控制")
 			return
 		}
 		go func() {
-			defer stream.acquirePending.Store(false)
-			s.handleGeometry(message)
+			defer finish()
+			s.handleGeometry(message, finish)
 		}()
 	case "terminal.control.release", "terminal.control.renew", "terminal.resize_v2":
-		s.handleGeometry(message)
+		s.handleGeometry(message, nil)
 	case "call":
 		s.call(message)
 	default:

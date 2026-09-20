@@ -327,6 +327,104 @@ func TestGeometryRequiresRemoteConfirmationAndPreservesUnknownController(t *test
 	b.command("terminal.control.release", nil)
 	b.read("terminal.control.released")
 }
+
+func TestGeometryFinalAcquireResponseAllowsImmediateRetry(t *testing.T) {
+	for _, firstFails := range []bool{true, false} {
+		name := "acquired"
+		if firstFails {
+			name = "error"
+		}
+		t.Run(name, func(t *testing.T) {
+			a, e, srv, client, ctx := geometryFixture(t)
+			b := newGeometryBrowser(t, ctx, srv, client)
+			var stream *terminalStream
+			var session *workbenchSession
+			a.geometry.mu.Lock()
+			for _, entry := range a.geometry.entries {
+				entry.mu.Lock()
+				for candidate, owner := range entry.watchers {
+					if candidate.id == b.stream && candidate.epoch == b.epoch {
+						stream, session = candidate, owner
+					}
+				}
+				entry.mu.Unlock()
+			}
+			a.geometry.mu.Unlock()
+			if stream == nil {
+				t.Fatal("browser observer was not registered")
+			}
+			e.mu.Lock()
+			e.external = firstFails
+			e.mu.Unlock()
+			finish, admitted := stream.beginGeometryAcquire()
+			if !admitted {
+				t.Fatal("first acquire was not admitted")
+			}
+			beforeResponse := make(chan struct{})
+			allowResponse := make(chan struct{})
+			allowReturn := make(chan struct{})
+			done := make(chan struct{})
+			writeResponse := sync.OnceFunc(func() { close(allowResponse) })
+			returnHandler := sync.OnceFunc(func() { close(allowReturn) })
+			defer writeResponse()
+			defer returnHandler()
+			go func() {
+				defer close(done)
+				defer finish()
+				session.handleGeometry(workbenchMessage{Type: "terminal.control.acquire", RequestID: "first", StreamID: b.stream, StreamEpoch: b.epoch, Cols: 50, Rows: 20}, func() {
+					finish()
+					close(beforeResponse)
+					<-allowResponse
+				})
+				// Keep the old fallback outstanding until the next request is
+				// pending; its eventual defer must not clear the next guard.
+				<-allowReturn
+			}()
+			select {
+			case <-beforeResponse:
+			case <-ctx.Done():
+				t.Fatal("acquire did not reach its final response")
+			}
+			if stream.acquirePending.Load() {
+				t.Fatal("final acquire response can become visible while its guard is still pending")
+			}
+			writeResponse()
+			if firstFails {
+				if m := b.read("error"); m["code"] != "control_unavailable" {
+					t.Fatal(m)
+				}
+			} else {
+				b.read("terminal.control.acquired")
+			}
+			gate := make(chan struct{})
+			releaseRemote := sync.OnceFunc(func() { close(gate) })
+			defer releaseRemote()
+			e.mu.Lock()
+			e.external = false
+			e.gate = gate
+			e.mu.Unlock()
+			b.command("terminal.control.acquire", map[string]any{"cols": 60, "rows": 25, "transfer": true})
+			for b.read("terminal.control.state")["state"] != "pending" {
+			}
+			returnHandler()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("previous acquire did not finish")
+			}
+			if !stream.acquirePending.Load() {
+				t.Fatal("old acquire fallback cleared the subsequent pending guard")
+			}
+			b.command("terminal.control.acquire", map[string]any{"cols": 70, "rows": 30, "transfer": true})
+			if m := b.read("error"); m["code"] != "control_pending" {
+				t.Fatalf("additional work admitted while remote attach was pending: %v", m)
+			}
+			releaseRemote()
+			b.read("terminal.control.acquired")
+		})
+	}
+}
+
 func TestGeometryExpiryAndDisconnectOnlyReleaseAccess(t *testing.T) {
 	a, e, srv, client, ctx := geometryFixture(t)
 	first := newGeometryBrowser(t, ctx, srv, client)

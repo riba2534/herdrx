@@ -208,37 +208,56 @@ func (s *workbenchSession) checkTerminalFeature(name string, probe bool) error {
 }
 
 func (s *workbenchSession) writeGeometryError(m workbenchMessage, code, reason string) {
-	_ = s.writer.JSON(s.ctx, map[string]any{"t": "error", "id": m.RequestID, "code": code, "message": reason, "stream_id": m.StreamID, "stream_epoch": m.StreamEpoch, "control_generation": m.ControlGeneration})
+	s.writeGeometryErrorBefore(m, code, reason, nil)
 }
 
-func (s *workbenchSession) handleGeometry(m workbenchMessage) {
+func (s *workbenchSession) writeGeometryErrorBefore(m workbenchMessage, code, reason string, beforeWrite func()) {
+	_ = s.writer.jsonBeforeWrite(s.ctx, map[string]any{"t": "error", "id": m.RequestID, "code": code, "message": reason, "stream_id": m.StreamID, "stream_epoch": m.StreamEpoch, "control_generation": m.ControlGeneration}, beforeWrite)
+}
+
+func (stream *terminalStream) beginGeometryAcquire() (finish func(), admitted bool) {
+	if !stream.acquirePending.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	var once sync.Once
+	return func() { once.Do(func() { stream.acquirePending.Store(false) }) }, true
+}
+
+func (s *workbenchSession) handleGeometry(m workbenchMessage, finishAcquire func()) {
+	// Clear this attempt before its final response becomes visible. Keep it
+	// pending until the writer lock is held, so a slow socket cannot accumulate
+	// completed acquisitions waiting to write. The caller's once-only fallback
+	// also handles canceled writes without clearing a subsequent attempt.
+	writeError := func(code, reason string) {
+		s.writeGeometryErrorBefore(m, code, reason, finishAcquire)
+	}
 	if !s.controlV2 {
-		s.writeGeometryError(m, "client_update_required", "请刷新页面后使用尺寸控制")
+		writeError("client_update_required", "请刷新页面后使用尺寸控制")
 		return
 	}
 	s.streamsMu.Lock()
 	stream := s.streams[m.StreamID]
 	s.streamsMu.Unlock()
 	if stream == nil || stream.closed.Load() || stream.closing.Load() || stream.epoch != m.StreamEpoch || stream.geometry == nil {
-		s.writeGeometryError(m, "terminal_unavailable", "终端连接已变化，请重连后再选择尺寸控制")
+		writeError("terminal_unavailable", "终端连接已变化，请重连后再选择尺寸控制")
 		return
 	}
 	e := stream.geometry
 	if e.key.runtime != s.runtimeGeneration() || s.authorized() != nil {
-		s.writeGeometryError(m, "control_expired", "连接权限或 Herdr 会话已变化，请重新连接")
+		writeError("control_expired", "连接权限或 Herdr 会话已变化，请重新连接")
 		return
 	}
 	if m.Type == "terminal.control.acquire" {
 		if !validGeometry(m.Cols, m.Rows) {
-			s.writeGeometryError(m, "invalid_terminal_size", "终端尺寸超出范围")
+			writeError("invalid_terminal_size", "终端尺寸超出范围")
 			return
 		}
 		if _, ok := stream.process.(herdr.ViewportObserver); !ok {
-			s.writeGeometryError(m, "control_unavailable", "当前接入无法同步观察画布，请检查主机尺寸读取能力或更新受控端 CLI；仍可观察和输入")
+			writeError("control_unavailable", "当前接入无法同步观察画布，请检查主机尺寸读取能力或更新受控端 CLI；仍可观察和输入")
 			return
 		}
 		if err := s.checkTerminalFeature("resize", true); err != nil {
-			s.writeGeometryError(m, "herdr_incompatible", err.Error())
+			writeError("herdr_incompatible", err.Error())
 			return
 		}
 		l, err := e.acquire(s, stream, m.Cols, m.Rows, m.Transfer)
@@ -247,10 +266,10 @@ func (s *workbenchSession) handleGeometry(m workbenchMessage) {
 			if errors.Is(err, errGeometryConflict) {
 				code = "control_conflict"
 			}
-			s.writeGeometryError(m, code, err.Error())
+			writeError(code, err.Error())
 			return
 		}
-		_ = s.writer.JSON(s.ctx, map[string]any{"t": "terminal.control.acquired", "id": m.RequestID, "stream_id": stream.id, "stream_epoch": stream.epoch, "control_generation": l.generation, "expires_in_ms": geometryLeaseTTL.Milliseconds()})
+		_ = s.writer.jsonBeforeWrite(s.ctx, map[string]any{"t": "terminal.control.acquired", "id": m.RequestID, "stream_id": stream.id, "stream_epoch": stream.epoch, "control_generation": l.generation, "expires_in_ms": geometryLeaseTTL.Milliseconds()}, finishAcquire)
 		e.publish()
 		return
 	}
@@ -259,7 +278,7 @@ func (s *workbenchSession) handleGeometry(m workbenchMessage) {
 	valid := l != nil && l.session == s && l.stream == stream && l.generation == m.ControlGeneration && !l.revoked.Load() && time.Now().Before(l.expires)
 	e.mu.Unlock()
 	if !valid {
-		s.writeGeometryError(m, "control_expired", "尺寸控制已释放，请重新选择“使用此窗口尺寸”")
+		writeError("control_expired", "尺寸控制已释放，请重新选择“使用此窗口尺寸”")
 		return
 	}
 	switch m.Type {
@@ -280,11 +299,11 @@ func (s *workbenchSession) handleGeometry(m workbenchMessage) {
 		}
 	case "terminal.resize_v2":
 		if !validGeometry(m.Cols, m.Rows) || m.ResizeSeq == 0 || m.ResizeSeq > 1<<53-1 {
-			s.writeGeometryError(m, "invalid_terminal_size", "无效的尺寸或请求序号")
+			writeError("invalid_terminal_size", "无效的尺寸或请求序号")
 			return
 		}
 		if err := e.resize(l, m.ResizeSeq, m.Cols, m.Rows); err != nil {
-			s.writeGeometryError(m, "resize_failed", err.Error())
+			writeError("resize_failed", err.Error())
 		}
 	}
 }
