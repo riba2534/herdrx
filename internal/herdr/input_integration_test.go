@@ -147,7 +147,7 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 	if err := json.Unmarshal(created, &result); err != nil || result.RootPane.ID == "" {
 		t.Fatalf("create fixture: %s, %v", created, err)
 	}
-	program := "import os,tty\ntty.setraw(0)\nos.write(1,b'\\x1b[?2004h')\nopen('ready','w').close()\nwhile True:\n data=os.read(0,4096)\n if not data: break\n with open('received','ab') as f: f.write(data)\n"
+	program := bracketedPasteFixtureReady + "while True:\n data=os.read(0,4096)\n if not data: break\n with open('received','ab') as f: f.write(data)\n"
 	if err := os.WriteFile(filepath.Join(dir, "echo.py"), []byte(program), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -167,13 +167,22 @@ func TestComposerSendInputWithRealHerdr(t *testing.T) {
 
 }
 
-// Prologue: raw mode, bracketed paste on, then a ready marker. The target reads
-// stdin in a tight loop from the moment it writes `ready`.
-const chatFixtureHead = `import json, os, tty
+// Writing the mode escape does not mean Herdr has parsed it yet. A DSR reply
+// proves its terminal parser reached the query after enabling bracketed paste;
+// only then may the Go driver send text. No timed settle or probe input is used.
+const bracketedPasteFixtureReady = `import os, re, tty
 tty.setraw(0)
-os.write(1, b'\x1b[?2004h')
+os.write(1, b'\x1b[?2004h\x1b[6n')
+reply=b''
+while not re.fullmatch(rb'\x1b\[\d+;\d+R',reply):
+    data=os.read(0,4096)
+    if not data: raise RuntimeError('terminal closed before bracketed-paste readiness reply')
+    reply+=data
 open('ready', 'w').close()
 `
+
+// The target reads stdin in a tight loop after parser-confirmed readiness.
+const chatFixtureHead = "import json\n" + bracketedPasteFixtureReady
 
 // The reader loop shared by every chat fixture below: it records the raw bytes of
 // each read(), keeps a draft, treats bracketed-paste content as text, and treats a
@@ -417,10 +426,7 @@ func TestComposerTwoLegSubmitReachesChatTargetOnceWithRealHerdr(t *testing.T) {
 // stdin buffer collects whatever herdr writes, and its next read() returns all
 // of it at once. The handshake makes the timing deterministic instead of
 // dependent on how loaded the machine is.
-const busyChatFixture = `import json, os, time, tty
-tty.setraw(0)
-os.write(1, b'\x1b[?2004h')
-open('ready', 'w').close()
+const busyChatFixture = "import json, time\n" + bracketedPasteFixtureReady + `
 while not os.path.exists('release'):
     time.sleep(0.005)
 ` + chatFixtureTail
@@ -532,7 +538,7 @@ func TestComposerTwoLegSplitNeedsTheTargetToReadFirstWithRealHerdr(t *testing.T)
 	mergedFound := chatChunkIndexes(t, mergedWork, "\x1b[201~", "\r")
 	mergedPaste, mergedEnter := mergedFound["\x1b[201~"], mergedFound["\r"]
 	if len(mergedPaste) != 1 || len(mergedEnter) != 1 || mergedPaste[0] != mergedEnter[0] {
-		t.Fatalf("a busy target did not merge the legs into one read (paste-end %v, Enter %v); the settle rationale is stale", mergedPaste, mergedEnter)
+		t.Fatalf("a busy target did not merge the legs into one read (paste-end %v, Enter %v); raw chunks=%q", mergedPaste, mergedEnter, chatChunks(t, mergedWork))
 	}
 	if got := strings.Join(chatChunks(t, mergedWork), ""); !strings.Contains(got, "\x1b[200~"+mergedText+"\x1b[201~\r") {
 		t.Fatalf("merged legs did not reproduce the single-call byte stream: %q", got)
