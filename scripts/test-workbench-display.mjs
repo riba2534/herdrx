@@ -648,7 +648,15 @@ try {
       await assertReflow()
       assert.equal(reflow.messages.filter(m => m.t === 'terminal.control.acquire').length, 1)
       assert.equal(reflow.messages.some(m => m.responsive || m.resize_remote), false, 'new control path must not use legacy responsive open')
-      assert.ok(reflow.messages.filter(m => m.t === 'terminal.control.acquire').at(-1).cols < 70)
+      // The request is this phone's own grid: it fills the width at the page's
+      // real cell width without a corrective resize. Column counts depend on the
+      // platform's monospace fallback (CJK fallbacks are 0.5em, not 0.6em wide).
+      const acquired = reflow.messages.filter(m => m.t === 'terminal.control.acquire').at(-1)
+      const acquiredMetrics = await metrics(reflow.page)
+      const cell = acquiredMetrics.screenWidth / acquired.cols
+      assert.equal(reflow.messages.filter(m => m.t === 'terminal.resize_v2').length, 0, 'control needed a corrective resize right after acquiring')
+      assert.ok(acquired.cols < 100 && acquiredMetrics.screenWidth <= acquiredMetrics.width + 1 && acquiredMetrics.width - acquiredMetrics.screenWidth < 12 + 2 * cell,
+        `controller at 479px requested ${acquired.cols}×${acquired.rows}: ${JSON.stringify(acquiredMetrics)}`)
       await screenshot(reflow.page, `${name}-295cols-responsive-479x847`)
       const openCount = reflow.messages.filter(m => m.t === 'terminal.open').length
       for (const [width, height] of [[390, 844], [320, 720], [700, 390], [479, 847]]) {

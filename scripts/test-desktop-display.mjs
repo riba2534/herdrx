@@ -291,11 +291,13 @@ try {
         const f = await fixture(browser, { viewport: c.viewport, deviceScaleFactor: c.deviceScaleFactor })
         const autoState = async () => {
           const m = await metrics(f.page, 0)
-          return { font: m.font, cropped: (await f.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0, fits: m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }
+          return { font: m.font, cropped: (await f.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0, fits: m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1, fitsWidth: m.screenWidth <= m.width + 1 }
         }
-        // Default auto either shrinks to show the whole grid or hands the pane
-        // back to the fixed-size view; it never shrinks below the readable floor.
-        await expect.poll(async () => { const s = await autoState(); return (s.cropped && s.font === 14) || (!s.cropped && s.fits) }, { timeout: 15000 }).toBe(true)
+        // Default auto shrinks to show the whole grid, else its full width with
+        // vertical panning, else hands the pane back to the fixed-size view; it
+        // never shrinks below the readable floor. Which tier applies depends on
+        // the platform's monospace advance.
+        await expect.poll(async () => { const s = await autoState(); return (s.cropped && s.font === 14) || (!s.cropped && s.fits) || (!s.cropped && s.fitsWidth && s.font >= 10) }, { timeout: 15000 }).toBe(true)
         const auto = await autoState()
         assert.ok(auto.font >= 10 && auto.font <= 14, `${c.name} desktop auto font outside the readable range: ${auto.font}`)
         await setDisplayMode(f.page, 'fixed')
