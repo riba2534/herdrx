@@ -76,9 +76,25 @@ export function fittedTerminalFont(bounds: FitBounds, measure: FontMeasure, maxF
 // the font-size control.
 export const AUTO_FIT_MIN_FONT_SIZE = 10
 
-export function autoFitFont(bounds: FitBounds, measure: FontMeasure, maxFontSize = 14): number | null {
+export function autoFitFont(bounds: FitBounds, measure: FontMeasure, maxFontSize = 14, minFontSize = AUTO_FIT_MIN_FONT_SIZE): number | null {
   const fitted = fittedTerminalFont(bounds, measure, maxFontSize)
-  return fitted !== null && fitted >= AUTO_FIT_MIN_FONT_SIZE ? fitted : null
+  return fitted !== null && fitted >= minFontSize ? fitted : null
+}
+
+// Touch screens are viewed closer than desktop monitors, so the width-fit tier
+// on phones may go one pixel below the desktop floor before cropping.
+export const COMPACT_AUTO_FIT_MIN_FONT_SIZE = 9
+
+export type AutoFitLayout = { fontSize: number; tier: 'complete' | 'width' }
+
+// Auto mode tiers: the complete grid when it stays readable, otherwise the full
+// width with vertical panning (a remote frame reads top to bottom like a page),
+// otherwise null so the caller keeps its readable fixed size and crops.
+export function autoFitLayout(bounds: FitBounds, measure: FontMeasure, maxFontSize = 14, minFontSize = AUTO_FIT_MIN_FONT_SIZE): AutoFitLayout | null {
+  const complete = autoFitFont(bounds, measure, maxFontSize, minFontSize)
+  if (complete !== null) return { fontSize: complete, tier: 'complete' }
+  const width = autoFitFont({ ...bounds, height: Number.MAX_SAFE_INTEGER }, measure, maxFontSize, minFontSize)
+  return width === null ? null : { fontSize: width, tier: 'width' }
 }
 
 export function createFontMeasure(host: HTMLElement, fontFamily: string): { measure: FontMeasure; dispose: () => void } {

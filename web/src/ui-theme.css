@@ -244,6 +244,12 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .tab-select { font-family: var(--ui-font); }
 .terminal-titlebar { font-family: var(--ui-font); }
 .switcher-group h3 { font-family: var(--ui-font); letter-spacing: 0; font-size: 12px; }
+/* The denser sidebar above is for pointers; touch screens keep 44 px rows and a
+   footer row as tall as its buttons, so nothing spills under the home indicator. */
+@media (pointer: coarse) {
+  .workbench-sidebar { grid-template-rows: auto minmax(0,1fr) 44px; }
+  .sidebar-section-title, .workspace-row { min-height: 44px; }
+}
 
 @media (max-width: 900px) {
   .admin-user-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 16px; }

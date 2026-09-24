@@ -173,6 +173,21 @@ function assertHeaderGeometry(geometry, label) {
   assert.ok(!geometry.viewport || geometry.viewport.top >= geometry.header.bottom - 1, `${label}: terminal viewport overlaps the pane header`)
 }
 
+// Phones move the switch into the top bar and give the pane header row to the terminal.
+async function assertCompactToggle(page, label) {
+  const g = await page.evaluate(() => {
+    const box = (el) => { if (!el || !el.getClientRects().length) return null; const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } }
+    const pane = document.querySelector('.terminal-pane')
+    return { topbar: box(document.querySelector('.mobile-topbar')), toggle: box(document.querySelector('.mobile-topbar .pane-view-toggle')), header: box(pane?.querySelector('.pane-header')), pane: box(pane), body: box(pane?.querySelector('.pane-body')), width: innerWidth }
+  })
+  assert.ok(g.topbar && g.toggle && g.pane && g.body, `${label}: top bar view toggle is missing ${JSON.stringify(g)}`)
+  assert.ok(inside(g.toggle, g.topbar), `${label}: view toggle escapes the top bar`)
+  assert.ok(g.toggle.left >= -0.6 && g.toggle.right <= g.width + 0.6, `${label}: view toggle escapes the viewport`)
+  assert.ok(g.toggle.width >= 32 && g.toggle.height >= 32, `${label}: view toggle collapsed ${JSON.stringify(g.toggle)}`)
+  assert.equal(g.header, null, `${label}: phone pane still reserves a header row`)
+  assert.ok(Math.abs(g.body.top - g.pane.top) <= 1, `${label}: pane body does not start at the pane top`)
+}
+
 // Pane pixel width is linear in viewport width, so two probes give the slope and
 // the intercept (the sidebar) and we can aim a split pane at an exact width.
 async function paneWidthAt(page, width, height) {
@@ -412,13 +427,13 @@ try {
         assert.deepEqual(geo.errors, [])
       })
 
-      // 视口级别的窄窗口：496x506 以及 320 / 280px 宽，开关同样不出界。
+      // 视口级别的窄窗口：496x506 以及 320 / 280px 宽是手机布局，开关在顶栏里且不出界。
       for (const [width, height] of [[496, 506], [320, 720], [280, 720]]) {
         await withFixture(browser, { viewport: { width, height }, hasTouch: true }, {}, async (tight) => {
           const toggle = tight.page.getByRole('switch', { name: '对话视图' }).first()
           await expect(toggle).toBeVisible()
           await expect(toggle).toHaveAttribute('aria-checked', 'false')
-          assertHeaderGeometry(await paneHeaderGeometry(tight.page, 0), `${name} viewport ${width}x${height}`)
+          await assertCompactToggle(tight.page, `${name} viewport ${width}x${height}`)
           const overflow = await tight.page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
           assert.ok(overflow.scroll <= overflow.client + 1, `viewport ${width}x${height} overflows horizontally: ${overflow.scroll} > ${overflow.client}`)
           await screenshot(tight.page, `${name}-viewport-${width}x${height}-terminal`, false)
@@ -427,7 +442,7 @@ try {
           const chat = tight.page.getByRole('region', { name: '对话视图' })
           await chat.getByRole('button', { name: /aaaa1111/ }).click()
           await expect(chat.getByText('已改成 44 并补了测试。')).toBeVisible()
-          assertHeaderGeometry(await paneHeaderGeometry(tight.page, 0), `${name} viewport ${width}x${height} (chat)`)
+          await assertCompactToggle(tight.page, `${name} viewport ${width}x${height} (chat)`)
           const boxRect = await chat.getByRole('textbox', { name: '对话输入内容' }).boundingBox()
           assert.ok(boxRect && boxRect.width > 120, `chat composer collapsed at ${width}px`)
           assert.ok(boxRect.x >= -1 && boxRect.x + boxRect.width <= width + 1, `chat composer escapes the ${width}px viewport`)

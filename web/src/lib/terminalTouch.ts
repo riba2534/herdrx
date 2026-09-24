@@ -7,7 +7,22 @@ export interface TerminalTouchOptions {
   hasSelection?: () => boolean
   /** When false, native selection/zoom owns the pointer and capture handlers stand down. */
   enabled?: () => boolean
+  /** Two-finger pinch inside the terminal. Without it the browser keeps its page zoom. */
+  pinch?: TerminalPinchHandlers
 }
+
+export interface TerminalPinchHandlers {
+  /** Return false to ignore this pinch; the page still does not zoom over the terminal. */
+  start: (centerX: number, centerY: number) => boolean
+  /** Scale relative to the finger distance when the pinch was recognized. */
+  update: (scale: number) => void
+  end: (scale: number) => void
+  cancel: () => void
+}
+
+// Fingers must spread or close this far before a pinch counts, so a two-finger
+// tap or a slightly uneven scroll never changes the font.
+const PINCH_THRESHOLD = 18
 
 /** Keep single-finger vertical movement in the terminal, including at its edges. */
 export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouchOptions): () => void {
@@ -22,13 +37,24 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     generation: number | string | null
   } | null = null
   let blocked = false
+  let pinch: { startDistance: number; distance: number; active: boolean } | null = null
   const previousTouchAction = viewport.style.touchAction
   const zoomed = () => (window.visualViewport?.scale || 1) > 1.01
   const active = () => options.enabled?.() !== false
   const updateTouchAction = () => {
     // Native horizontal panning and pinch remain available. When the page is
     // zoomed, the browser also owns vertical panning of the visual viewport.
-    viewport.style.touchAction = !active() || zoomed() ? 'auto' : 'pan-x pinch-zoom'
+    // A terminal that handles its own pinch keeps the browser from zooming the
+    // page under the fingers; everything outside the terminal still zooms.
+    viewport.style.touchAction = !active() || zoomed() ? 'auto' : options.pinch ? 'pan-x' : 'pan-x pinch-zoom'
+  }
+  const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY)
+  const endPinch = (commit: boolean) => {
+    const current = pinch
+    pinch = null
+    if (!current?.active) return
+    if (commit) options.pinch!.end(current.distance / current.startDistance)
+    else options.pinch!.cancel()
   }
   const selected = () => {
     if (options.hasSelection?.()) return true
@@ -46,7 +72,15 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     // xterm's local touch handler cannot scroll Herdr's observe-only frames.
     // Stopping propagation does not cancel taps, selection, or native zoom.
     event.stopImmediatePropagation()
-    if (event.touches.length !== 1) { cancel(); blocked = true; return }
+    if (event.touches.length !== 1) {
+      cancel()
+      blocked = true
+      if (event.touches.length === 2 && options.pinch && !pinch && !zoomed() && !selected()) {
+        const startDistance = distance(event.touches)
+        if (startDistance > 0) pinch = { startDistance, distance: startDistance, active: false }
+      } else if (event.touches.length > 2) endPinch(false)
+      return
+    }
     if (blocked || zoomed() || selected()) return
     const target = event.target
     if (target instanceof Element && target.closest('a, button, input, textarea, select, [contenteditable="true"]')) return
@@ -59,6 +93,21 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   const move = (event: TouchEvent) => {
     if (!active()) return
     event.stopImmediatePropagation()
+    if (pinch && event.touches.length === 2) {
+      pinch.distance = distance(event.touches)
+      if (!pinch.active) {
+        if (Math.abs(pinch.distance - pinch.startDistance) < PINCH_THRESHOLD) return
+        const centerX = (event.touches[0].clientX + event.touches[1].clientX) / 2
+        const centerY = (event.touches[0].clientY + event.touches[1].clientY) / 2
+        if (!options.pinch!.start(centerX, centerY)) { pinch = null; return }
+        // Measure the scale from here so the font does not jump by the threshold.
+        pinch.active = true
+        pinch.startDistance = pinch.distance
+      }
+      if (event.cancelable) event.preventDefault()
+      options.pinch!.update(pinch.distance / pinch.startDistance)
+      return
+    }
     if (event.touches.length !== 1) { cancel(); blocked = true; return }
     if (!gesture || blocked) return
     if (gesture.generation !== options.getGeneration() || zoomed() || selected()) { cancel(); return }
@@ -94,14 +143,18 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   const end = (event: TouchEvent) => {
     if (!active()) return
     event.stopImmediatePropagation()
+    if (pinch && event.touches.length < 2) endPinch(event.type !== 'touchcancel')
     if (event.type === 'touchcancel') cancel()
     gesture = null
     // After a pinch, the remaining finger does not become a new scroll gesture.
     if (!event.touches.length) blocked = false
   }
-  const contextMenu = () => cancel()
+  const contextMenu = () => { cancel(); endPinch(false) }
+  // Safari's proprietary gesture events would otherwise zoom the page while
+  // the terminal is already scaling its own font.
+  const blockSafariZoom = (event: Event) => { if (options.pinch && active() && !zoomed()) event.preventDefault() }
   const resume = () => { gesture = null; blocked = false }
-  const visibility = () => { if (document.hidden) cancel(); else resume() }
+  const visibility = () => { if (document.hidden) { cancel(); endPinch(false) } else resume() }
   // The second finger can land on a toolbar outside this viewport. Observe
   // the document without canceling its events, so the whole pinch stays native
   // and its final lift cannot leave the next single-finger gesture blocked.
@@ -117,6 +170,8 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   viewport.addEventListener('touchend', end, { capture: true, passive: true })
   viewport.addEventListener('touchcancel', end, { capture: true, passive: true })
   viewport.addEventListener('contextmenu', contextMenu, true)
+  viewport.addEventListener('gesturestart', blockSafariZoom)
+  viewport.addEventListener('gesturechange', blockSafariZoom)
   window.visualViewport?.addEventListener('resize', updateTouchAction)
   window.addEventListener('blur', cancel)
   window.addEventListener('focus', resume)
@@ -126,6 +181,7 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
   document.addEventListener('touchcancel', otherEnd, { capture: true, passive: true })
   return () => {
     cancel()
+    endPinch(false)
     classObserver?.disconnect()
     viewport.style.touchAction = previousTouchAction
     viewport.removeEventListener('touchstart', start, true)
@@ -133,6 +189,8 @@ export function attachTerminalTouch(viewport: HTMLElement, options: TerminalTouc
     viewport.removeEventListener('touchend', end, true)
     viewport.removeEventListener('touchcancel', end, true)
     viewport.removeEventListener('contextmenu', contextMenu, true)
+    viewport.removeEventListener('gesturestart', blockSafariZoom)
+    viewport.removeEventListener('gesturechange', blockSafariZoom)
     window.visualViewport?.removeEventListener('resize', updateTouchAction)
     window.removeEventListener('blur', cancel)
     window.removeEventListener('focus', resume)

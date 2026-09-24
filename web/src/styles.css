@@ -279,8 +279,35 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .terminal-titlebar { position: absolute; z-index: 7; top: 0; left: 0; right: 0; height: var(--pane-bar-height); min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 0 8px; color: var(--muted); background: var(--panel); border-bottom: 1px solid var(--border); font-size: 11px; line-height: 1; }
 .terminal-titlebar[hidden] { display: none; }
 .pane-controls-toggle { flex: 0 0 auto; width: 28px; height: 24px; opacity: 0; background: var(--panel); border: 1px solid var(--border); }
-.pane-crop-badge { position: absolute; z-index: 6; left: 8px; bottom: 8px; max-width: calc(100% - 16px); height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 3px; background: color-mix(in srgb, var(--panel) 90%, transparent); color: var(--text); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pane-crop-badge:hover { background: var(--panel-strong); }
+/* 画面角标：说明远端网格与尺寸控制状态，点开是本地显示与任务尺寸工具。放在右上角，避开 Agent 底部输入行。 */
+.pane-display { position: absolute; z-index: 6; top: 6px; bottom: 6px; right: 6px; max-width: calc(100% - 12px); display: flex; flex-direction: column; align-items: flex-end; pointer-events: none; }
+.pane-display > * { pointer-events: auto; }
+/* The button is the touch target; the pill inside is what shows over the terminal. */
+.pane-display-chip { flex: 0 0 auto; max-width: 100%; min-width: 0; height: 24px; padding: 0; display: flex; align-items: center; justify-content: flex-end; border: 0; background: transparent; }
+.pane-display-chip > span { max-width: 100%; height: 24px; padding: 0 9px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--panel) 86%, transparent); color: var(--muted); font-size: 11px; line-height: 22px; font-variant-numeric: tabular-nums; white-space: nowrap; text-overflow: ellipsis; opacity: .9; }
+.pane-display-chip:hover > span, .pane-display-chip[aria-expanded=true] > span { opacity: 1; color: var(--text); background: var(--panel); }
+.pane-display-chip:focus-visible { outline: none; }
+.pane-display-chip:focus-visible > span { border-color: var(--accent); }
+.pane-display-chip-warn > span { color: var(--text); border-color: color-mix(in srgb, var(--working) 70%, var(--border)); }
+.pane-display-chip-owned > span { color: var(--accent); border-color: var(--accent); }
+.pane-display-chip-other > span { color: var(--text); border-color: color-mix(in srgb, var(--blocked) 70%, var(--border)); }
+/* The menu scrolls inside its pane, so a small split never clips it. */
+.pane-display-menu { flex: 0 1 auto; min-height: 0; width: min(320px, calc(100vw - 24px)); max-width: 100%; margin-top: 6px; padding: 10px; overflow: auto; overscroll-behavior: contain; display: grid; gap: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px rgba(0, 0, 0, .35); font-size: 12px; line-height: 1.45; }
+.pane-display-section { display: grid; gap: 8px; min-width: 0; }
+.pane-display-section + .pane-display-section { padding-top: 10px; border-top: 1px solid var(--border); }
+.pane-display-section > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.pane-display-section > header small { min-width: 0; color: var(--muted); font-size: 11px; text-align: right; }
+.pane-display-section .field-hint, .pane-display-section .field-error { margin: 0; font-size: 11px; line-height: 1.5; }
+.pane-display-modes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.pane-display-modes .tool-button, .pane-display-font .tool-button { height: 32px; min-height: 32px; border: 1px solid var(--border); color: var(--text); font-size: 12px; }
+.pane-display-modes .tool-button[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+.pane-display-font { display: flex; align-items: center; gap: 8px; }
+.pane-display-font .tool-button { width: 44px; }
+.pane-display-font output { min-width: 60px; text-align: center; font-variant-numeric: tabular-nums; }
+.pane-display-section > .button { width: 100%; min-height: 36px; justify-content: center; }
+.pane-display-chat { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent-soft); color: var(--text); text-align: left; }
+.pane-display-chat > span { min-width: 0; display: grid; gap: 2px; }
+.pane-display-chat small { color: var(--muted); font-size: 11px; }
 .terminal-pane:hover .pane-controls-toggle, .pane-controls-toggle:focus-visible { opacity: 1; }
 .terminal-pane-tools-open .pane-controls-toggle { opacity: 1; }
 .terminal-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
@@ -469,7 +496,18 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
   .sidebar-section-title button { width: 44px; height: 44px; }
   .workbench-sidebar { grid-template-rows: auto minmax(0, 1fr) 44px; }
   .sidebar-footer button, .workbench .context-menu-item { min-height: 44px; }
+  .hostbar-home { min-height: 44px; }
+  .keybar { flex: 0 0 auto; min-height: 52px; padding: 4px max(6px, env(safe-area-inset-right)) 4px max(6px, env(safe-area-inset-left)); display: flex; gap: 5px; overflow-x: auto; background: var(--panel); border-top: 1px solid var(--border); }
+  .keybar button { flex: 0 0 auto; min-width: 44px; min-height: 44px; padding: 0 8px; white-space: nowrap; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font: 12px monospace; -webkit-touch-callout: none; touch-action: manipulation; }
+  .keybar .key-active { color: var(--panel); border-color: var(--accent); background: var(--accent); }
 }
+/* 平板等桌面布局安装成 PWA 后，状态栏与 Home 指示条会压住顶栏和底部；安全区在普通桌面浏览器中为 0。 */
+.workbench:not(.workbench-compact) { grid-template-rows: calc(var(--hostbar-height) + env(safe-area-inset-top)) minmax(0, 1fr); }
+.workbench:not(.workbench-compact) .hostbar { padding-top: env(safe-area-inset-top); padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
+.workbench:not(.workbench-compact) .workbench-sidebar { padding-left: env(safe-area-inset-left); padding-bottom: env(safe-area-inset-bottom); }
+.workbench:not(.workbench-compact) .workbench-main { padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom); }
+.workbench-sidebar-closed:not(.workbench-compact) .workbench-main { padding-left: env(safe-area-inset-left); }
+.workbench-keyboard:not(.workbench-compact) .workbench-main, .workbench-keyboard:not(.workbench-compact) .workbench-sidebar { padding-bottom: 0; }
 
 /* Access management */
 .page-admin { max-width: 1120px; }
@@ -543,12 +581,23 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .workbench-compact .hostbar { padding-left: max(4px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); }
 .workbench-compact .keybar { padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(6px, env(safe-area-inset-right)); }
 .workbench-compact .pane-header { padding-left: max(6px, env(safe-area-inset-left)); padding-right: max(4px, env(safe-area-inset-right)); }
-.workbench-compact .terminal-viewport { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+/* Margin, not padding: a scroll container paints overflowing text into its padding, which would put terminal text under a landscape notch. */
+.workbench-compact .terminal-viewport { margin-left: env(safe-area-inset-left); margin-right: env(safe-area-inset-right); }
+.workbench-compact .pane-display { right: calc(2px + env(safe-area-inset-right)); }
+/* 手机顶栏的视图开关：只保留滑块和 Chat 字样，整块仍是 44 px 的触控目标。 */
+.mobile-topbar > .mobile-view-toggle { flex: 0 0 auto; padding: 0 6px; border-radius: 0; }
+.mobile-topbar > .mobile-view-toggle .pane-view-toggle-label-terminal { display: none; }
+@media (max-width: 359px) { .mobile-topbar > .mobile-view-toggle .pane-view-toggle-label { display: none; } }
+/* 软键盘盖住 Home 指示条时，底部安全区留白只会挤掉终端行数。 */
+.workbench-keyboard .workbench-dock, .workbench-keyboard .chat-compose { padding-bottom: 0; }
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }
 @media (pointer: coarse) {
   .workbench .display-toolbar .tool-button, .workbench .history-navigation .tool-button { min-height: 44px; min-width: 44px; }
-  /* Compact panes show the crop badge too, so it needs a touch target there. */
-  .pane-crop-badge { height: auto; min-height: 44px; }
+  /* The chip stays visually small over the terminal but keeps a 44 px target. */
+  .pane-display { top: 0; bottom: 2px; right: 2px; }
+  .pane-display-chip { height: 44px; min-width: 44px; padding: 0 4px; }
+  .pane-display-chip > span { height: 30px; padding: 0 12px; font-size: 12px; line-height: 28px; }
+  .pane-display-modes .tool-button, .pane-display-font .tool-button, .pane-display-section > .button { min-height: 44px; height: 44px; }
   .pane-menu-button { display: inline-flex; }
 }
 @media (max-width: 350px) {

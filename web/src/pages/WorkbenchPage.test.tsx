@@ -852,6 +852,29 @@ describe('workbench pane view mode', () => {
     }]
   })
 
+  it('puts the terminal and chat switch in the phone top bar instead of a pane header', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    const topbar = await screen.findByRole('banner', { name: '工作台导航' })
+    const toggle = await within(topbar).findByRole('switch', { name: '对话视图' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'chat'))
+    expect(within(topbar).getByRole('switch', { name: '对话视图' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('gives touch tablets in the desktop layout the auxiliary key bar', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query === '(pointer: coarse)', addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
+    expect(screen.queryByRole('toolbar', { name: '终端辅助键' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '终端辅助键' }))
+    const keys = await screen.findByRole('toolbar', { name: '终端辅助键' })
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    fireEvent.click(within(keys).getByRole('button', { name: 'Esc 键' }))
+    expect(paneInput).toContain('\x1b')
+  })
+
   it('keeps the chat view per pane and hides the workbench input box for the pane that is in chat', async () => {
     render(<WorkbenchPage hostID="host"/>)
     await screen.findByRole('button', { name: '本地输入框' })

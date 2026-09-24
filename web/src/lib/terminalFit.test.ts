@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AUTO_FIT_MIN_FONT_SIZE, autoFitFont, fittedTerminalFont, resolvedTerminalFontFamily, TERMINAL_FONT_FAMILY, whenFontsReady } from './terminalFit'
+import { AUTO_FIT_MIN_FONT_SIZE, autoFitFont, autoFitLayout, COMPACT_AUTO_FIT_MIN_FONT_SIZE, fittedTerminalFont, resolvedTerminalFontFamily, TERMINAL_FONT_FAMILY, whenFontsReady } from './terminalFit'
 
 describe('offscreen terminal sizing', () => {
   const bounds = { width: 1260, height: 840, cols: 200, rows: 80, lineHeight: 1, letterSpacing: 0, dpr: 1 }
@@ -47,6 +47,21 @@ describe('offscreen terminal sizing', () => {
     expect(autoFitFont({ ...room, width: 200, height: 80 }, measure)).toBeNull()
     expect(autoFitFont({ ...room, width: 0 }, measure)).toBeNull()
     expect(autoFitFont(room, () => null)).toBeNull()
+  })
+
+  it('fills the width with vertical panning before giving up on a readable font', () => {
+    // A phone in landscape: 120 columns fit the width at 10 px, 40 rows do not fit the height.
+    const landscape = { ...bounds, cols: 120, rows: 40, width: 760, height: 300 }
+    expect(autoFitLayout(landscape, measure, 13, COMPACT_AUTO_FIT_MIN_FONT_SIZE)).toEqual({ fontSize: 10.56, tier: 'width' })
+    // Everything fits: the complete tier wins and stays under the ceiling.
+    expect(autoFitLayout({ ...landscape, rows: 10 }, measure, 13)).toEqual({ fontSize: 10.56, tier: 'complete' })
+    expect(autoFitLayout({ ...landscape, cols: 40, rows: 10 }, measure, 13)).toEqual({ fontSize: 13, tier: 'complete' })
+    // Portrait against a 173-column desktop pane: neither tier is readable.
+    expect(autoFitLayout({ ...landscape, cols: 173, rows: 54, width: 380, height: 600 }, measure, 13, COMPACT_AUTO_FIT_MIN_FONT_SIZE)).toBeNull()
+    // The phone floor is one pixel below the desktop floor.
+    const between = { ...landscape, cols: 135 }
+    expect(autoFitLayout(between, measure, 13)).toBeNull()
+    expect(autoFitLayout(between, measure, 13, COMPACT_AUTO_FIT_MIN_FONT_SIZE)?.tier).toBe('width')
   })
 
   it('uses generic monospace when the browser substitutes a proportional font', () => {

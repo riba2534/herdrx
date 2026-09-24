@@ -280,7 +280,7 @@ async function releaseTaskSize(page) {
   await openPaneTools(page)
   const group = page.locator('.terminal-pane').first().getByRole('group', { name: '任务尺寸', exact: true })
   if (await group.getAttribute('data-control-state') === 'owned') {
-    await group.getByRole('button', { name: '保持远端尺寸', exact: true }).click()
+    await group.getByRole('button', { name: '释放控制', exact: true }).click()
     await expect(group).toHaveAttribute('data-control-state', 'available')
   }
   await closePaneTools(page)
@@ -293,11 +293,17 @@ async function assertNoReservedHeaders(page) {
     const header = pane.locator('.terminal-titlebar')
     await expect(header).toBeHidden()
     const paneBox = await pane.boundingBox()
-    const paneHeader = await pane.locator('.pane-header').boundingBox()
     const body = await pane.locator('.pane-body').boundingBox()
     const content = await pane.locator('.terminal-viewport').boundingBox()
-    assert.ok(paneHeader.height <= 45 && Math.abs(paneHeader.y - paneBox.y) <= 1, `pane switch header exceeded one 44px touch row plus its border: ${JSON.stringify(paneHeader)}`)
-    assert.ok(Math.abs(body.y - paneHeader.y - paneHeader.height) <= 1, 'unexpected gap below pane switch header')
+    if (await pane.locator('.pane-header').count()) {
+      const paneHeader = await pane.locator('.pane-header').boundingBox()
+      assert.ok(paneHeader.height <= 45 && Math.abs(paneHeader.y - paneBox.y) <= 1, `pane switch header exceeded one 44px touch row plus its border: ${JSON.stringify(paneHeader)}`)
+      assert.ok(Math.abs(body.y - paneHeader.y - paneHeader.height) <= 1, 'unexpected gap below pane switch header')
+    } else {
+      // The phone layout moves the view switch to the top bar and gives the row to the terminal.
+      assert.ok(Math.abs(body.y - paneBox.y) <= 1, `compact pane still reserves a header row: ${JSON.stringify({ paneBox, body })}`)
+      await expect(page.locator('.mobile-topbar').getByRole('switch', { name: '对话视图' })).toBeVisible()
+    }
     assert.ok(Math.abs(content.y - body.y) <= 1, 'hidden terminal tools still reserve a row inside the pane body')
     await openPaneTools(page, index)
     assert.deepEqual(await pane.locator('.terminal-viewport').boundingBox(), content, 'opening terminal tools changed terminal geometry')
@@ -622,7 +628,8 @@ try {
       wide.layouts[0].panes = [{ pane_id: 'p1', rect: { x: 0, y: 0, width: 295, height: 40 } }]
       const reflow = await fixture(browser, { viewport: { width: 479, height: 847 }, hasTouch: true }, wide)
       const assertReflow = async () => {
-        await expect.poll(async () => { const m = await metrics(reflow.page); return m.font === 14 && m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
+        // Phones default to 13 px; control keeps that font and sizes the task to fit.
+        await expect.poll(async () => { const m = await metrics(reflow.page); return m.font === 13 && m.screenWidth <= m.width && m.screenHeight <= m.height }).toBe(true)
         const lastRow = reflow.page.locator('.xterm-rows > div').last()
         try {
           await expect(lastRow, `responsive last row at ${JSON.stringify(reflow.page.viewportSize())}`).toContainText('END')
@@ -672,6 +679,53 @@ try {
       await assertReflow()
       await expect.poll(() => reflow.messages.filter(m => m.t === 'terminal.resize_v2').length).toBeGreaterThan(0)
       assert.equal(reflow.messages.filter(m => m.t === 'terminal.open').length, openCount, 'rotation or keyboard reopened the responsive terminal')
+      // A software keyboard only covers the controlled pane: while an input has
+      // focus, a shorter visual viewport keeps the task rows and pans instead.
+      await reflow.page.evaluate(() => { delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')) })
+      await assertReflow()
+      const resizesNow = () => reflow.messages.filter(m => m.t === 'terminal.resize_v2').length
+      const rows = async () => { const m = await metrics(reflow.page); return Math.round(m.screenHeight / m.rowHeight) }
+      const composerInput = reflow.page.getByRole('textbox', { name: '本地输入内容' })
+      await composerInput.focus()
+      await reflow.page.waitForTimeout(400)
+      const beforeKeyboard = resizesNow()
+      const rowsBefore = await rows()
+      await reflow.page.evaluate(() => {
+        Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 420 })
+        window.visualViewport.dispatchEvent(new Event('resize'))
+      })
+      await expect(reflow.page.locator('.workbench')).toHaveClass(/workbench-keyboard/)
+      await reflow.page.waitForTimeout(600)
+      assert.equal(resizesNow(), beforeKeyboard, 'software keyboard resized the controlled task')
+      assert.equal(await rows(), rowsBefore, 'software keyboard changed the terminal rows')
+      await reflow.page.evaluate(() => { delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')) })
+      await composerInput.blur()
+      await expect(reflow.page.locator('.workbench')).not.toHaveClass(/workbench-keyboard/)
+      await reflow.page.waitForTimeout(600)
+      assert.equal(resizesNow(), beforeKeyboard, 'closing the software keyboard resized the controlled task')
+      if (name === 'chromium') {
+        // A real two-finger pinch changes the local font once on release; the
+        // controller then sends one resize for the new font, not one per move.
+        const cdp = await reflow.context.newCDPSession(reflow.page)
+        const box = await reflow.page.locator('.terminal-viewport').boundingBox()
+        const cx = box.x + box.width / 2, cy = box.y + box.height / 2
+        const points = (spread) => [{ x: cx - spread, y: cy, id: 1 }, { x: cx + spread, y: cy, id: 2 }]
+        const beforePinch = resizesNow()
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(30) })
+        for (const spread of [45, 60, 75, 90]) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(spread) })
+        assert.match(await reflow.page.locator('.terminal-host').evaluate((el) => el.style.transform), /^scale\(/, 'pinch has no live preview')
+        await reflow.page.waitForTimeout(400)
+        assert.equal(resizesNow(), beforePinch, 'pinch resized the task before the fingers lifted')
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+        await expect.poll(async () => (await metrics(reflow.page)).font).toBe(26)
+        assert.equal(await reflow.page.evaluate(() => visualViewport.scale), 1, 'pinch over the terminal zoomed the page')
+        await expect.poll(resizesNow).toBe(beforePinch + 1)
+        await reflow.page.waitForTimeout(400)
+        assert.equal(resizesNow(), beforePinch + 1, 'one pinch sent more than one resize')
+        const saved = await reflow.page.evaluate(() => JSON.parse(localStorage.getItem('herdrx.terminal-display.v3')))
+        assert.equal(Object.values(saved).filter((profile) => profile.mode === 'fixed' && profile.fontSize === 26).length, 1, `pinch was not saved to exactly one profile: ${JSON.stringify(saved)}`)
+        await cdp.detach()
+      }
       assert.deepEqual(reflow.errors, [])
       await reflow.context.close()
 
@@ -688,7 +742,10 @@ try {
         await expect(f.page.locator('.terminal-pane')).toHaveCount(compact ? 1 : 2)
         await assertNoReservedHeaders(f.page)
         if (compact) {
-          assert.equal((await metrics(f.page)).font, 14, 'mobile default must remain readable')
+          // Phones default to auto 13 px: the complete grid or its width when that stays
+          // at 9 px or more, otherwise the readable 13 px frame that pans.
+          const mobileFont = (await metrics(f.page)).font
+          assert.ok(mobileFont >= 9 && mobileFont <= 13, `mobile default must remain readable: ${mobileFont}`)
           await expect(f.page.locator('.display-toolbar')).toHaveCount(0)
           await expect(f.page.locator('.mobile-topbar')).toBeVisible()
           assert.equal((await f.page.locator('.mobile-topbar').boundingBox()).height, height < 500 ? 32 : 44, 'mobile navigation must remain one row')
@@ -720,7 +777,7 @@ try {
             assert.equal(f.messages.some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'mobile opening must not claim remote geometry')
             await setDisplayMode(f.page, 'fixed')
             await controlTaskSize(f.page)
-            await expect.poll(async () => (await metrics(f.page)).font).toBe(14)
+            await expect.poll(async () => (await metrics(f.page)).font).toBe(13)
           }
         }
         await openPaneTools(f.page)

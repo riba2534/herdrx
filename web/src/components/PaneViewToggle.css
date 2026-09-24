@@ -46,8 +46,10 @@
 .pane-view-toggle[aria-checked="true"] .pane-view-toggle-track { background: var(--accent-soft); border-color: var(--accent); }
 .pane-view-toggle[aria-checked="true"] .pane-view-toggle-thumb { transform: translateX(14px); background: var(--accent); }
 
-@media (pointer: coarse) { .pane-view-toggle { height: 32px; padding: 0 6px; } }
-.workbench-compact .pane-view-toggle { height: 36px; }
+/* 触屏上整块开关就是触控目标；手机矮视口的顶栏另行压到 32 px。 */
+@media (pointer: coarse) { .pane-view-toggle { height: 44px; padding: 0 6px; } }
+.workbench-compact .mobile-topbar > .pane-view-toggle { height: 44px; min-width: 44px; }
+.workbench-short .mobile-topbar > .pane-view-toggle { height: 32px; min-width: 32px; }
 @media (prefers-reduced-motion: reduce) {
   .pane-view-toggle-track, .pane-view-toggle-thumb { transition: none; }
 }

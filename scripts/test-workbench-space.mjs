@@ -155,9 +155,10 @@ async function assertMobileSpace(page, minimum = .8) {
   assert.ok(g.topbar[0].height - g.safeArea.top <= 45, `mobile navigation taller than one row: ${JSON.stringify(g.topbar)}`)
   assert.ok(g.composer[0].height <= 56, `empty/single-line composer grew: ${JSON.stringify(g.composer)}`)
   const chipHeight = g.paneChips[0]?.height || 0
-  const paneHeaderHeight = g.paneHeaders[0]?.height || 0
-  assert.ok(paneHeaderHeight > 0 && paneHeaderHeight <= 45, 'pane switch header exceeds one 44px touch row plus its border')
-  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom - chipHeight - paneHeaderHeight
+  // The view switch lives in the top bar on phones; a pane header row would only
+  // take terminal lines away, so it counts against the terminal, not the budget.
+  assert.equal(g.paneHeaders.length, 0, `phone pane reserves a header row: ${JSON.stringify(g.paneHeaders)}`)
+  const available = g.workbench.height - g.safeArea.top - g.safeArea.bottom - chipHeight
   const ratio = g.terminals[0].height / available
   assert.ok(ratio >= minimum, `terminal only uses ${(100 * ratio).toFixed(1)}% of available height; minimum ${100 * minimum}%`)
   await contained(page, '.mobile-topbar button, .composer, .composer-send, .composer-input')

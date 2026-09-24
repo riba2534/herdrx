@@ -291,7 +291,7 @@ try {
         const f = await fixture(browser, { viewport: c.viewport, deviceScaleFactor: c.deviceScaleFactor })
         const autoState = async () => {
           const m = await metrics(f.page, 0)
-          return { font: m.font, cropped: (await f.page.locator('.pane-crop-badge').count()) > 0, fits: m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }
+          return { font: m.font, cropped: (await f.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0, fits: m.screenWidth <= m.width + 1 && m.screenHeight <= m.height + 1 }
         }
         // Default auto either shrinks to show the whole grid or hands the pane
         // back to the fixed-size view; it never shrinks below the readable floor.
@@ -361,7 +361,7 @@ try {
       await pollState(
         async () => {
           const m = await metrics(autoFit.page, 0)
-          return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+          return { ...m, cropped: (await autoFit.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0 }
         },
         (s) => !s.cropped && s.rowCount === 40 && s.font < 14 && s.font >= 10
           && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1,
@@ -374,7 +374,7 @@ try {
       await zoomIn(autoFit.page, 5)
       await pollState(async () => {
         const m = await metrics(autoFit.page, 0)
-        return { ...m, cropped: (await autoFit.page.locator('.pane-crop-badge').count()) > 0 }
+        return { ...m, cropped: (await autoFit.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0 }
       }, (s) => !s.cropped && s.font <= 14 && s.screenWidth <= s.width + 1 && s.screenHeight <= s.height + 1, `${name} auto fit at 150% zoom`)
       assert.equal(resizes(autoFit.messages).length, 0, 'auto fit at 150% sent a remote resize')
       await screenshot(autoFit.page, `${name}-auto-fit-zoom150`)
@@ -392,7 +392,7 @@ try {
       await expect.poll(async () => (await metrics(zoomedAuto.page, 0)).font).toBe(21)
       const zoomedGrid = await metrics(zoomedAuto.page, 0)
       assert.ok(zoomedGrid.screenWidth <= zoomedGrid.width + 1 && zoomedGrid.screenHeight <= zoomedGrid.height + 1, `auto zoom 150% overflowed: ${JSON.stringify(zoomedGrid)}`)
-      await expect(zoomedAuto.page.locator('.pane-crop-badge')).toHaveCount(0)
+      await expect(zoomedAuto.page.locator('.pane-display-chip', { hasText: '已裁切' })).toHaveCount(0)
       assert.equal(resizes(zoomedAuto.messages).length, 0, 'auto zoom sent a remote resize')
       await screenshot(zoomedAuto.page, `${name}-auto-zoom150`)
       await zoomedAuto.context.close()
@@ -400,7 +400,7 @@ try {
       const autoCrop = await fixture(browser, { viewport: { width: 1440, height: 900 } })
       await expect.poll(async () => {
         const m = await metrics(autoCrop.page, 0)
-        const cropped = (await autoCrop.page.locator('.pane-crop-badge').count()) > 0
+        const cropped = (await autoCrop.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0
         return cropped && m.font === 14
       }, { timeout: 15000 }).toBe(true)
       const cropped = await metrics(autoCrop.page, 0)
@@ -410,7 +410,7 @@ try {
       // A 295 column grid cannot be fitted at 10 px, and raising the zoom must
       // keep the crop signalled instead of hiding the right side again.
       await zoomIn(autoCrop.page, 5)
-      await expect.poll(async () => (await autoCrop.page.locator('.pane-crop-badge').count()) > 0, { timeout: 15000 }).toBe(true)
+      await expect.poll(async () => (await autoCrop.page.locator('.pane-display-chip', { hasText: '已裁切' }).count()) > 0, { timeout: 15000 }).toBe(true)
       const croppedZoom = await metrics(autoCrop.page, 0)
       assert.equal(croppedZoom.font, 21, `auto crop at 150% lost the zoom: ${JSON.stringify(croppedZoom)}`)
       assert.ok(croppedZoom.screenWidth > croppedZoom.width + 1, `auto crop at 150% no longer overflows: ${JSON.stringify(croppedZoom)}`)
@@ -549,15 +549,15 @@ try {
       await mobile.context.close()
 
       // A phone pane in 自动 must not truncate silently either: the compact
-      // layout shows the same crop badge and one-tap route to a complete grid.
+      // layout shows the crop on its grid chip, whose menu leads to a complete grid.
       const compactCrop = await fixture(browser, { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: name !== 'firefox', deviceScaleFactor: 2 })
       await compactCrop.context.addInitScript((profiles) => {
         try { localStorage.setItem('herdrx.terminal-display.v3', JSON.stringify(profiles)) } catch { /* storage may be unavailable */ }
       }, { desktop: { fontSize: 14, zoom: 100, mode: 'auto' }, mobile: { fontSize: 14, zoom: 100, mode: 'auto' } })
       await compactCrop.page.reload()
       await expect(compactCrop.page.locator('.terminal-pane')).toHaveCount(1)
-      await expect(compactCrop.page.locator('.pane-crop-badge')).toHaveText('295×38 · 已裁切 → 完整显示')
-      await expect(compactCrop.page.locator('.pane-crop-badge')).toBeVisible()
+      await expect(compactCrop.page.locator('.pane-display-chip', { hasText: '已裁切' })).toHaveText('295×38 · 已裁切')
+      await expect(compactCrop.page.locator('.pane-display-chip', { hasText: '已裁切' })).toBeVisible()
       await screenshot(compactCrop.page, `${name}-compact-auto-crop`)
       assert.deepEqual(compactCrop.errors, [])
       await compactCrop.context.close()

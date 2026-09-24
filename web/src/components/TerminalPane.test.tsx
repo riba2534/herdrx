@@ -1172,8 +1172,10 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} sourceCols={80} sourceRows={40} onDisplayChange={onDisplayChange} layoutVersion={1}/>)
-    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '80×40 · 已裁切 → 完整显示' }))
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：80×40 · 已裁切' }))
+    const menu = screen.getByRole('dialog', { name: '显示与尺寸' })
+    expect(within(menu).getByRole('button', { name: '固定字号' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(menu).getByRole('button', { name: '完整显示' }))
     expect(onDisplayChange).toHaveBeenCalledWith({ mode: 'fit', zoom: 100 })
   })
 
@@ -1201,10 +1203,9 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane {...props} layoutVersion={1}/>)
-    const badge = await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })
-    expect(badge).toBeInTheDocument()
-    // The badge states the size it will produce, so the drop below the floor is a choice.
-    expect(badge).toHaveAttribute('data-tooltip', expect.stringContaining('字号约 2 px'))
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：80×40 · 已裁切' }))
+    // The menu states the size the complete view produces, so the drop below the floor is a choice.
+    expect(screen.getByRole('button', { name: '完整显示' })).toHaveAttribute('data-tooltip', expect.stringContaining('字号约 2 px'))
   })
 
   it('keeps the complete grid when the zoom raises the fit ceiling in auto mode', async () => {
@@ -1232,7 +1233,9 @@ describe('TerminalPane header and crop badge', () => {
     Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
     Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
     rerender(<TerminalPane {...props} layoutVersion={1}/>)
-    expect(await screen.findByRole('button', { name: '80×40 · 已裁切 → 完整显示' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '显示与尺寸：80×40 · 已裁切' })).toBeInTheDocument()
+    // The phone layout has no pane header: the view switch lives in the top bar.
+    expect(document.querySelector('.pane-header')).toBeNull()
   })
 
   it('hides the crop badge only after explicitly obtaining size control', async () => {
@@ -1371,5 +1374,243 @@ describe('TerminalPane chat view', () => {
     await waitFor(() => expect(terminalHarness.last?.cols).toBe(120))
     expect(terminalHarness.last?.rows).toBe(40)
     expect(open).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('TerminalPane mobile display and sizing', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const frameEmitter = (frames: ReturnType<typeof vi.spyOn>) => (seq: bigint, cols: number, rows: number) => act(() => (frames.mock.calls[0] as unknown as [string, (frame: unknown) => void])[1]({ streamID: 7, seq, full: true, cols, rows, ansi: new TextEncoder().encode('frame') }))
+
+  it('keeps the controlled rows and font while a software keyboard covers the pane', async () => {
+    let height = 600
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => height)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const sizing = enableSizing(client)
+    const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
+    const font = vi.fn()
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, onFontSizeChange: font, theme: {}, enhancedContrast: false, display: { fontSize: 14, zoom: 100, mode: 'auto' as const } }
+    const { rerender } = render(<TerminalPane {...props} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    frameEmitter(frames)(1n, 173, 54)
+    await chooseWindowSize()
+    expect(sizing.acquire).toHaveBeenLastCalledWith(7, 46, 42, false)
+    // The keyboard animates in steps; none of them reflow.
+    height = 520
+    rerender(<TerminalPane {...props} keyboardInset={80} layoutVersion={1}/>)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(resize).not.toHaveBeenCalled()
+    // The keyboard takes 300 px: rows, font and the remote size stay as they were.
+    height = 300
+    rerender(<TerminalPane {...props} keyboardInset={300} layoutVersion={1}/>)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(resize).not.toHaveBeenCalled()
+    expect(font).toHaveBeenLastCalledWith(14)
+    height = 600
+    rerender(<TerminalPane {...props} layoutVersion={2}/>)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(resize).not.toHaveBeenCalled()
+    // A real change of the uncovered pane (a split or the dock) still reflows once.
+    height = 360
+    rerender(<TerminalPane {...props} layoutVersion={3}/>)
+    await waitFor(() => expect(resize).toHaveBeenCalledExactlyOnceWith(7, 46, 25))
+  })
+
+  it('does not claim columns hidden under the safe-area padding', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(852)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const sizing = enableSizing(client)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    viewport.style.paddingLeft = '59px'
+    viewport.style.paddingRight = '59px'
+    await chooseWindowSize()
+    // (852 - 2 × 59 - 1) / 8.4 px cells = 87 columns instead of 101.
+    expect(sizing.acquire).toHaveBeenLastCalledWith(7, 87, 21, false)
+  })
+
+  it('restores the pre-takeover grid before releasing and waits for Herdr to show it', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const sizing = enableSizing(client)
+    const resize = vi.spyOn(client, 'resize').mockImplementation(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active compact onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const emit = frameEmitter(frames)
+    emit(1n, 173, 54)
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：173×54 · 已裁切' }))
+    const menu = screen.getByRole('dialog', { name: '显示与尺寸' })
+    expect(menu).toHaveTextContent('远端会从 173×54 改为 46×42')
+    // Narrow control grids are called out before the takeover, not after.
+    expect(menu).toHaveTextContent('只有 46 列')
+    fireEvent.click(within(menu).getByRole('button', { name: '使用此窗口尺寸（46×42）' }))
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledWith(7, 46, 42, false))
+    emit(2n, 46, 42)
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：此窗口控制 46×42' }))
+    fireEvent.click(screen.getByRole('button', { name: '恢复为 173×54 并释放' }))
+    expect(resize).toHaveBeenLastCalledWith(7, 173, 54)
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(sizing.release).not.toHaveBeenCalled()
+    emit(3n, 173, 54)
+    await waitFor(() => expect(sizing.release).toHaveBeenCalledTimes(1))
+    expect(resize).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers a one-step reflow when another device left the remote smaller than this window', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const sizing = enableSizing(client)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'auto' }} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const emit = frameEmitter(frames)
+    emit(1n, 46, 42)
+    // A remote that is simply smaller than this browser is normal, not a warning.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByRole('button', { name: /显示与尺寸/ })).not.toBeInTheDocument()
+    sizing.state({ pane_id: mockPane.pane_id, state: 'other' })
+    sizing.state({ pane_id: mockPane.pane_id, state: 'available' })
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：远端 46×42 · 较小' }))
+    fireEvent.click(screen.getByRole('button', { name: '按此窗口尺寸恢复（142×49）' }))
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledWith(7, 142, 49, false))
+    expect(sizing.release).not.toHaveBeenCalled()
+    emit(2n, 142, 49)
+    await waitFor(() => expect(sizing.release).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: /显示与尺寸/ })).not.toBeInTheDocument()
+  })
+
+  it('names the controlling window on every other viewer and offers to take over', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(700)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const sizing = enableSizing(client)
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'auto' }} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    frameEmitter(frames)(1n, 46, 42)
+    sizing.state({ pane_id: mockPane.pane_id, state: 'other' })
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：其他窗口控制 46×42' }))
+    expect(screen.getByRole('dialog', { name: '显示与尺寸' })).toHaveTextContent('本站其他窗口正在控制此终端的尺寸')
+    expect(screen.getByRole('button', { name: /转到此窗口控制/ })).toBeEnabled()
+  })
+
+  it('shows the grid on phones, leads agent panes to the chat view and changes only the local display', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const onViewModeChange = vi.fn()
+    const onDisplayChange = vi.fn()
+    const resize = vi.spyOn(client, 'resize')
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active compact onFocus={() => {}} onViewModeChange={onViewModeChange} onDisplayChange={onDisplayChange} theme={{}} enhancedContrast={false} display={{ fontSize: 13, zoom: 100, mode: 'auto' }} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    frameEmitter(frames)(1n, 40, 20)
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：40×20' }))
+    const menu = screen.getByRole('dialog', { name: '显示与尺寸' })
+    fireEvent.click(within(menu).getByRole('button', { name: '放大字号' }))
+    expect(onDisplayChange).toHaveBeenLastCalledWith({ mode: 'fixed', fontSize: 14, zoom: 100 })
+    fireEvent.click(within(menu).getByRole('button', { name: /切换到对话视图/ }))
+    expect(onViewModeChange).toHaveBeenCalledWith('chat')
+    expect(screen.queryByRole('dialog', { name: '显示与尺寸' })).not.toBeInTheDocument()
+    expect(resize).not.toHaveBeenCalled()
+  })
+
+  it('pinches the local font with a live preview and commits one change on release', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    const onDisplayChange = vi.fn()
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active compact onFocus={() => {}} onDisplayChange={onDisplayChange} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    const host = document.querySelector('.terminal-host') as HTMLElement
+    expect(viewport.style.touchAction).toBe('pan-x')
+    const touch = (type: string, points: Array<[number, number, number]>) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'touches', { value: points.map(([clientX, clientY, identifier]) => ({ clientX, clientY, identifier })) })
+      viewport.dispatchEvent(event)
+    }
+    touch('touchstart', [[100, 100, 1], [140, 100, 2]])
+    touch('touchmove', [[80, 100, 1], [160, 100, 2]])
+    touch('touchmove', [[40, 100, 1], [200, 100, 2]])
+    expect(host.style.transform).toBe('scale(2)')
+    expect(onDisplayChange).not.toHaveBeenCalled()
+    touch('touchend', [[40, 100, 1]])
+    expect(host.style.transform).toBe('')
+    expect(onDisplayChange).toHaveBeenCalledExactlyOnceWith({ mode: 'fixed', fontSize: 28, zoom: 100 })
+    touch('touchend', [])
+    // Pinching far below the smallest font asks for the complete grid.
+    touch('touchstart', [[100, 100, 1], [300, 100, 2]])
+    touch('touchmove', [[120, 100, 1], [280, 100, 2]])
+    touch('touchmove', [[180, 100, 1], [220, 100, 2]])
+    touch('touchend', [])
+    expect(onDisplayChange).toHaveBeenLastCalledWith({ mode: 'fit', zoom: 100 })
+  })
+
+  it('never lets a delayed restore release control that was taken again', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
+    vi.spyOn(client, 'acknowledge').mockImplementation(() => {})
+    const sizing = enableSizing(client)
+    vi.spyOn(client, 'resize').mockImplementation(() => {})
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active compact onFocus={() => {}} theme={{}} enhancedContrast={false} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={0}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    const emit = frameEmitter(frames)
+    emit(1n, 173, 54)
+    const menu = async (item: string | RegExp) => {
+      fireEvent.click(await screen.findByRole('button', { name: /显示与尺寸/ }))
+      fireEvent.click(await screen.findByRole('button', { name: item }))
+    }
+    await menu('使用此窗口尺寸（46×42）')
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledTimes(1))
+    emit(2n, 46, 42)
+    await menu('恢复为 173×54 并释放')
+    // Before Herdr shows the old grid, the user releases and takes control again.
+    await menu('释放控制，保持 46×42')
+    expect(sizing.release).toHaveBeenCalledTimes(1)
+    await menu('使用此窗口尺寸（46×42）')
+    await waitFor(() => expect(sizing.acquire).toHaveBeenCalledTimes(2))
+    await new Promise((resolve) => setTimeout(resolve, 2300))
+    expect(sizing.release).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: /显示与尺寸：此窗口控制/ })).toBeInTheDocument()
+  })
+
+  it('closes the menu with its chip so it never reopens by itself', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, sourceCols: 80, sourceRows: 40, onDisplayChange: () => {} }
+    const { rerender } = render(<TerminalPane {...props} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={0}/>)
+    const viewport = document.querySelector('.terminal-viewport') as HTMLElement
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 200 })
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 80 })
+    rerender(<TerminalPane {...props} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={1}/>)
+    fireEvent.click(await screen.findByRole('button', { name: '显示与尺寸：80×40 · 已裁切' }))
+    expect(screen.getByRole('dialog', { name: '显示与尺寸' })).toBeInTheDocument()
+    // Choosing the complete view removes the crop, and with it chip and menu.
+    rerender(<TerminalPane {...props} display={{ fontSize: 14, zoom: 100, mode: 'fit' }} layoutVersion={2}/>)
+    await waitFor(() => expect(screen.queryByRole('button', { name: /显示与尺寸/ })).not.toBeInTheDocument())
+    rerender(<TerminalPane {...props} display={{ fontSize: 14, zoom: 100, mode: 'fixed' }} layoutVersion={3}/>)
+    expect(await screen.findByRole('button', { name: '显示与尺寸：80×40 · 已裁切' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('dialog', { name: '显示与尺寸' })).not.toBeInTheDocument()
   })
 })

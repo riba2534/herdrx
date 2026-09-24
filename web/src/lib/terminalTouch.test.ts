@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { attachTerminalTouch } from './terminalTouch'
+import { attachTerminalTouch, type TerminalPinchHandlers } from './terminalTouch'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { cleanups.splice(0).forEach((cleanup) => cleanup()); document.body.replaceChildren(); vi.restoreAllMocks() })
 
-function fixture(height = 200, contentHeight = height) {
+function fixture(height = 200, contentHeight = height, pinch?: TerminalPinchHandlers) {
   const viewport = document.createElement('div')
   document.body.appendChild(viewport)
   Object.defineProperties(viewport, { clientHeight: { value: height }, scrollHeight: { value: contentHeight } })
@@ -12,7 +12,7 @@ function fixture(height = 200, contentHeight = height) {
   const onGestureCancel = vi.fn()
   const state = { generation: 1, selection: false }
   cleanups.push(attachTerminalTouch(viewport, {
-    onScrollPixels, onGestureCancel, getGeneration: () => state.generation, hasSelection: () => state.selection,
+    onScrollPixels, onGestureCancel, getGeneration: () => state.generation, hasSelection: () => state.selection, pinch,
   }))
   const touch = (type: string, points: Array<[number, number, number?]>, cancelable = true) => {
     const event = new Event(type, { bubbles: true, cancelable })
@@ -22,6 +22,58 @@ function fixture(height = 200, contentHeight = height) {
   }
   return { viewport, onScrollPixels, onGestureCancel, touch, state }
 }
+
+describe('terminal pinch', () => {
+  const handlers = () => ({ start: vi.fn(() => true), update: vi.fn(), end: vi.fn(), cancel: vi.fn() })
+
+  it('keeps page zoom out of the terminal and reports one scale from the recognized spread', () => {
+    const pinch = handlers()
+    const { viewport, onScrollPixels, touch } = fixture(200, 200, pinch)
+    expect(viewport.style.touchAction).toBe('pan-x')
+    touch('touchstart', [[100, 100]])
+    touch('touchstart', [[100, 100], [140, 100, 2]])
+    // A two-finger tap or a small wobble is not a pinch.
+    expect(touch('touchmove', [[98, 100], [146, 100, 2]]).defaultPrevented).toBe(false)
+    expect(pinch.start).not.toHaveBeenCalled()
+    expect(touch('touchmove', [[90, 100], [150, 100, 2]]).defaultPrevented).toBe(true)
+    expect(pinch.start).toHaveBeenCalledWith(120, 100)
+    expect(pinch.update).toHaveBeenLastCalledWith(1)
+    touch('touchmove', [[60, 100], [180, 100, 2]])
+    expect(pinch.update).toHaveBeenLastCalledWith(2)
+    touch('touchend', [[60, 100]])
+    expect(pinch.end).toHaveBeenCalledExactlyOnceWith(2)
+    // The remaining finger does not turn into a scroll.
+    touch('touchmove', [[60, 160]])
+    touch('touchend', [])
+    expect(onScrollPixels).not.toHaveBeenCalled()
+    expect(pinch.cancel).not.toHaveBeenCalled()
+  })
+
+  it('cancels an interrupted pinch and leaves a declined one to the browser', () => {
+    const pinch = handlers()
+    const { touch } = fixture(200, 200, pinch)
+    touch('touchstart', [[100, 100], [140, 100, 2]])
+    touch('touchmove', [[80, 100], [160, 100, 2]])
+    touch('touchcancel', [])
+    expect(pinch.cancel).toHaveBeenCalledTimes(1)
+    expect(pinch.end).not.toHaveBeenCalled()
+    pinch.start.mockReturnValue(false)
+    touch('touchstart', [[100, 100], [140, 100, 2]])
+    expect(touch('touchmove', [[80, 100], [160, 100, 2]]).defaultPrevented).toBe(false)
+    expect(pinch.update).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks Safari page-zoom gestures only over a terminal that scales itself', () => {
+    const { viewport } = fixture(200, 200, handlers())
+    const event = new Event('gesturestart', { cancelable: true })
+    viewport.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    const plain = fixture().viewport
+    const native = new Event('gesturestart', { cancelable: true })
+    plain.dispatchEvent(native)
+    expect(native.defaultPrevented).toBe(false)
+  })
+})
 
 describe('terminal finger scrolling', () => {
   it('tracks both finger directions with wheel-compatible pixels and cell coordinates', () => {

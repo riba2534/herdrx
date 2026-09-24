@@ -10,8 +10,9 @@ import { ChatView } from './ChatView'
 import { PaneViewToggle } from './PaneViewToggle'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
-import { autoFitFont, createFontMeasure, fittedTerminalFont, responsiveTerminalSize, resolvedTerminalFontFamily, whenFontsReady } from '../lib/terminalFit'
+import { AUTO_FIT_MIN_FONT_SIZE, autoFitLayout, COMPACT_AUTO_FIT_MIN_FONT_SIZE, createFontMeasure, fittedTerminalFont, responsiveTerminalSize, resolvedTerminalFontFamily, whenFontsReady } from '../lib/terminalFit'
 import { Modal } from './Modal'
+import { PaneDisplayMenu, type PaneDisplayTone } from './PaneDisplayMenu'
 import { attachTerminalTouch } from '../lib/terminalTouch'
 import { DEFAULT_DISPLAY, type TerminalDisplay } from '../lib/displayPreferences'
 import { isLocalInputTarget } from '../lib/keymap'
@@ -26,6 +27,15 @@ import { Button, StatusDot } from './ui'
 // fall back to the cropped fixed-size view this component once shipped.
 const pageVisible = () => document.visibilityState !== 'hidden'
 const defaultDisplay: TerminalDisplay = { ...DEFAULT_DISPLAY.desktop }
+// Coalesce a controller's viewport changes into one remote resize: agents such
+// as Claude Code and Codex repaint their whole transcript on every SIGWINCH.
+const RESIZE_SETTLE_MS = 250
+// Pinch changes the local font within the same range as the font control; a
+// pinch well below it asks for the complete grid instead.
+const PINCH_MIN_FONT = 10
+const PINCH_MAX_FONT = 28
+type Grid = { cols: number; rows: number }
+type GridView = Grid & { fontSize: number; fit: number | null; cropX: boolean; cropY: boolean; capacity: Grid | null }
 
 export type PaneSurfaceHandle = {
   copy: () => Promise<void>
@@ -40,7 +50,7 @@ function clipboardBlocked() {
   return !window.isSecureContext || !navigator.clipboard
 }
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0 }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -92,9 +102,48 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const controlling = controlState.state === 'owned'
   const controlSupported = client.supportsTerminalControl()
   const releaseSizing = () => {
+    sizingEpochRef.current++
     window.clearTimeout(resizeTimerRef.current)
+    restoringRef.current = false
     if (streamRef.current !== null) client.releaseControl(streamRef.current)
     setResizeStatus(null)
+  }
+  // Resolve once Herdr's authoritative frames show the target grid, or give up
+  // after a bounded wait; the caller then releases either way.
+  const waitForGrid = (target: Grid, timeout = 2000) => new Promise<void>((resolve) => {
+    const started = performance.now()
+    const poll = () => {
+      const grid = observedGridRef.current
+      if (!mountedRef.current || (grid?.cols === target.cols && grid.rows === target.rows) || performance.now() - started >= timeout) { resolve(); return }
+      window.setTimeout(poll, 50)
+    }
+    poll()
+  })
+  // Put the remote back to the grid it had before this window took control, so
+  // a phone leaving does not strand desktop viewers on a phone-sized task.
+  // A later release or acquisition ends this attempt: its delayed release must
+  // never let go of control the user took again in the meantime.
+  const stillSizing = (epoch: number, streamID: number) => sizingEpochRef.current === epoch && streamRef.current === streamID && controlStateRef.current.state === 'owned'
+  const restoreAndRelease = async () => {
+    const target = preControlGridRef.current, streamID = streamRef.current
+    if (!target || streamID === null || controlStateRef.current.state !== 'owned') { releaseSizing(); return }
+    const epoch = ++sizingEpochRef.current
+    restoringRef.current = true
+    window.clearTimeout(resizeTimerRef.current)
+    setResizeStatus(null)
+    client.resize(streamID, target.cols, target.rows)
+    sentSizeRef.current = target
+    await waitForGrid(target)
+    if (stillSizing(epoch, streamID)) releaseSizing()
+  }
+  // Reflow the remote to this window once and return to observing.
+  const resizeOnce = async () => {
+    const streamID = streamRef.current
+    await acquireSizing()
+    if (streamID === null || streamRef.current !== streamID || controlStateRef.current.state !== 'owned') return
+    const epoch = sizingEpochRef.current
+    await waitForGrid(sentSizeRef.current)
+    if (stillSizing(epoch, streamID)) releaseSizing()
   }
   const acquireSizing = async () => {
     if (controlStateRef.current.state === 'pending') return
@@ -108,16 +157,34 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (!size) { setControlError('窗口尺寸尚未就绪，请展开终端后重试。'); return }
     setControlError('')
     setResizeStatus(null)
+    sizingEpochRef.current++
+    preControlGridRef.current = observedGridRef.current ? { ...observedGridRef.current } : null
     sentSizeRef.current = size
     try { await client.acquireControl(streamID, size.cols, size.rows, transfer) }
     catch (error) { if (mountedRef.current && streamRef.current === streamID) setControlError(error instanceof Error ? error.message : '无法取得尺寸控制，请重试。') }
   }
+  const displayRef = useRef(display)
+  displayRef.current = display
+  const onDisplayChangeRef = useRef(onDisplayChange)
+  onDisplayChangeRef.current = onDisplayChange
   const sourceColsRef = useRef(sourceCols)
   const sourceRowsRef = useRef(sourceRows)
   sourceColsRef.current = sourceCols
   sourceRowsRef.current = sourceRows
-  const observedGridRef = useRef<{ cols: number; rows: number } | null>(null)
-  const desiredSizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  const observedGridRef = useRef<Grid | null>(null)
+  const preControlGridRef = useRef<Grid | null>(null)
+  const restoringRef = useRef(false)
+  const sizingEpochRef = useRef(0)
+  // Another window of this site controlled the size and then let go: a grid it
+  // left well inside this window is worth offering to put back.
+  const [strandedByOther, setStrandedByOther] = useState(false)
+  // A software keyboard (or its candidate strip) is covering the viewport, in
+  // any step of its open or close animation.
+  const coveredRef = useRef(keyboardInset > 0)
+  coveredRef.current = keyboardInset > 0
+  // The pane's height before a software keyboard covered part of it.
+  const stableBoundsRef = useRef({ width: 0, height: 0 })
+  const desiredSizeRef = useRef<Grid | null>(null)
   const sentSizeRef = useRef({ cols: 0, rows: 0 })
   const resizeTimerRef = useRef(0)
   const fitRef = useRef<() => void>(() => {})
@@ -157,7 +224,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const [historyActive, setHistoryActive] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [streamGeneration, setStreamGeneration] = useState(0)
-  const [cropHint, setCropHint] = useState<{ cols: number; rows: number; fit: number | null } | null>(null)
+  const [gridView, setGridView] = useState<GridView | null>(null)
+  const [displayMenuOpen, setDisplayMenuOpen] = useState(false)
   const historyRef = useRef({ active: false, loading: false, delta: 0, generation: 0 })
   const returnToLiveRef = useRef<() => void>(() => {})
   const scrollHistoryRef = useRef<(lines: number) => void>(() => {})
@@ -430,9 +498,20 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     // 对话视图覆盖时不动 xterm 尺寸，也不向远端发送 resize；切回终端时再补齐。
     if (!mountedRef.current || chatModeRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
     const style = getComputedStyle(host)
+    // Padding on the scroll viewport is not grid space either; the grid must
+    // never claim columns hidden under a notch or the home indicator.
+    const inset = getComputedStyle(viewport)
+    const width = viewport.clientWidth - parseFloat(inset.paddingLeft || '0') - parseFloat(inset.paddingRight || '0') - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0')
+    const measuredHeight = viewport.clientHeight - parseFloat(inset.paddingTop || '0') - parseFloat(inset.paddingBottom || '0') - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0')
+    // A software keyboard only covers the pane: keep the rows and the font of
+    // the uncovered pane and let the frame pan to the cursor instead of making
+    // Herdr and the agent reflow twice for every keyboard toggle.
+    const stable = stableBoundsRef.current
+    const covered = coveredRef.current && stable.height > measuredHeight && Math.abs(stable.width - width) < 1
+    if (!covered) stableBoundsRef.current = { width, height: measuredHeight }
     const bounds = {
-      width: viewport.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'),
-      height: viewport.clientHeight - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0'),
+      width,
+      height: covered ? stable.height : measuredHeight,
       dpr: window.devicePixelRatio || 1,
       lineHeight: terminal.options.lineHeight || 1, letterSpacing: terminal.options.letterSpacing || 0,
     }
@@ -447,12 +526,11 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const cols = Math.max(10, observed?.cols || sourceCols || terminal.cols)
     const rows = Math.max(3, observed?.rows || sourceRows || terminal.rows)
     const grid = { ...bounds, cols, rows }
-    // Auto keeps the complete terminal visible while the fitted font stays
-    // readable; below the floor it falls back to the fixed, scrollable view.
-    const fitted = display.mode === 'fit' ? fittedTerminalFont(grid, fontMeasureRef.current.measure, maxFontSize)
-      : display.mode === 'auto' ? autoFitFont(grid, fontMeasureRef.current.measure, maxFontSize)
-        : null
-    const cropToFixedSize = display.mode === 'fixed' || (display.mode === 'auto' && fitted === null)
+    // Auto keeps the complete terminal, else its full width, visible while the
+    // fitted font stays readable; below the floor it keeps the fixed size.
+    const auto = display.mode === 'auto' ? autoFitLayout(grid, fontMeasureRef.current.measure, maxFontSize, compact ? COMPACT_AUTO_FIT_MIN_FONT_SIZE : AUTO_FIT_MIN_FONT_SIZE) : null
+    const fitted = display.mode === 'fit' ? fittedTerminalFont(grid, fontMeasureRef.current.measure, maxFontSize) : auto?.fontSize ?? null
+    const cropToFixedSize = display.mode === 'fixed' || (display.mode === 'auto' && auto === null)
     const baseSize = controlsSize || cropToFixedSize ? maxFontSize : fitted
     const fontSize = baseSize === null ? null : Math.round(baseSize * 100) / 100
     if (fontSize !== null && terminal.options.fontSize !== fontSize) terminal.options.fontSize = fontSize
@@ -468,42 +546,46 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       if (writeSessionRef.current.pending === 0) applyResize()
       else if (sizeChanged || hasQueuedFit) whenTerminalIdle(applyResize, { kind: 'fit' })
     }
-    if (size && controlsSize) {
+    if (size && controlsSize && !restoringRef.current) {
       if (streamRef.current !== null && (sentSizeRef.current.cols !== size.cols || sentSizeRef.current.rows !== size.rows)) {
         window.clearTimeout(resizeTimerRef.current)
         resizeTimerRef.current = window.setTimeout(() => {
-          if (streamRef.current === null || controlStateRef.current.state !== 'owned' || !pageVisible() || chatModeRef.current) return
+          if (streamRef.current === null || controlStateRef.current.state !== 'owned' || restoringRef.current || !pageVisible() || chatModeRef.current) return
           const next = desiredSizeRef.current
-          if (!next) return
+          if (!next || (next.cols === sentSizeRef.current.cols && next.rows === sentSizeRef.current.rows)) return
           setResizeStatus(null)
           client.resize(streamRef.current, next.cols, next.rows)
           sentSizeRef.current = next
-        }, 80)
+        }, RESIZE_SETTLE_MS)
       }
     }
     if (fontSize !== null) onFontSizeChange?.(fontSize)
-    // Compact panes are told too: on a phone the overlay scrollbars hide the
-    // cut just as well, and the badge is the only way back to a complete grid.
-    if (!controlsSize && cropToFixedSize && fontSize !== null && bounds.width > 0 && bounds.height > 0 && fontMeasureRef.current) {
+    if (fontSize !== null && bounds.width > 0 && bounds.height > 0) {
       const metrics = fontMeasureRef.current.measure(fontSize)
-      const cropped = Boolean(metrics && (cols * metrics.width > bounds.width + 0.5 || rows * metrics.height > bounds.height + 0.5))
-      // State the size the badge would produce, so the jump below the readable
-      // floor is a deliberate choice instead of a surprise.
-      const fit = fittedTerminalFont(grid, fontMeasureRef.current.measure, display.fontSize)
-      setCropHint((current) => {
-        if (!cropped) return current ? null : current
-        if (current?.cols === cols && current?.rows === rows && current?.fit === fit) return current
-        return { cols, rows, fit }
-      })
-    } else {
-      setCropHint((current) => current ? null : current)
+      // Width decides whether text is cut off; a taller frame simply pans, and
+      // a covered pane is expected to pan while the keyboard is up.
+      const cropX = Boolean(!controlsSize && metrics && cols * metrics.width > bounds.width + 0.5)
+      const cropY = Boolean(!controlsSize && metrics && rows * metrics.height > bounds.height + 0.5)
+      // State the size the complete view would produce, so the jump below the
+      // readable floor is a deliberate choice instead of a surprise.
+      const fit = cropX || cropY ? fittedTerminalFont(grid, fontMeasureRef.current.measure, display.fontSize) : null
+      const capacity = size ? { cols: size.cols, rows: size.rows } : null
+      setGridView((current) => current && current.cols === cols && current.rows === rows && current.fontSize === fontSize && current.fit === fit && current.cropX === cropX && current.cropY === cropY && current.capacity?.cols === capacity?.cols && current.capacity?.rows === capacity?.rows
+        ? current : { cols, rows, fontSize, fit, cropX, cropY, capacity })
     }
   }
   fitRef.current = fitTerminal
 
   // Fit the final sidebar layout before the next paint, so xterm's scheduled
   // render sees only the final font instead of several visible trial sizes.
-  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode, controlling])
+  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode, controlling, compact, keyboardInset])
+  // With the keyboard up the covered frame pans; keep the cursor, which is the
+  // agent's input line, in the part that is still visible.
+  useEffect(() => {
+    if (!keyboardInset || !active) return
+    const frame = window.requestAnimationFrame(() => revealCursorRef.current())
+    return () => window.cancelAnimationFrame(frame)
+  }, [keyboardInset, active])
 
   useEffect(() => {
     if (!hostRef.current) return
@@ -647,8 +729,11 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   useEffect(() => {
     const unsubscribe = client.onTerminalControl(pane.pane_id, (state) => {
+      const previous = controlStateRef.current.state
       controlStateRef.current = state
       setControlState(state)
+      if (previous === 'other' && state.state === 'available') setStrandedByOther(true)
+      else if (state.state !== 'available') setStrandedByOther(false)
       if (state.state !== 'owned') {
         window.clearTimeout(resizeTimerRef.current)
         setResizeStatus(null)
@@ -821,7 +906,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const observer = new ResizeObserver(() => fitTerminal())
     observer.observe(viewport)
     return () => { observer.disconnect() }
-  }, [client, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active])
+  }, [client, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, compact])
 
   useEffect(() => {
     const host = hostRef.current
@@ -891,12 +976,63 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       timer = 0
       nativeScrollRef.current.lines = 0
     }
+    // Pinch previews with a transform and commits one font change on release,
+    // so a controller sends at most one remote resize per gesture.
+    let pinch: { base: number; scale: number; anchor: { col: number; row: number; x: number; y: number } | null } | null = null
+    const resetPinch = () => {
+      host.style.transform = ''
+      host.style.transformOrigin = ''
+      host.style.willChange = ''
+      pinch = null
+    }
+    const pinchBounds = (base: number) => ({ min: Math.max(0.25, 4 / base), max: PINCH_MAX_FONT / base })
     const detachTouch = attachTerminalTouch(viewport, {
       onScrollPixels: queuePixels, onGestureCancel: cancelQueuedScroll, getGeneration: generation,
       hasSelection: () => termRef.current?.hasSelection?.() ?? false,
       enabled: () => !textSelectModeRef.current,
+      pinch: {
+        start: (centerX, centerY) => {
+          const terminal = termRef.current
+          if (!terminal || chatModeRef.current || !onDisplayChangeRef.current) return false
+          const rect = host.getBoundingClientRect()
+          const screen = host.querySelector<HTMLElement>('.xterm-screen')?.getBoundingClientRect()
+          host.style.transformOrigin = `${centerX - rect.left}px ${centerY - rect.top}px`
+          host.style.willChange = 'transform'
+          pinch = {
+            base: terminal.options.fontSize || displayRef.current.fontSize, scale: 1,
+            anchor: screen && screen.width && screen.height ? { col: (centerX - screen.left) * terminal.cols / screen.width, row: (centerY - screen.top) * terminal.rows / screen.height, x: centerX, y: centerY } : null,
+          }
+          return true
+        },
+        update: (scale) => {
+          if (!pinch) return
+          const limits = pinchBounds(pinch.base)
+          pinch.scale = Math.min(limits.max, Math.max(limits.min, scale))
+          host.style.transform = `scale(${pinch.scale})`
+        },
+        end: () => {
+          const done = pinch
+          resetPinch()
+          if (!done || Math.abs(done.scale - 1) < 0.05) return
+          const target = done.base * done.scale
+          // Pinching well below the smallest font asks for the whole grid.
+          if (target < PINCH_MIN_FONT - 1) onDisplayChangeRef.current?.({ mode: 'fit', zoom: 100 })
+          else onDisplayChangeRef.current?.({ mode: 'fixed', fontSize: Math.min(PINCH_MAX_FONT, Math.max(PINCH_MIN_FONT, Math.round(target))), zoom: 100 })
+          // Keep the text that was under the fingers there once the new font lays out.
+          const anchor = done.anchor
+          if (!anchor) return
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+            const terminal = termRef.current
+            const screen = host.querySelector<HTMLElement>('.xterm-screen')?.getBoundingClientRect()
+            if (!terminal || !screen?.width || !screen.height) return
+            viewport.scrollLeft += screen.left + anchor.col * screen.width / terminal.cols - anchor.x
+            viewport.scrollTop += screen.top + anchor.row * screen.height / terminal.rows - anchor.y
+          }))
+        },
+        cancel: resetPinch,
+      },
     })
-    return () => { detachTouch(); viewport.removeEventListener('wheel', wheel, true); window.cancelAnimationFrame(timer) }
+    return () => { detachTouch(); resetPinch(); viewport.removeEventListener('wheel', wheel, true); window.cancelAnimationFrame(timer) }
   }, [client])
 
   useEffect(() => {
@@ -940,6 +1076,35 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
   }, [client, pane.pane_id, active])
 
+  const sizingDisabled = streamFailed || status !== '可输入' || chatMode || !connected || (compact && !active)
+  const preControlGrid = preControlGridRef.current
+  const canRestoreSize = Boolean(preControlGrid && observedGrid && (preControlGrid.cols !== observedGrid.cols || preControlGrid.rows !== observedGrid.rows))
+  // A remote grid well inside this window is usually left behind by a smaller
+  // device that released control; offer to put it back in one step.
+  // Only after another window of this site let go: a native Herdr client that
+  // is simply smaller than this browser is normal and not worth a warning.
+  const undersized = Boolean(strandedByOther && controlSupported && controlState.state === 'available' && gridView?.capacity && gridView.cols <= gridView.capacity.cols * 0.6)
+  const grid = gridView ? `${gridView.cols}×${gridView.rows}` : ''
+  const chip: { label: string; tone: PaneDisplayTone } | null = !gridView || chatMode || searchOpen ? null
+    : controlling ? { label: `此窗口控制 ${grid}`, tone: 'owned' }
+      : controlState.state === 'pending' ? { label: '正在申请尺寸…', tone: 'owned' }
+        : controlState.state === 'other' ? { label: `其他窗口控制 ${grid}`, tone: 'other' }
+          : gridView.cropX ? { label: `${grid} · 已裁切`, tone: 'warn' }
+            : undersized ? { label: `远端 ${grid} · 较小`, tone: 'warn' }
+              : compact ? { label: grid, tone: 'plain' } : null
+  // The menu belongs to its chip: when a choice clears the crop, close it too so
+  // it cannot reopen on its own the next time the chip appears.
+  const chipShown = chip !== null
+  useEffect(() => { if (!chipShown) setDisplayMenuOpen(false) }, [chipShown])
+  const displayMenu = chip && <PaneDisplayMenu compact={compact} label={chip.label} tone={chip.tone} open={displayMenuOpen} onOpenChange={setDisplayMenuOpen}
+    display={display} actualFontSize={gridView?.fontSize ?? null} fitFontSize={gridView?.fit ?? null} onDisplayChange={onDisplayChange}
+    onChatView={compact && onViewModeChange ? () => onViewModeChange('chat') : undefined}
+    sizing={{
+      supported: controlSupported, state: controlState.state, reason: controlError || controlState.reason,
+      grid: observedGrid, capacity: gridView?.capacity ?? null, previous: preControlGrid, undersized, disabled: sizingDisabled,
+      onResizeOnce: () => void resizeOnce(), onTakeControl: () => void acquireSizing(), onRelease: releaseSizing, onRestoreAndRelease: () => void restoreAndRelease(),
+    }}/>
+
   return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''} ${chatMode ? 'terminal-pane-chat' : ''} ${pane.right_click_passthrough ? 'terminal-pane-passthrough' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
     const overTerminal = (event.target as HTMLElement).closest('.terminal-host')
     if (overTerminal && pane.right_click_passthrough && !event.shiftKey) {
@@ -948,16 +1113,17 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
     onContextMenu?.(event)
   }}>
-    {/* 紧凑 header 固定在 pane 布局流中：Agent 名称可截断/隐藏，视图开关永远不会被它遮盖。 */}
-    <div className="pane-header">
-      {controlling && <Button className="tool-button sizing-owner-badge" aria-label="释放尺寸控制" data-tooltip="由此窗口控制任务尺寸 · 点击恢复保持远端尺寸" onClick={releaseSizing}>此窗口控制尺寸</Button>}
-      {!compact && <span className="pane-header-name" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>}
+    {/* 紧凑 header 固定在 pane 布局流中：Agent 名称可截断/隐藏，视图开关永远不会被它遮盖。
+        手机单 pane 布局把视图开关放在顶栏、尺寸状态放在画面角标，不再占一整行。 */}
+    {!compact && <div className="pane-header">
+      {controlling && <Button className="tool-button sizing-owner-badge" aria-label="释放尺寸控制" data-tooltip="由此窗口控制任务尺寸 · 点击释放，远端保持当前尺寸" onClick={releaseSizing}>此窗口控制尺寸</Button>}
+      <span className="pane-header-name" data-tooltip={paneDisplayName(pane)}><StatusDot status={pane.agent_status || 'unknown'}/><span>{paneDisplayName(pane)}</span></span>
       {onViewModeChange && <PaneViewToggle mode={viewMode} onChange={(mode) => { setToolbarOpen(false); onViewModeChange(mode) }}/>}
-      {!compact && <span className="pane-header-tools">
+      <span className="pane-header-tools">
         {onContextMenu && pane.right_click_passthrough && <Button className="tool-button pane-menu-button pane-menu-standalone" aria-label="终端操作" data-tooltip="终端操作 · Shift+右键" onClick={(event) => { event.stopPropagation(); onContextMenu(event) }}><MoreHorizontal size={16}/></Button>}
         <button type="button" ref={controlsTriggerRef} className="tool-button pane-controls-toggle" data-terminal-controls-trigger aria-label="终端工具" aria-expanded={toolbarOpen} data-tooltip={`${pane.label || pane.agent || '终端'} · 终端工具`} onClick={() => setToolbarOpen(!toolbarOpen)}><MoreHorizontal size={16}/></button>
-      </span>}
-    </div>
+      </span>
+    </div>}
     <div className="pane-body">
       <header ref={toolbarRef} className="terminal-titlebar" hidden={!toolbarOpen} aria-label="终端工具栏">
         <div className="terminal-title"><StatusDot status={pane.agent_status || 'unknown'} /><span data-tooltip={paneDisplayName(pane)}>{paneDisplayName(pane)}</span><small data-tooltip={pane.cwd}>{pane.cwd}</small></div>
@@ -965,9 +1131,12 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         <div className="terminal-sizing" role="group" aria-label="任务尺寸" data-control-state={controlState.state}>
           <span className="terminal-sizing-state" aria-live="polite">{observedGrid ? `当前 ${observedGrid.cols}×${observedGrid.rows} · ` : ''}{controlling ? '由此窗口控制' : controlState.state === 'other' ? '本站其他窗口控制' : controlState.state === 'pending' ? '正在申请尺寸控制…' : controlState.state === 'blocked' ? '尺寸控制暂不可用' : '保持远端尺寸'}</span>
           {controlSupported ? <>
-            {controlling || controlState.state === 'pending' ? <Button className="tool-button" onClick={releaseSizing}>保持远端尺寸</Button>
-              : <Button className="tool-button" disabled={streamFailed || status !== '可输入' || chatMode || !connected} onClick={() => void acquireSizing()}>{controlState.state === 'other' ? '转到此窗口控制' : '使用此窗口尺寸'}</Button>}
-            <small className="field-hint">{controlling ? '按所选字号调整任务；释放后恢复本地显示偏好。' : '会让此终端按当前窗口重新排版，其他窗口也会看到变化。'}</small>
+            {controlling || controlState.state === 'pending' ? <>
+              {controlling && canRestoreSize && <Button className="tool-button" onClick={() => void restoreAndRelease()}>恢复为 {preControlGridRef.current!.cols}×{preControlGridRef.current!.rows} 并释放</Button>}
+              <Button className="tool-button" onClick={releaseSizing}>{controlling ? '释放控制' : '取消申请'}</Button>
+            </>
+              : <Button className="tool-button" disabled={sizingDisabled} onClick={() => void acquireSizing()}>{controlState.state === 'other' ? '转到此窗口控制' : '使用此窗口尺寸'}</Button>}
+            <small className="field-hint">{controlling ? '按所选字号调整任务；释放后远端保持当前尺寸，除非选择恢复。' : '会让此终端按当前窗口重新排版，其他窗口也会看到变化。'}</small>
           </> : <small className="field-hint">当前工作台不支持尺寸控制，请更新工作台后刷新页面。仍可查看和输入。</small>}
           <small className="terminal-sizing-progress" role="status">{resizeStatus ? `${resizeStatus.status === 'observed' ? '已观察到目标尺寸' : '已提交目标尺寸'} ${resizeStatus.cols}×${resizeStatus.rows}` : controlling ? '窗口变化时会自动调整任务尺寸' : ''}</small>
           {(controlError || controlState.reason) && <small className={controlError || controlState.state === 'blocked' ? 'field-error' : 'field-hint'} role={controlError || controlState.state === 'blocked' ? 'alert' : 'status'}>{controlError || controlState.reason}</small>}
@@ -983,7 +1152,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
           <Button className="tool-button" aria-label="收起终端工具" onClick={closeToolbar}><X size={14}/></Button>
         </div>
       </header>
-      {!chatMode && cropHint && <button type="button" className="pane-crop-badge" data-tooltip={`当前 ${cropHint.cols}×${cropHint.rows} 未完整显示；点击改为完整显示${cropHint.fit === null ? '' : `，字号约 ${cropHint.fit.toFixed(1).replace(/\.0$/, '')} px`}`} onClick={(event) => { event.stopPropagation(); onDisplayChange?.({ mode: 'fit', zoom: 100 }) }}>{cropHint.cols}×{cropHint.rows} · 已裁切 → 完整显示</button>}
+      {displayMenu}
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
       {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
