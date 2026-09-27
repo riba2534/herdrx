@@ -67,12 +67,14 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
     data-active={props.active ? 'true' : 'false'}
+    data-direct-input={props.directInput ? 'true' : 'false'}
   >
+    <button aria-label={`点 ${props.pane.pane_id} 终端直接输入`} onClick={() => props.onDirectInput?.()}>点终端</button>
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
     <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
     <button aria-label={`${props.pane.pane_id} 切到对话视图`} aria-pressed={props.viewMode === 'chat'} onClick={() => props.onViewModeChange('chat')}>对话</button>
@@ -861,6 +863,28 @@ describe('workbench pane view mode', () => {
     fireEvent.click(toggle)
     await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-view-mode', 'chat'))
     expect(within(topbar).getByRole('switch', { name: '对话视图' })).toHaveAttribute('aria-checked', 'true')
+  })
+
+  it('types straight into the terminal on phones while keeping the local box, with the keys a phone keyboard lacks', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('region', { name: '本地输入' })
+    expect(await screen.findByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-direct-input', 'false')
+    expect(screen.queryByRole('toolbar', { name: '终端辅助键' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '点 w1:p1 终端直接输入' }))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-direct-input', 'true'))
+    // Both ways stay available: the local box remains, and Tab, Esc, arrows and Ctrl appear.
+    expect(screen.getByRole('region', { name: '本地输入' })).toBeInTheDocument()
+    expect(await screen.findByRole('toolbar', { name: '终端辅助键' })).toBeInTheDocument()
+    // Focusing the local box hands the keyboard back to local editing.
+    act(() => screen.getByRole('textbox', { name: '本地输入内容' }).focus())
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-direct-input', 'false'))
+    // Keys closed by hand are not forced open again by the next terminal tap.
+    fireEvent.click(within(screen.getByRole('banner', { name: '工作台导航' })).getByRole('button', { name: '终端辅助键' }))
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: '终端辅助键' })).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '点 w1:p1 终端直接输入' }))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-direct-input', 'true'))
+    expect(screen.queryByRole('toolbar', { name: '终端辅助键' })).not.toBeInTheDocument()
   })
 
   it('gives touch tablets in the desktop layout the auxiliary key bar', async () => {

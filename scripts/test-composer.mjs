@@ -285,6 +285,24 @@ try {
           const composer = await view.page.locator('.composer').boundingBox()
           assert.ok(send && composer, `missing composer chrome at ${width}x${height}`)
           assert.ok(send.y + send.height <= height + 1 && composer.y + composer.height <= keybar.y + 1)
+          // Both inputs work side by side: a tap on the terminal types straight
+          // into it (Tab completion, arrows, Ctrl), a tap on the box edits locally.
+          const box = view.page.getByRole('textbox', { name: '本地输入内容' })
+          await box.tap()
+          await expect(box).toBeFocused()
+          const beforeTap = view.messages.length
+          const screenBox = await view.page.locator('.xterm-screen').first().boundingBox()
+          await view.page.touchscreen.tap(screenBox.x + screenBox.width / 3, screenBox.y + screenBox.height / 2)
+          await expect(view.page.locator('.xterm-helper-textarea')).toBeFocused()
+          await expect(view.page.getByRole('region', { name: '本地输入' })).toBeVisible()
+          await expect(view.page.getByRole('button', { name: '输入方式：直接输入终端', exact: true })).toBeVisible()
+          await view.page.keyboard.type('ls')
+          await view.page.getByRole('toolbar', { name: '终端辅助键' }).getByRole('button', { name: 'Tab 键', exact: true }).click()
+          await expect.poll(() => inputFrames(view.messages.slice(beforeTap)).map((item) => item.bytes).join('')).toBe('ls\t')
+          assert.equal(sendCalls(view.messages.slice(beforeTap)).length, 0, 'direct typing went through the local submit path')
+          await box.tap()
+          await expect(box).toBeFocused()
+          await expect(view.page.getByRole('button', { name: '输入方式：本地输入', exact: true })).toBeVisible()
         }
         await view.page.evaluate(() => {
           Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: Math.min(360, window.innerHeight) })

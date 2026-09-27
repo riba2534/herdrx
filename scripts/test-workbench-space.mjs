@@ -235,13 +235,17 @@ async function keyboardStable(page, engine, messages) {
   await page.getByRole('button', { name: '输入方式：本地输入', exact: true }).click()
   await page.getByRole('menuitemradio', { name: /^直接输入终端/ }).click()
   await expect(page.locator('.terminal-pane')).not.toHaveClass(/terminal-pane-composer/)
+  // Typing straight into the terminal brings up the keys a phone keyboard lacks.
+  await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toBeVisible()
+  await expect(box).toHaveValue(draft)
   await page.evaluate(() => {
     Object.defineProperty(window.visualViewport, 'height', { configurable: true, value: 390 })
     window.visualViewport.dispatchEvent(new Event('resize'))
   })
   await expect.poll(() => page.locator('.workbench').evaluate((el) => el.getBoundingClientRect().height)).toBe(390)
   await expect(page.locator('.terminal-pane')).not.toHaveClass(/terminal-pane-composer/)
-  await expect(box).toHaveValue(draft)
+  // A short layout gives the keys priority over the local box; its draft is kept.
+  await expect(box).toHaveCount(0)
   await page.evaluate(() => { delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')) })
   await expect.poll(() => page.locator('.workbench').evaluate((el) => el.getBoundingClientRect().height)).toBe(page.viewportSize().height)
   await expect(page.locator('.terminal-pane')).not.toHaveClass(/terminal-pane-composer/)

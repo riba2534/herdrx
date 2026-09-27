@@ -99,7 +99,14 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     if (mobile) setMobileInput(apply)
     else setDesktopInput(apply)
   }
-  const focusDirectInput = () => { patchInput({ directInput: true }); setInputFocusRequest((request) => request + 1) }
+  // Touch keyboards have no Esc, Tab, arrows or Ctrl, so typing straight into
+  // the terminal brings the auxiliary keys up, unless they were closed by hand.
+  const keysDismissedRef = useRef(false)
+  const focusDirectInput = () => {
+    patchInput({ directInput: true })
+    setInputFocusRequest((request) => request + 1)
+    if (touchKeys && !keysDismissedRef.current) setAuxiliaryKeysOpen(true)
+  }
   // 对话 / 终端视图按 pane 记录，键包含登录会话与主机；刷新后保留，新 pane 默认终端。
   const [paneModes, setPaneModes] = useState<Record<string, PaneViewMode>>({})
   useEffect(() => subscribePaneViewModes(() => setPaneModes({})), [])
@@ -900,6 +907,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {paneID && <PaneViewToggle className="mobile-view-toggle" mode={paneModeFor(paneID)} onChange={(mode) => togglePaneMode(paneID, mode)}/>}
       <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => {
         const next = !open
+        keysDismissedRef.current = !next
         if (shortWorkbench && next) patchInput({ composerOpen: false })
         else if (shortWorkbench && !next) patchInput({ composerOpen: true })
         return next
@@ -943,7 +951,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {!mobile && <header className="tabbar">
         <div className={`tabs-scroller${tabOverflow.left ? ' tabs-overflow-left' : ''}${tabOverflow.right ? ' tabs-overflow-right' : ''}`}><div className="tabs" ref={tabsRef}>{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => openContextMenu(event, { kind: 'tab', tab })}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {terminalCountLabel(panes?.length || 0)}</span>
-        {coarse && <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" data-tooltip="Esc、Ctrl、方向键等辅助键" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => !open)}><Keyboard size={16}/></Button>}
+        {coarse && <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" data-tooltip="Esc、Ctrl、方向键等辅助键" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => { keysDismissedRef.current = open; return !open })}><Keyboard size={16}/></Button>}
         <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
       </header>}
 

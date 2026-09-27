@@ -238,6 +238,24 @@ describe('TerminalPane paste interception', () => {
     expect(terminalHarness.last?.options.disableStdin).toBe(true)
     expect(input).not.toHaveBeenCalled()
   })
+  it('lets a tap on the terminal take the keyboard from the local box, except over the chat view', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const onDirectInput = vi.fn()
+    const props = { client, pane: mockPane, connectionEpoch: 1, active: true, onFocus: () => {}, theme: {}, enhancedContrast: false, directInput: false, onDirectInput }
+    const { rerender } = render(<TerminalPane {...props} viewMode="terminal"/>)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    const helper = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement
+    act(() => helper.focus())
+    expect(onDirectInput).toHaveBeenCalledTimes(1)
+    expect(helper).toHaveFocus()
+    act(() => helper.blur())
+    rerender(<TerminalPane {...props} viewMode="chat" onViewModeChange={() => {}}/>)
+    act(() => helper.focus())
+    expect(onDirectInput).toHaveBeenCalledTimes(1)
+    expect(helper).not.toHaveFocus()
+  })
   it('focuses the connected terminal again when direct input is explicitly selected in the same mode', async () => {
     const client = new WorkbenchClient('hst_test')
     const open = vi.spyOn(client, 'openTerminal').mockResolvedValue(7)

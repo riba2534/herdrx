@@ -165,6 +165,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   }
   const displayRef = useRef(display)
   displayRef.current = display
+  const onDirectInputRef = useRef(onDirectInput)
+  onDirectInputRef.current = onDirectInput
   const onDisplayChangeRef = useRef(onDisplayChange)
   onDisplayChangeRef.current = onDisplayChange
   const sourceColsRef = useRef(sourceCols)
@@ -414,7 +416,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const closeSearch = () => {
     setSearchOpen(false)
     setSearchResults({ index: -1, count: 0 })
-    requestAnimationFrame(() => termRef.current?.focus())
+    requestAnimationFrame(() => { if (directInputRef.current) termRef.current?.focus() })
   }
 
   const runSearch = (query: string, direction: 'next' | 'previous') => {
@@ -876,12 +878,19 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
     const host = hostRef.current
     if (!host || directInput) return
-    const block = (event: FocusEvent) => {
+    // Local and direct input work side by side: while the local box is in use,
+    // tapping the terminal makes it the keyboard target, so keys, Tab
+    // completion, arrows and Ctrl combinations go straight to the task. This
+    // component never focuses the terminal itself in local mode, so any focus
+    // here comes from the user. A chat overlay or a closed stream still refuse it.
+    const claim = (event: FocusEvent) => {
       const target = event.target
-      if (target instanceof HTMLTextAreaElement && target.classList.contains('xterm-helper-textarea')) target.blur()
+      if (!(target instanceof HTMLTextAreaElement && target.classList.contains('xterm-helper-textarea'))) return
+      if (inputBlockedRef.current || chatModeRef.current || !onDirectInputRef.current) { target.blur(); return }
+      onDirectInputRef.current()
     }
-    host.addEventListener('focusin', block)
-    return () => host.removeEventListener('focusin', block)
+    host.addEventListener('focusin', claim)
+    return () => host.removeEventListener('focusin', claim)
   }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active, chatMode])
 
   // 进入对话视图：停止光标闪烁、收起搜索、把焦点移出 xterm，并刷新一次尺寸；
@@ -1061,7 +1070,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       const files = clipboardImages(event.dataTransfer)
       if (!files.length) { setImageFeedback({ message: '请选择 PNG、JPEG、WebP 或 GIF 图片。', failed: true }); return }
       onFocus()
-      termRef.current?.focus()
+      if (directInputRef.current) termRef.current?.focus()
       uploadImagesRef.current(files)
     }
 
@@ -1156,7 +1165,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
       {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
-      <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; termRef.current?.focus() }}/>
+      <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; if (directInputRef.current) termRef.current?.focus() }}/>
       {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
       {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">
         <span>{imageFeedback.message}</span>
