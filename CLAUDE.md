@@ -10,7 +10,7 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 
 **远程主机上的 Herdr 独立运行，Web 工作台是查看和交互入口。** 浏览器关闭、刷新、断网，Web 登录退出、过期、用户禁用，以及网站服务重启，只影响对应的访问连接；工作台主机整机断电、宕机或被删除，同样不能停止远程主机上的 Herdr、销毁其 workspace/tab/pane、结束 pane 内的 Shell/Agent/任务。重新进入工作台应连接原有会话，恢复查看当前状态和 Herdr 保留的历史，不重复创建任务或重放输入。
 
-远程 Herdr、PTY 和任务的存活不能依赖工作台主机的进程、SSH 连接、隧道或心跳；没有工作台也应能在远程主机上直接使用 Herdr。工作台离线影响经由它的访问和通知，不改变远程任务的执行生命周期。已有本机接入作为辅助模式，与网站同机时共享主机故障边界，不能用它代替远程主机独立性验收。
+远程 Herdr、PTY 和任务的存活不能依赖工作台主机的进程、SSH 连接、隧道或心跳；没有工作台也应能在远程主机上直接使用 Herdr。网站只在用户对 SSH 主机显式请求时、受控端只在服务启动且默认会话未运行时拉起 Herdr；拉起的 Herdr 必须进入远程主机的独立 systemd scope 或新会话，不能落在接入代理、SSH 连接或受控端服务的进程组与 cgroup 中。网站不提供停止、重启或升级 Herdr 的入口。工作台离线影响经由它的访问和通知，不改变远程任务的执行生命周期。已有本机接入作为辅助模式，与网站同机时共享主机故障边界，不能用它代替远程主机独立性验收。
 
 文档和代码必须区分“Web 登录会话”“Web 终端观察流”和“Herdr 会话”。清理 WebSocket、SSH 通道或观察客户端进程属于断开访问；只有用户显式执行并确认关闭 pane/tab/workspace 等操作时，才允许调用对应的破坏性 Herdr API。浏览器离开和认证撤销路径不得隐式调用这些 API。
 
@@ -91,6 +91,7 @@ HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-custom-controls.mj
 node scripts/test-terminal-rendering.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
+HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-screen-view.mjs
 ```
 
 Docker 变更需构建候选镜像并运行 `python3 scripts/smoke-image.py <镜像> [预期版本]`。脚本需要当前用户能使用 Docker 和无交互 sudo，仅操作隔离临时目录和测试容器。

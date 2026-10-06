@@ -337,7 +337,7 @@ Agent 升级时只重启 `herdrx.service`，Herdr 应在独立服务/已有后�
 `setup` 的处理原则：
 
 - Herdr 已运行：使用现有服务，不接管、不重启。
-- 未运行：提示用户自行启动 Herdr。项目不接管其服务，CLI 不提供 `setup --manage-herdr`。
+- 未运行：`herdrx serve` 启动时用 `systemd-run --user --scope` 在独立 scope 中拉起默认会话（`HERDRX_HERDR_AUTOSTART=0` 可关闭），无法脱离 herdrx 服务 cgroup 时不拉起并提示用户自行启动。项目不接管、不重启已有 Herdr，CLI 不提供 `setup --manage-herdr`。（2026-10-06 更新，见 [画面视图与远程主机拉起 Herdr](../screen-view.md)）
 - 已有自定义 Herdr unit：不覆盖；报告冲突及需要的配置。
 - 命名 session 的启动参数、XDG 环境、服务停止行为须在 Linux 集成测试中验证，不能根据默认会话推断全部适用。
 

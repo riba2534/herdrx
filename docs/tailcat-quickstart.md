@@ -129,6 +129,8 @@ launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 
 重新运行安装器也可替换 CLI：校验后原子安装，旧文件保存为同目录的 `herdrx.previous`，随后需手动执行 `~/.local/bin/herdrx service restart`。此文件备份与签名更新的回退点不同。配置目录 `~/.config/herdrx` 不会被替换；不要在下载临时目录中运行 setup。
 
+v0.1.0-rc.2 之后发布的 CLI 在访问服务启动时，如果默认会话的 Herdr 没有运行，会用 `systemd-run --user --scope` 把它拉起到独立的用户 scope 中；已在运行的 Herdr 不会被接管或重启，herdrx 的升级、重启和卸载都不影响它。命名会话不自动拉起。不需要时执行 `systemctl --user edit herdrx`，加入 `[Service]` 和 `Environment=HERDRX_HERDR_AUTOSTART=0` 两行后重启服务。说明见 [画面视图与远程主机拉起 Herdr](screen-view.md)。
+
 `~/.local/bin/herdrx service stop` 暂停访问服务；`~/.local/bin/herdrx service uninstall` 移除该用户服务。二者不停止 Herdr 或结束 pane 内任务，也不删除身份配置。解除已绑定的访问授权使用 `~/.local/bin/herdrx unpair`，会让当前 Tailcat 访问失效，下一次接入需要重新绑定。
 
 ## 常见问题
@@ -137,7 +139,7 @@ launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 |---|---|
 | 安装下载失败 | 检查远程主机能否访问 GitHub，以及下载地址和 `--version` 是否指向同一个已发布版本 |
 | `herdrx: command not found` | 设置 PATH，或用 `~/.local/bin/herdrx version` 确认安装位置 |
-| `setup` 提示缺少或未运行 Herdr | 按 Herdr 官方说明安装并启动；使用相同用户运行 setup |
+| `setup` 提示缺少或未运行 Herdr | 按 Herdr 官方说明安装；在终端运行 `herdr` 启动（关闭终端后后台服务继续运行），使用相同用户运行 setup。v0.1.0-rc.2 之后发布的 CLI 在 herdrx 服务启动时会自动拉起默认会话，见下文 |
 | `systemctl --user` 无法连接总线 | 用正常 SSH 用户登录会话，检查 systemd 与用户环境；必要时使用自己的进程管理器 |
 | 退出 SSH 后无法连接 | 检查 linger，确认后台服务运行；重新登录后查看日志 |
 | `connect` 提示 daemon 未运行 | 运行 setup 或 `~/.local/bin/herdrx service start`，通过 status 确认就绪 |

@@ -81,6 +81,6 @@
 ## 未实现项与生产待决 Blockers（Not Implemented / Blockers for Release）
 
 1. **`herdrx connect` 临时配对端点与连接串生成**：P1 阶段明确拦截并返回未实现（HTTP 501），排期在 P2 实施；
-2. **Herdr 独立运行**：移除未实现的 `setup --manage-herdr` 参数，Herdr 的安装与服务由用户自行管理；
+2. **Herdr 独立运行**：移除未实现的 `setup --manage-herdr` 参数，Herdr 的安装由用户自行管理；2026-10-06 起 `herdrx serve` 启动时会在独立 systemd scope 中拉起未运行的默认会话，不接管已有 Herdr（见 [画面视图与远程主机拉起 Herdr](../../screen-view.md)）；
 3. **服务安装保护与真实就绪确认**：针对自定义 unit 不覆盖保护及生产级 systemctl 就绪探活，留待发布阶段闭环；
 4. **安全在线更新与回滚**：排期在 P4 实现。
