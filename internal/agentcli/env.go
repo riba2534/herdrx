@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,9 @@ type Environment struct {
 	CommandRunner       func(name string, args ...string) ([]byte, error)
 	ServiceRunner       ServiceRunner
 	UpdateHealthTimeout time.Duration // Test harness override; production uses 30 seconds.
+	// HerdrAutostart starts the default Herdr session when `serve` starts; nil
+	// (the test default) never launches anything.
+	HerdrAutostart func(context.Context, Environment, *slog.Logger)
 }
 
 // limitedWriter 流式截断写入器，防止恶意或异常子进程无限制输出耗尽内存
@@ -107,7 +111,8 @@ func DefaultEnv() Environment {
 		CommandRunner: func(name string, args ...string) ([]byte, error) {
 			return RunBoundedCommand(context.Background(), 3*time.Second, 1<<20, name, args...)
 		},
-		ServiceRunner: NewRealServiceRunner(),
+		ServiceRunner:  NewRealServiceRunner(),
+		HerdrAutostart: autostartHerdr,
 	}
 }
 

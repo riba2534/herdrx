@@ -208,7 +208,7 @@ func RunPreflight(env Environment) PreflightResult {
 			Version:       verStr,
 			ServerRunning: false,
 			Details:       fmt.Sprintf("herdr status server 报错: %v", err),
-			Suggestion:    "请启动 Herdr 后台服务: herdr server",
+			Suggestion:    "请在远程主机终端运行 herdr 启动 Herdr（关闭终端后后台服务继续运行）；herdrx 服务启动时也会自动拉起默认会话",
 		}
 	}
 
@@ -230,7 +230,7 @@ func RunPreflight(env Environment) PreflightResult {
 			Version:       verStr,
 			ServerRunning: false,
 			Details:       fmt.Sprintf("Herdr 服务未运行 (status: %s)", statusVal),
-			Suggestion:    "请在后台启动服务: herdr server",
+			Suggestion:    "请在远程主机终端运行 herdr 启动 Herdr（关闭终端后后台服务继续运行）；herdrx 服务启动时也会自动拉起默认会话",
 		}
 	}
 
@@ -249,7 +249,7 @@ func RunPreflight(env Environment) PreflightResult {
 			ServerRunning: false,
 			SocketPath:    socketVal,
 			Details:       fmt.Sprintf("Herdr socket 无法连接探活: %v", dialErr),
-			Suggestion:    "Herdr 服务可能异常中断，请重新启动: herdr server",
+			Suggestion:    "Herdr 后台服务可能已异常退出，请在远程主机终端运行 herdr 重新启动",
 		}
 	}
 	defer conn.Close()

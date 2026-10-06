@@ -583,6 +583,10 @@ func runServe(args []string, stdout, stderr io.Writer, env Environment, defaultC
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if env.HerdrAutostart != nil {
+		// Herdr runs in its own scope or session; this daemon never owns its lifetime.
+		go env.HerdrAutostart(ctx, env, logger)
+	}
 
 	if err == nil && cfg.AllowedNodeKey != "" && cfg.AuthorizedSSHKey != "" && !cfg.Revoked && (cfg.Binding.Status == "" || cfg.Binding.Status == "none") {
 		// 仅在纯旧 legacy 模式（未采用 P2 binding 且配置了旧 allowed_node_key）的主机启动受控端 Tailcat 服务
