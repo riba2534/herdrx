@@ -26,7 +26,7 @@
       },
       {
         "name": "herdrx:web/pnpm-lock.yaml:sha256",
-        "value": "7ca899ae84c0e46d86358324d6614b695c01bd0418f6699194443b7f77cf37df"
+        "value": "e0d56c5ebe4ebbdba68085b0a95e0cad033bbdbbcafc94772031038b528504a9"
       },
       {
         "name": "herdrx:npm:platform-packages-excluded",
@@ -5618,9 +5618,9 @@
     {
       "type": "library",
       "name": "source-map-js",
-      "version": "1.2.1",
-      "bom-ref": "pkg:npm/source-map-js@1.2.1",
-      "purl": "pkg:npm/source-map-js@1.2.1",
+      "version": "1.2.2",
+      "bom-ref": "pkg:npm/source-map-js@1.2.2",
+      "purl": "pkg:npm/source-map-js@1.2.2",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
