@@ -1,0 +1,63 @@
+/* 画面视图：Herdr 已渲染画面的只读阅读层。覆盖在 pane 内、与对话视图同一层级，
+   只定义 screen-* 命名空间。 */
+.screen-view {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  color: var(--text);
+  container: screen-view / inline-size;
+}
+.screen-head { flex: 0 0 auto; min-width: 0; min-height: var(--pane-bar-height); padding: 0 6px 0 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); }
+.screen-head-title { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.screen-head-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+.screen-head-title small { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.screen-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
+.screen-head-actions .tool-button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
+.screen-banner { flex: 0 0 auto; padding: 4px 10px; border-bottom: 1px solid var(--border); background: var(--panel-strong); color: var(--muted); font-size: 12px; }
+
+.screen-log {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px 10px 12px;
+  line-height: 1.35;
+  font-variant-ligatures: none;
+  -webkit-text-size-adjust: 100%;
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+/* 跟随最新输出时由应用定位，阅读更早内容时保留浏览器的滚动锚定。 */
+.screen-log:not([data-following="false"]) { overflow-anchor: none; }
+.screen-log:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.screen-line { white-space: pre; min-height: 1.35em; }
+.screen-line:empty::before { content: "\200b"; }
+.screen-view-wrap .screen-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.screen-view:not(.screen-view-wrap) .screen-log > .screen-line { width: max-content; min-width: 100%; }
+
+.screen-earlier { display: flex; margin: 0 auto 8px; font-size: 12px; }
+.screen-earlier-note, .screen-state { margin: 0 0 8px; color: var(--muted); font-family: var(--font-sans, inherit); font-size: 12px; text-align: center; }
+.screen-state { margin-top: 24px; }
+
+.screen-latest { position: absolute; right: 12px; bottom: 12px; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgb(0 0 0 / 0.18); }
+
+@container screen-view (max-width: 420px) {
+  .screen-head { padding-left: 8px; }
+  .screen-head-title small { display: none; }
+  .screen-log { padding: 6px 8px 10px; }
+}
+@media (pointer: coarse) {
+  .screen-head-actions .tool-button { min-width: 36px; min-height: 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .screen-view * { animation: none !important; transition: none !important; }
+}

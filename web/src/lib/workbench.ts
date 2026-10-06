@@ -1,5 +1,6 @@
 import type { Snapshot } from '../types'
 import { APIError, api, authenticationGeneration, invalidateAuthentication } from './api'
+import type { ScreenFrame } from './ansiScreen'
 
 const KIND = 0x74
 const VERSION = 1
@@ -20,6 +21,14 @@ type TerminalFrame = { streamID: number; seq: bigint; full: boolean; cols: numbe
 type TerminalHandler = (frame: TerminalFrame) => void
 type TerminalCloseHandler = (reason: string) => void
 type StateHandler = (state: ConnectionState, message?: string, retryAt?: number) => void
+
+export type ScreenError = { code: string; message: string }
+type ScreenWatch = {
+  requestID: string
+  gen: number
+  onFrame: (frame: ScreenFrame) => void
+  onError: (error: ScreenError) => void
+}
 
 type PendingRequest = {
   resolve: (value: unknown) => void
@@ -64,6 +73,7 @@ export class WorkbenchClient {
   private reconnectTimer = 0
   private presenceTimer = 0
   private connectionError = ''
+  private connectionErrorCode = ''
   private retryAfter = 0
   private retryBlocked = false
   private retryGeneration = 0
@@ -85,6 +95,7 @@ export class WorkbenchClient {
   private controlStates = new Map<string, TerminalControlState>()
   private controlHandlers = new Map<string, Set<(state: TerminalControlState) => void>>()
   private resizeHandlers = new Set<(status: TerminalResizeStatus) => void>()
+  private screenWatches = new Map<string, ScreenWatch>()
   private controlTimer = 0
   private nextControlAttempt = 0
   private handleVisibility = () => { if (!pageVisible()) this.releaseAllControls() }
@@ -96,6 +107,11 @@ export class WorkbenchClient {
 
   getHostID() {
     return this.hostID
+  }
+
+  /** Code of the last connection-level error, e.g. `snapshot_failed` when Herdr did not answer. */
+  errorCode() {
+    return this.connectionErrorCode
   }
 
   hasOpenTerminals() {
@@ -153,6 +169,7 @@ export class WorkbenchClient {
     this.terminalStreams.clear()
     this.pendingTerminalClosures.clear()
     this.pendingFrames.clear()
+    this.screenWatches.clear()
     this.resetControls()
   }
 
@@ -208,6 +225,24 @@ export class WorkbenchClient {
 
   call<T = unknown>(method: string, params: unknown) {
     return this.request<T>('call', { method, params })
+  }
+
+  /**
+   * Follow the rendered screen of one pane. The workbench polls Herdr and pushes
+   * only changed lines; frames from an older watch generation are dropped, so a
+   * re-watch (new line count, reconnect) never mixes two diff bases.
+   */
+  watchScreen(paneID: string, lines: number, handlers: { onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void }) {
+    const watch: ScreenWatch = { requestID: createClientID(), gen: -1, ...handlers }
+    this.screenWatches.set(paneID, watch)
+    this.request('screen.watch', { pane_id: paneID, lines }, watch.requestID).catch((error: Error & { code?: string }) => {
+      if (this.screenWatches.get(paneID) === watch) handlers.onError({ code: error.code || 'screen_unavailable', message: error.message || '暂时读不到画面' })
+    })
+    return () => {
+      if (this.screenWatches.get(paneID) !== watch) return
+      this.screenWatches.delete(paneID)
+      this.sendJSON({ t: 'screen.unwatch', pane_id: paneID })
+    }
   }
 
   sendInput(streamID: number, data: string | Uint8Array) {
@@ -308,6 +343,7 @@ export class WorkbenchClient {
   private openSocket() {
     if (this.disposed) return
     this.connectionError = ''
+    this.connectionErrorCode = ''
     this.retryAfter = 0
     this.nextRetryAt = 0
     this.emitState('connecting')
@@ -410,12 +446,14 @@ export class WorkbenchClient {
       this.emitControl({ pane_id: metadata.paneID, state: 'blocked', stream_id: message.stream_id, stream_epoch: metadata.epoch, reason: String(message.message || '尺寸控制已结束，请重新选择。') })
     } else if (message.t === 'error' && !message.id) {
       this.connectionError = String(message.message || '主机暂时无法连接')
+      this.connectionErrorCode = String(message.code || '')
       this.retryBlocked = message.retryable === false
       this.retryAfter = typeof message.retry_after_ms === 'number' ? Math.min(120_000, Math.max(0, message.retry_after_ms)) : 0
       this.emitState('degraded', this.connectionError)
     } else if (message.t === 'snapshot') {
       this.reconnectAttempt = 0
       this.connectionError = ''
+      this.connectionErrorCode = ''
       this.emitState('ready')
       for (const handler of this.snapshotHandlers) handler(message.snapshot as Snapshot)
     } else if (message.t === 'conn') {
@@ -446,6 +484,15 @@ export class WorkbenchClient {
         }
       }
       this.emitControl(state)
+    } else if (message.t === 'screen.watching' && typeof message.pane_id === 'string') {
+      const watch = this.screenWatches.get(message.pane_id)
+      if (watch && watch.requestID === message.id && typeof message.gen === 'number') watch.gen = message.gen
+    } else if ((message.t === 'screen' || message.t === 'screen.error') && typeof message.pane_id === 'string') {
+      const watch = this.screenWatches.get(message.pane_id)
+      if (!watch || watch.gen < 0 || message.gen !== watch.gen) return
+      if (message.t === 'screen') watch.onFrame(message as unknown as ScreenFrame)
+      else watch.onError({ code: String(message.code || 'screen_unavailable'), message: String(message.message || '暂时读不到画面') })
+      return
     } else if (message.t === 'terminal.resize.status' && typeof message.stream_id === 'number') {
       const lease = this.controlLeases.get(message.stream_id), metadata = this.streamMetadata.get(message.stream_id)
       if (lease && metadata && message.stream_epoch === metadata.epoch && message.control_generation === lease.control_generation && message.resize_seq === metadata.resizeSeq) {
@@ -486,8 +533,7 @@ export class WorkbenchClient {
     }
   }
 
-  private request<T>(type: string, fields: Record<string, unknown>): Promise<T> {
-    const id = createClientID()
+  private request<T>(type: string, fields: Record<string, unknown>, id = createClientID()): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
         reject(new Error('主机连接尚未就绪'))

@@ -1,10 +1,14 @@
 import { currentSessionID, onAuthEvent } from './api'
 
-// pane 级视图模式（终端 / 对话）。键包含登录会话、主机和 pane，
+// pane 级视图模式（终端 / 画面 / 对话）。键包含登录会话、主机和 pane，
 // 保证同一浏览器的不同登录、不同主机、不同分屏互不影响。
 const STORAGE_PREFIX = 'herdrx.pane-view.v1.'
 
-export type PaneViewMode = 'terminal' | 'chat'
+export type PaneViewMode = 'terminal' | 'screen' | 'chat'
+
+function storedMode(value: string | null): PaneViewMode {
+  return value === 'chat' || value === 'screen' ? value : 'terminal'
+}
 
 const modes = new Map<string, PaneViewMode>()
 const listeners = new Set<() => void>()
@@ -63,7 +67,7 @@ export function readPaneViewMode(hostID: string, paneID: string): PaneViewMode {
   const sessionID = currentSessionID()
   try {
     const stored = localStorage.getItem(storageKey(sessionID, hostID, paneID))
-    const mode: PaneViewMode = stored === 'chat' ? 'chat' : 'terminal'
+    const mode = storedMode(stored)
     modes.set(key, mode)
     return mode
   } catch {
@@ -80,8 +84,8 @@ export function writePaneViewMode(hostID: string, paneID: string, mode: PaneView
   modes.set(key, mode)
   try {
     const stored = storageKey(sessionID, hostID, paneID)
-    if (mode === 'chat') localStorage.setItem(stored, 'chat')
-    else localStorage.removeItem(stored)
+    if (mode === 'terminal') localStorage.removeItem(stored)
+    else localStorage.setItem(stored, mode)
   } catch {
     // 存储不可用时只保留内存态。
   }

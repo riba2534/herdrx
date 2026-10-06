@@ -84,6 +84,7 @@ type workbenchMessage struct {
 	ControlGeneration string          `json:"control_generation,omitempty"`
 	ResizeSeq         uint64          `json:"resize_seq,omitempty"`
 	Transfer          bool            `json:"transfer,omitempty"`
+	Lines             int             `json:"lines,omitempty"`
 }
 
 type workbenchSession struct {
@@ -101,6 +102,11 @@ type workbenchSession struct {
 	controlV2  bool
 	snapshotMu sync.Mutex
 	snapshot   herdr.Snapshot
+
+	screenMu     sync.Mutex
+	screens      map[string]*screenWatch
+	screenGen    uint64
+	screenClosed bool
 }
 
 type terminalStream struct {
@@ -197,6 +203,7 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 		controlV2: hello.Capabilities["terminal_control"] == 1 && hello.Capabilities["terminal_resize_v2"] == 1,
 	}
 	defer session.closeStreams()
+	defer session.closeScreens()
 	if err := socketWriter.JSON(ctx, map[string]any{
 		"t": "server_info", "protocol": 1, "version": Version, "host_id": host.ID,
 		"features": map[string]any{"terminal_binary": 1, "terminal_ack": 1, "multi_writer": 1, "terminal_control": 1, "terminal_resize_v2": 1},
@@ -311,6 +318,10 @@ func (s *workbenchSession) handleText(message workbenchMessage) {
 		s.openTerminal(message)
 	case "terminal.close":
 		s.finishStream(message.StreamID)
+	case "screen.watch":
+		s.watchScreen(message)
+	case "screen.unwatch":
+		s.unwatchScreen(message.PaneID)
 	case "terminal.control.acquire":
 		// Keep reading release/close while remote attach waits for its first frame.
 		// Only one acquisition per stream may wait, bounding asynchronous work.
@@ -368,6 +379,8 @@ func (s *workbenchSession) handleBinary(encoded []byte) {
 			}
 			if err := stream.input.Enqueue(frame.Payload); err != nil && s.ctx.Err() == nil {
 				s.failInput(stream, err)
+			} else {
+				s.kickScreen(stream.paneID)
 			}
 		}
 	case terminalwire.OpcodeResize:
@@ -576,6 +589,10 @@ func (s *workbenchSession) call(message workbenchMessage) {
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
 	defer cancel()
 	result, err := s.endpoint.Call(ctx, message.Method, params)
+	if paneID := screenInputPane(message.Method, params); paneID != "" {
+		// Even a failed or uncertain write may have reached the PTY; reread now.
+		s.kickScreen(paneID)
+	}
 	if err != nil {
 		s.writeRequestError(message.RequestID, "herdr_error", err.Error())
 		return

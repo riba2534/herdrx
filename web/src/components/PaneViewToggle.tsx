@@ -13,7 +13,8 @@ export type PaneViewToggleProps = {
  *
  * 它不是两个按钮拼成的分段控件，而是一个 role="switch" 的按钮：
  * 鼠标点击、Space、Enter 都触发同一次切换，aria-checked 为真表示对话视图。
- * 当前模式始终可见：两侧文字高亮 + 滑块位置 + 提示文字。
+ * 当前模式始终可见：两侧文字高亮 + 滑块位置 + 提示文字。画面视图属于终端一侧，
+ * 从画面切到对话后再切回，回到终端视图。
  */
 export function PaneViewToggle({ mode, onChange, disabled = false, className = '' }: PaneViewToggleProps) {
   const chat = mode === 'chat'
@@ -25,7 +26,7 @@ export function PaneViewToggle({ mode, onChange, disabled = false, className = '
     aria-label="对话视图"
     disabled={disabled}
     data-mode={mode}
-    data-tooltip={chat ? '当前：对话 Chat · 点击切回终端' : '当前：终端 Terminal · 点击切到对话'}
+    data-tooltip={chat ? '当前：对话 Chat · 点击切回终端' : mode === 'screen' ? '当前：画面 · 点击切到对话' : '当前：终端 Terminal · 点击切到对话'}
     className={`pane-view-toggle pane-view-toggle-${mode}${className ? ` ${className}` : ''}`}
     onClick={toggle}
     onKeyDown={(event) => {

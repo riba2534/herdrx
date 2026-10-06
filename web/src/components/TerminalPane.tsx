@@ -5,8 +5,9 @@ import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { Terminal, type ITheme } from '@xterm/xterm'
-import { Copy, History, ImagePlus, Keyboard, MoreHorizontal, Search, Type, X } from 'lucide-react'
+import { Copy, History, ImagePlus, Keyboard, MoreHorizontal, ScrollText, Search, Type, X } from 'lucide-react'
 import { ChatView } from './ChatView'
+import { ScreenView } from './ScreenView'
 import { PaneViewToggle } from './PaneViewToggle'
 import { api } from '../lib/api'
 import { clipboardImages, MAX_IMAGE_SIZE, ownsImagePaste } from '../lib/imagePaste'
@@ -49,6 +50,8 @@ export type PaneSurfaceHandle = {
 function clipboardBlocked() {
   return !window.isSecureContext || !navigator.clipboard
 }
+
+const HISTORY_READ_LINES = 1000
 
 export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0 }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
@@ -148,10 +151,10 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const acquireSizing = async () => {
     if (controlStateRef.current.state === 'pending') return
     const streamID = streamRef.current
-    if (streamID === null || !connected || (compact && !activeRef.current) || chatModeRef.current || !pageVisible()) return
+    if (streamID === null || !connected || (compact && !activeRef.current) || overlayModeRef.current || !pageVisible()) return
     const transfer = controlStateRef.current.state === 'other'
     if (transfer && !await confirm('另一个本站窗口将恢复保持远端尺寸。此终端会按当前窗口重新排版，其他窗口也会看到变化。', { title: '转到此窗口控制尺寸', confirmLabel: '转到此窗口控制', danger: false })) return
-    if (streamRef.current !== streamID || (compact && !activeRef.current) || !pageVisible() || chatModeRef.current) return
+    if (streamRef.current !== streamID || (compact && !activeRef.current) || !pageVisible() || overlayModeRef.current) return
     fitRef.current()
     const size = desiredSizeRef.current
     if (!size) { setControlError('窗口尺寸尚未就绪，请展开终端后重试。'); return }
@@ -207,14 +210,17 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const activeRef = useRef(active)
   // 对话视图覆盖终端时，xterm 保持挂载并继续 ack，但不再接收键盘输入。
   const chatMode = viewMode === 'chat'
-  const chatModeRef = useRef(chatMode)
-  chatModeRef.current = chatMode
+  const screenMode = viewMode === 'screen'
+  // 对话与画面视图都覆盖在 xterm 之上：终端流照常保持，但不 fit、不申请尺寸、不抢焦点。
+  const overlayMode = viewMode !== 'terminal'
+  const overlayModeRef = useRef(overlayMode)
+  overlayModeRef.current = overlayMode
   activeRef.current = active
   directInputRef.current = directInput
   const applyStdin = () => {
     const terminal = termRef.current
     if (!terminal) return
-    terminal.options.disableStdin = inputBlockedRef.current || !directInputRef.current || chatModeRef.current
+    terminal.options.disableStdin = inputBlockedRef.current || !directInputRef.current || overlayModeRef.current
   }
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -369,7 +375,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const generation = ++history.generation
     setHistoryActive(true)
     setHistoryError('')
-    void client.call<{ read: { text: string; truncated?: boolean } }>('pane.read', { pane_id: pane.pane_id, source: 'recent', format: 'ansi', lines: 10000 }).then(({ read }) => {
+    // Herdr caps one pane.read at 1000 lines; asking for more returns the same 1000.
+    void client.call<{ read: { text: string; truncated?: boolean } }>('pane.read', { pane_id: pane.pane_id, source: 'recent', format: 'ansi', lines: HISTORY_READ_LINES }).then(({ read }) => {
       if (!mountedRef.current || history.generation !== generation || termRef.current !== terminal) return
       whenTerminalIdle(() => {
         if (!mountedRef.current || history.generation !== generation || termRef.current !== terminal) return
@@ -498,7 +505,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const host = hostRef.current
     const viewport = viewportRef.current
     // 对话视图覆盖时不动 xterm 尺寸，也不向远端发送 resize；切回终端时再补齐。
-    if (!mountedRef.current || chatModeRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
+    if (!mountedRef.current || overlayModeRef.current || writeSessionRef.current.closed || !terminal || !host || !viewport || !fontMeasureRef.current) return
     const style = getComputedStyle(host)
     // Padding on the scroll viewport is not grid space either; the grid must
     // never claim columns hidden under a notch or the home indicator.
@@ -552,7 +559,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       if (streamRef.current !== null && (sentSizeRef.current.cols !== size.cols || sentSizeRef.current.rows !== size.rows)) {
         window.clearTimeout(resizeTimerRef.current)
         resizeTimerRef.current = window.setTimeout(() => {
-          if (streamRef.current === null || controlStateRef.current.state !== 'owned' || restoringRef.current || !pageVisible() || chatModeRef.current) return
+          if (streamRef.current === null || controlStateRef.current.state !== 'owned' || restoringRef.current || !pageVisible() || overlayModeRef.current) return
           const next = desiredSizeRef.current
           if (!next || (next.cols === sentSizeRef.current.cols && next.rows === sentSizeRef.current.rows)) return
           setResizeStatus(null)
@@ -580,7 +587,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   // Fit the final sidebar layout before the next paint, so xterm's scheduled
   // render sees only the final font instead of several visible trial sizes.
-  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, chatMode, controlling, compact, keyboardInset])
+  useLayoutEffect(() => { fitTerminal() }, [layoutVersion, sourceCols, sourceRows, display.fontSize, display.zoom, display.mode, active, overlayMode, controlling, compact, keyboardInset])
   // With the keyboard up the covered frame pans; keep the cursor, which is the
   // agent's input line, in the part that is still visible.
   useEffect(() => {
@@ -748,8 +755,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   }, [client, pane.pane_id, connectionEpoch])
 
   useEffect(() => {
-    if ((compact && !active) || chatMode || !connected) releaseSizing()
-  }, [active, compact, chatMode, connected])
+    if ((compact && !active) || overlayMode || !connected) releaseSizing()
+  }, [active, compact, overlayMode, connected])
 
   useEffect(() => {
     const visibility = () => { if (!pageVisible()) releaseSizing() }
@@ -872,7 +879,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     wasActiveRef.current = active
     const focusRequested = inputFocusRequest !== previousFocusRequest.current
     previousFocusRequest.current = inputFocusRequest
-    if (directInput && !chatMode && (becameDirect || focusRequested || becameActive) && active && !inputBlockedRef.current && !isLocalInputTarget(document.activeElement)) {
+    if (directInput && !overlayMode && (becameDirect || focusRequested || becameActive) && active && !inputBlockedRef.current && !isLocalInputTarget(document.activeElement)) {
       revealCursorRef.current()
       termRef.current?.focus()
     }
@@ -886,19 +893,19 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     const claim = (event: FocusEvent) => {
       const target = event.target
       if (!(target instanceof HTMLTextAreaElement && target.classList.contains('xterm-helper-textarea'))) return
-      if (inputBlockedRef.current || chatModeRef.current || !onDirectInputRef.current) { target.blur(); return }
+      if (inputBlockedRef.current || overlayModeRef.current || !onDirectInputRef.current) { target.blur(); return }
       onDirectInputRef.current()
     }
     host.addEventListener('focusin', claim)
     return () => host.removeEventListener('focusin', claim)
-  }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active, chatMode])
+  }, [directInput, inputFocusRequest, connectionEpoch, streamGeneration, active, overlayMode])
 
   // 进入对话视图：停止光标闪烁、收起搜索、把焦点移出 xterm，并刷新一次尺寸；
   // 切回终端：恢复光标、重新 fit（期间远端尺寸未被改动）。不触碰 stream/ack。
   useEffect(() => {
     const terminal = termRef.current
     applyStdin()
-    if (!chatMode) {
+    if (!overlayMode) {
       if (terminal) terminal.options.cursorBlink = true
       fitRef.current()
       return
@@ -907,7 +914,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     setSearchOpen(false)
     const helper = hostRef.current?.querySelector('textarea')
     if (helper instanceof HTMLTextAreaElement) helper.blur()
-  }, [chatMode, connectionEpoch, streamGeneration])
+  }, [overlayMode, connectionEpoch, streamGeneration])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -1002,7 +1009,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       pinch: {
         start: (centerX, centerY) => {
           const terminal = termRef.current
-          if (!terminal || chatModeRef.current || !onDisplayChangeRef.current) return false
+          if (!terminal || overlayModeRef.current || !onDisplayChangeRef.current) return false
           const rect = host.getBoundingClientRect()
           const screen = host.querySelector<HTMLElement>('.xterm-screen')?.getBoundingClientRect()
           host.style.transformOrigin = `${centerX - rect.left}px ${centerY - rect.top}px`
@@ -1085,7 +1092,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     }
   }, [client, pane.pane_id, active])
 
-  const sizingDisabled = streamFailed || status !== '可输入' || chatMode || !connected || (compact && !active)
+  const sizingDisabled = streamFailed || status !== '可输入' || overlayMode || !connected || (compact && !active)
   const preControlGrid = preControlGridRef.current
   const canRestoreSize = Boolean(preControlGrid && observedGrid && (preControlGrid.cols !== observedGrid.cols || preControlGrid.rows !== observedGrid.rows))
   // A remote grid well inside this window is usually left behind by a smaller
@@ -1094,7 +1101,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   // is simply smaller than this browser is normal and not worth a warning.
   const undersized = Boolean(strandedByOther && controlSupported && controlState.state === 'available' && gridView?.capacity && gridView.cols <= gridView.capacity.cols * 0.6)
   const grid = gridView ? `${gridView.cols}×${gridView.rows}` : ''
-  const chip: { label: string; tone: PaneDisplayTone } | null = !gridView || chatMode || searchOpen ? null
+  const chip: { label: string; tone: PaneDisplayTone } | null = !gridView || overlayMode || searchOpen ? null
     : controlling ? { label: `此窗口控制 ${grid}`, tone: 'owned' }
       : controlState.state === 'pending' ? { label: '正在申请尺寸…', tone: 'owned' }
         : controlState.state === 'other' ? { label: `其他窗口控制 ${grid}`, tone: 'other' }
@@ -1108,13 +1115,14 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   const displayMenu = chip && <PaneDisplayMenu compact={compact} label={chip.label} tone={chip.tone} open={displayMenuOpen} onOpenChange={setDisplayMenuOpen}
     display={display} actualFontSize={gridView?.fontSize ?? null} fitFontSize={gridView?.fit ?? null} onDisplayChange={onDisplayChange}
     onChatView={compact && onViewModeChange ? () => onViewModeChange('chat') : undefined}
+    onScreenView={compact && onViewModeChange ? () => onViewModeChange('screen') : undefined}
     sizing={{
       supported: controlSupported, state: controlState.state, reason: controlError || controlState.reason,
       grid: observedGrid, capacity: gridView?.capacity ?? null, previous: preControlGrid, undersized, disabled: sizingDisabled,
       onResizeOnce: () => void resizeOnce(), onTakeControl: () => void acquireSizing(), onRelease: releaseSizing, onRestoreAndRelease: () => void restoreAndRelease(),
     }}/>
 
-  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''} ${chatMode ? 'terminal-pane-chat' : ''} ${pane.right_click_passthrough ? 'terminal-pane-passthrough' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
+  return <section className={`terminal-pane ${active ? 'terminal-pane-active' : ''} ${directInput ? '' : 'terminal-pane-composer'} ${toolbarOpen ? 'terminal-pane-tools-open' : ''} ${overlayMode ? 'terminal-pane-chat' : ''}${screenMode ? ' terminal-pane-screen' : ''} ${pane.right_click_passthrough ? 'terminal-pane-passthrough' : ''}`} data-terminal-status={status} onPointerDown={onFocus} onContextMenu={(event) => {
     const overTerminal = (event.target as HTMLElement).closest('.terminal-host')
     if (overTerminal && pane.right_click_passthrough && !event.shiftKey) {
       event.preventDefault()
@@ -1154,6 +1162,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
           {status === '可输入' ? <Button className="tool-button" aria-label="聚焦终端输入" data-tooltip={directInput ? '回到光标并打开键盘' : '改为直接输入终端'} onClick={() => { setToolbarOpen(false); if (directInput) { revealCursorRef.current(); termRef.current?.focus() } else onDirectInput?.() }}><span role="img" aria-label={status}><Keyboard size={13}/></span></Button> : <span className="ownership" aria-live="polite">{streamFailed ? '已断开' : status}</span>}
           <Button className="tool-button" aria-label="选择文本" aria-pressed={textSelectMode} data-tooltip={textSelectMode ? '关闭文本选择' : '选择终端文本后可复制'} onClick={() => setTextSelectMode((value) => !value)}><Type size={14}/></Button>
           <Button className="tool-button" aria-label="复制屏幕" data-tooltip="复制当前屏幕文本" onClick={() => void copyScreen()}><Copy size={14}/></Button>
+          {onViewModeChange && <Button className="tool-button" aria-label="画面视图" data-tooltip="画面视图：按窗口宽度重排终端文字，不改变远端尺寸" onClick={() => { setToolbarOpen(false); onViewModeChange('screen') }}><ScrollText size={14}/></Button>}
           <Button className="tool-button" aria-label="上传图片" data-tooltip="上传图片，也可直接粘贴或拖入图片" onClick={() => imageInputRef.current?.click()}><ImagePlus size={14}/></Button>
           {!historyActive && <Button className="tool-button" aria-label="查看终端历史" data-tooltip="向上查看终端内容" onClick={() => scrollWheelRef.current(-10)}><History size={14}/></Button>}
           <Button className="tool-button" onClick={(event) => { event.stopPropagation(); if (searchOpen) closeSearch(); else openSearch() }} aria-label="搜索终端"><Search size={14}/></Button>
@@ -1177,8 +1186,9 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         else if (event.key === 'Enter') { event.preventDefault(); runSearch(event.currentTarget.value, event.shiftKey ? 'previous' : 'next') }
       }}/><span className="terminal-search-count" aria-live="polite">{searchResults.count > 0 ? `第 ${searchResults.index + 1}/${searchResults.count} 个` : '无匹配'}</span><button type="submit">下一个</button><button type="button" onClick={(event) => { const form = (event.currentTarget as HTMLButtonElement).form; const query = String(new FormData(form!).get('query') || ''); runSearch(query, 'previous') }}>上一个</button><button type="button" aria-label="关闭搜索" onClick={closeSearch}><X size={14}/></button></Form>}
       {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
-      <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={chatMode ? -1 : 0} role="region" aria-label="终端画面，可滚动查看" aria-hidden={chatMode || undefined}><div className="terminal-host" ref={hostRef}/></div>
+      <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={overlayMode ? -1 : 0} role="region" aria-label="终端画面，可滚动查看" aria-hidden={overlayMode || undefined}><div className="terminal-host" ref={hostRef}/></div>
       {chatMode && <ChatView key={`${hostID}:${pane.pane_id}`} hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onSwitchToTerminal={() => onViewModeChange?.('terminal')} onPasteImages={onPasteImages} onFocus={onFocus}/>}
+      {screenMode && <ScreenView key={`${hostID}:${pane.pane_id}`} client={client} pane={pane} compact={compact} active={active} connected={connected} connectionEpoch={connectionEpoch} theme={theme} onSwitchToTerminal={onViewModeChange ? () => onViewModeChange('terminal') : undefined} onFocus={onFocus}/>}
     </div>
     {copyFallback !== null && <Modal title="复制屏幕文本" onClose={() => setCopyFallback(null)}><p>当前页面无法写入剪贴板，请全选下方文本后手动复制。</p><textarea className="input" readOnly value={copyFallback} rows={8} aria-label="屏幕文本" data-initial-focus onFocus={(event) => event.currentTarget.select()}/><div className="modal-actions"><Button className="button-primary" onClick={() => setCopyFallback(null)}>关闭</Button></div></Modal>}
     {confirmationDialog}

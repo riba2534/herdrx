@@ -60,6 +60,7 @@ type API struct {
 	scriptHashes       string
 	voice              *voicegateway.Gateway
 	geometry           geometryRegistry
+	screenReads        screenReads
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {

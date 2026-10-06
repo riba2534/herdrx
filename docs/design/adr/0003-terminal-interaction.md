@@ -4,7 +4,7 @@
 
 - 顶部主机改成横向导航标签；当前主机高亮，过长名称省略并保留 title，溢出支持鼠标滚轮和触控横向滚动。
 - 侧栏字号适配改为离屏测量与一次提交。旧方案虽然取消了 14px 重置，但在宽窗口 / Retina 下仍会跨可见帧尝试多个字号；只验证高度受限的 5.34px 场景不足以发现该问题。现在用与 xterm 5.5 DOM renderer 一致的字体度量、设备像素取整离屏计算最终字号，在 React layout effect 中于绘制前一次应用，ResizeObserver 仅处理其余容器变化。
-- 当前运行的 Herdr JSON API 不支持 `pane.scroll`，尽管参考仓库的新版本已经实现；`terminal session observe` 也不会消费 stdin 上的滚动命令。因此采用兼容的 `pane.read`（recent/ANSI，最多 10000 行）读取历史，在当前 xterm 的本地历史视图中滚动，不改变其他客户端的视口。
+- 当前运行的 Herdr JSON API 不支持 `pane.scroll`，尽管参考仓库的新版本已经实现；`terminal session observe` 也不会消费 stdin 上的滚动命令。因此采用兼容的 `pane.read`（recent/ANSI）读取历史；Herdr 单次最多返回最近 1000 行，请求更多也只返回 1000 行，在当前 xterm 的本地历史视图中滚动，不改变其他客户端的视口。
 - 查看历史时实时流继续 ACK，但不把增量绘制到历史缓冲中；返回实时会重新获取 full frame。继续输入先返回实时，再通过既有输入缓存发送，避免首键丢失。
 - Shift+Enter 拦截 xterm 默认 CR 编码，发送 LF（Ctrl+J 换行约定），不影响普通 Enter、IME 组合输入和粘贴。
 

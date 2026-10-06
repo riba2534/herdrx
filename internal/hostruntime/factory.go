@@ -271,6 +271,20 @@ func (h *sharedHandle) Call(ctx context.Context, method string, params any) (jso
 	}
 	return value, err
 }
+// StartHerdr is available only on transports that can run a remote shell.
+func (h *sharedHandle) StartHerdr(ctx context.Context) (herdr.HerdrStartResult, error) {
+	endpoint, ok := h.entry.endpoint.(interface {
+		StartHerdr(context.Context) (herdr.HerdrStartResult, error)
+	})
+	if !ok {
+		return herdr.HerdrStartResult{}, herdr.ErrHerdrStartUnsupported
+	}
+	value, err := endpoint.StartHerdr(ctx)
+	if ctx.Err() == nil && isTransportError(err) {
+		h.invalidate()
+	}
+	return value, err
+}
 func (h *sharedHandle) OpenTerminal(ctx context.Context, request herdr.TerminalOpen) (herdr.TerminalProcess, error) {
 	value, err := h.entry.endpoint.OpenTerminal(ctx, request)
 	if ctx.Err() == nil && isTransportError(err) {

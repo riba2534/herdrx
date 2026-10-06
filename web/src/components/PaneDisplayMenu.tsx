@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, ScrollText } from 'lucide-react'
 import type { TerminalDisplay } from '../lib/displayPreferences'
 import type { TerminalControlState } from '../lib/workbench'
 import { Button } from './ui'
@@ -39,7 +39,7 @@ export type PaneDisplaySizing = {
 }
 
 /** A pane-local chip that states the remote grid and opens the reading and sizing tools. */
-export function PaneDisplayMenu({ compact, label, tone, open, onOpenChange, display, actualFontSize, fitFontSize, onDisplayChange, sizing, onChatView }: {
+export function PaneDisplayMenu({ compact, label, tone, open, onOpenChange, display, actualFontSize, fitFontSize, onDisplayChange, sizing, onChatView, onScreenView }: {
   compact: boolean
   label: string
   tone: PaneDisplayTone
@@ -51,6 +51,7 @@ export function PaneDisplayMenu({ compact, label, tone, open, onOpenChange, disp
   onDisplayChange?: (patch: Partial<TerminalDisplay>) => void
   sizing: PaneDisplaySizing
   onChatView?: () => void
+  onScreenView?: () => void
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const chipRef = useRef<HTMLButtonElement>(null)
@@ -81,6 +82,7 @@ export function PaneDisplayMenu({ compact, label, tone, open, onOpenChange, disp
   return <div className="pane-display" ref={rootRef} onPointerDown={(event) => event.stopPropagation()}>
     <button type="button" ref={chipRef} className={`pane-display-chip pane-display-chip-${tone}`} aria-haspopup="dialog" aria-expanded={open} aria-label={`显示与尺寸：${label}`} data-tooltip="本地显示与任务尺寸" onClick={() => onOpenChange(!open)}><span>{label}</span></button>
     {open && <div className="pane-display-menu" role="dialog" aria-label="显示与尺寸">
+      {onScreenView && <Button className="pane-display-chat" onClick={act(onScreenView)}><ScrollText size={15}/><span><strong>切换到画面视图</strong><small>按手机宽度重排终端文字，可直接选中复制，远端尺寸不变</small></span></Button>}
       {onChatView && <Button className="pane-display-chat" onClick={act(onChatView)}><MessageSquare size={15}/><span><strong>切换到对话视图</strong><small>按手机宽度重排 Agent 的问答，远端尺寸不变</small></span></Button>}
       <section className="pane-display-section" aria-label="本地显示">
         <header><strong>本地显示</strong><small>只影响此{compact ? '设备' : '窗口'}，不改变远端</small></header>

@@ -346,6 +346,12 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .connection-overlay h2 { margin: 12px 0 5px; color: #fff; }
 .connection-overlay p { max-width: 520px; color: #aac0ce; }
 .connection-overlay-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
+.connection-overlay-hint { margin: 18px 0 0; font-size: 13px; }
+.start-herdr { display: grid; justify-items: center; gap: 6px; margin-top: 8px; max-width: 520px; }
+.start-herdr .button { display: inline-flex; align-items: center; gap: 6px; }
+.start-herdr p { margin: 0; text-align: center; overflow-wrap: anywhere; }
+.modal .start-herdr { justify-items: start; margin: 4px 0 8px; }
+.modal .start-herdr p { text-align: left; }
 .connection-banner { position: absolute; z-index: 8; top: 8px; left: 8px; right: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--muted); font-size: 12px; }
 .connection-banner > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .connection-banner .button { min-height: 28px; }
@@ -642,6 +648,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .switcher-group a strong { font-size: 13px; font-weight: 500; }
 .workbench-compact .mode-bar,
 .workbench-compact .action-toast { bottom: calc(var(--dock-height, 0px) + 8px); }
+.workbench .action-toast-ok, .workbench .action-toast-warn { background: var(--panel); color: var(--text); border-color: var(--accent); }
+.workbench .action-toast-warn { border-color: var(--warning, var(--accent)); }
 html[data-appearance-scope="workbench"] .workbench { position: fixed; top: var(--workbench-offset-top, 0px); left: 0; right: 0; }
 html[data-appearance-scope="workbench"] .workbench button,
 html[data-appearance-scope="workbench"] .keybar,

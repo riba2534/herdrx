@@ -8,6 +8,9 @@
 .composer.composer-compact:has(.composer-meta) {
   grid-template-areas: 'mode input send' 'meta meta meta';
 }
+/* 画面视图只能本地输入：没有输入方式菜单，输入框占满左侧。 */
+.composer.composer-compact.composer-local-only { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'input send'; }
+.composer.composer-compact.composer-local-only:has(.composer-meta) { grid-template-areas: 'input send' 'meta meta'; }
 
 .composer.composer-compact .composer-input {
   min-height: 44px;

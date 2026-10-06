@@ -12,6 +12,13 @@ export type InstanceSettings = {
   updated_by?: string
 }
 
+/** 网站按用户请求在 SSH 远程主机上启动 Herdr 的结果。 */
+export type HerdrStartResult = {
+  status: 'started' | 'running' | 'missing' | 'failed'
+  method?: 'systemd' | 'setsid' | 'nohup'
+  linger?: 'yes' | 'no' | 'unknown'
+}
+
 export type Host = {
   id: string
   name: string

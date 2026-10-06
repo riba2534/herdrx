@@ -4,7 +4,7 @@ import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
+import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
@@ -12,6 +12,7 @@ import { PaneViewToggle } from '../components/PaneViewToggle'
 import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems } from '../lib/keymap'
 import { ratioFromPointer, resizeModeBarItems, RESIZE_DIRECTIONS, splitHandleStyle, splitPathFromId, type LayoutSplit } from '../lib/layoutSplit'
 import { Composer } from '../components/Composer'
+import { StartHerdrButton, type HerdrStartFeedback } from '../components/StartHerdr'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
@@ -117,6 +118,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   }
   // 对话视图自带输入框：打开时收起工作台 dock，避免两个输入框同时存在。
   const chatOpen = Boolean(paneID) && paneModeFor(paneID) === 'chat'
+  // 画面视图没有可聚焦的终端：本地输入框始终显示，并且只能本地输入。
+  const screenOpen = Boolean(paneID) && paneModeFor(paneID) === 'screen'
   const togglePaneMode = (targetPaneID: string, mode: PaneViewMode) => {
     setPaneMode(targetPaneID, mode)
     if (targetPaneID !== paneID) return
@@ -144,6 +147,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const paneSurfaces = useRef(new Map<string, PaneSurfaceHandle>())
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => 'Notification' in window ? Notification.permission : 'denied')
   const [actionError, setActionError] = useState('')
+  // 非错误的操作结果（例如在远程主机启动了 Herdr）；出现原因所在的遮罩可能已随重连消失。
+  const [notice, setNotice] = useState<HerdrStartFeedback | null>(null)
   const iosWithoutNotification = needsHomeScreenForNotifications()
   const notificationHint = iosWithoutNotification ? '请先添加到主屏幕后再开启通知' : notificationPermission === 'granted' ? '页面关闭后仍可接收等待确认 / 已完成推送' : '需要浏览器授权'
   const notificationButtonLabel = iosWithoutNotification ? '请先添加到主屏幕后再开启通知' : notificationPermission === 'granted' ? '已启用' : '启用'
@@ -261,6 +266,11 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     const timer = window.setTimeout(() => setActionError(''), 5000)
     return () => window.clearTimeout(timer)
   }, [actionError])
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(null), notice.tone === 'warn' ? 15000 : 6000)
+    return () => window.clearTimeout(timer)
+  }, [notice])
   const shortWorkbench = mobile && viewportHeight < 500
   useLayoutEffect(() => {
     const workbench = workbenchRef.current
@@ -272,7 +282,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     const observer = new ResizeObserver(apply)
     observer.observe(dock)
     return () => observer.disconnect()
-  }, [composerOpen, auxiliaryKeysOpen, mobile, viewportHeight, chatOpen])
+  }, [composerOpen, auxiliaryKeysOpen, mobile, viewportHeight, chatOpen, screenOpen])
 
   useEffect(() => {
     const unload = (event: BeforeUnloadEvent) => {
@@ -862,6 +872,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const disconnected = connection === 'degraded' || connection === 'offline'
   const showBanner = connection === 'degraded' || (connection === 'connecting' && Boolean(snapshot))
   const showOverlay = connection === 'offline' || (connection === 'connecting' && !snapshot && Boolean(message))
+  // Herdr did not answer over a working SSH connection: offer to start it there.
+  const herdrMayBeDown = host?.transport === 'ssh' && client.errorCode() === 'snapshot_failed'
   const otherPaneBlocked = (snapshot?.panes || []).some((pane) => pane.pane_id !== paneID && pane.agent_status === 'blocked')
   const beginSplitDrag = (event: ReactPointerEvent<HTMLElement>, split: LayoutSplit) => {
     if (mobile || event.pointerType === 'touch' || !layout) return
@@ -957,7 +969,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
       <section className="terminal-surface" aria-label="终端工作区" ref={surfaceRef}>
         {showBanner && <div className="connection-banner" role="status"><span>{connectionLabel(connection)}{message ? ` · ${message}` : ''}{retrySeconds ? ` · ${retrySeconds} 秒后重试` : ''}</span><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>}
-        {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div></div>}
+        {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>{herdrMayBeDown && host && <><p className="connection-overlay-hint">远程主机上的 Herdr 可能没有运行。</p><StartHerdrButton host={host} className="button-secondary" onStarted={(feedback) => { setNotice(feedback); client.retryNow() }}/></>}</div>}
         {visiblePanes?.map((pane) => {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
           const sourceRect = layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
@@ -971,9 +983,10 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
       {resizeMode && <div className="mode-bar"><strong>调整分屏 RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
+      {notice && !actionError && !switcherOpen && <div className={`action-toast action-toast-${notice.tone}`} role="status"><span>{notice.text}</span><button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={14}/></button></div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
-      {((!chatOpen && (composerOpen || mobile)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
-      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen} directInput={directInput} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
+      {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
+      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
         {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <button key={key.id} aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(key.bytes)} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>)}
         <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button>
@@ -988,7 +1001,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspaceSwitcherDetail(workspace.pane_count, workspaceBranchText(workspace, workspaceBranches))}</small></span></button>)}</SwitcherGroup>
       {agents.length > 0 && <SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agentStatusLabel(agent.agent_status)}</small></span></button>)}</SwitcherGroup>}
       <SwitcherGroup title="主机"><a className="switcher-host-manage" href="/" onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('/') }}><Server size={16}/><span><strong>管理主机</strong></span></a>{hostEntries.map((item) => <a key={item.id} href={`/h/${encodeURIComponent(item.id)}`} className={item.id === hostID ? 'host-tab-active' : ''} aria-current={item.id === hostID ? 'page' : undefined} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); setSwitcherOpen(false); navigate(`/h/${encodeURIComponent(item.id)}`) }}><Server size={16}/><span><strong>{item.name}</strong></span></a>)}</SwitcherGroup>
-      <SwitcherGroup title="操作">{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
+      <SwitcherGroup title="操作">{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{paneID && <button aria-pressed={paneModeFor(paneID) === 'screen'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'screen' ? 'terminal' : 'screen'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'screen' ? <SquareTerminal size={16}/> : <ScrollText size={16}/>}<span><strong>{paneModeFor(paneID) === 'screen' ? '切换到终端视图' : '切换到画面视图'}</strong><small>{paneModeFor(paneID) === 'screen' ? '回到完整终端' : '按屏幕宽度重排终端文字，不改远端尺寸'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
     {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}

@@ -3,6 +3,7 @@ import { api } from '../lib/api'
 import type { HerdrCapabilities, Host } from '../types'
 import { Modal } from './Modal'
 import { Button } from './ui'
+import { StartHerdrButton } from './StartHerdr'
 
 const featureNames = { snapshot: '会话快照', observe: '终端观察', input: '文本输入', resize: '任务尺寸控制', preserve_scroll: '保尺寸滚轮', history: '历史读取' } as const
 const stateNames = { available: '可用', unavailable: '不可用', unknown: '尚未确认' } as const
@@ -41,6 +42,7 @@ export function HostCapabilities({ host, onClose }: { host: Host; onClose: () =>
         return <li key={key}><strong>{label}</strong><span>{stateNames[feature?.state || 'unknown']}</span>{feature?.reason && <p>{feature.reason}</p>}</li>
       })}</ul>
     </div>}
+    {!loading && (error || report?.status === 'unavailable') && <StartHerdrButton host={host} className="button-secondary" onStarted={() => setAttempt((value) => value + 1)}/>}
     <div className="modal-actions"><Button className="button-secondary" disabled={loading} onClick={() => setAttempt((value) => value + 1)}>重新检查</Button><Button className="button-primary" onClick={onClose}>关闭</Button></div>
   </Modal>
 }

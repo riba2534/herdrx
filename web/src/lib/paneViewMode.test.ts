@@ -27,6 +27,15 @@ describe('pane view mode isolation', () => {
     expect(readPaneViewMode('host-1', 'pane-1')).toBe('terminal')
   })
 
+  it('stores the screen view and returns to the terminal default', () => {
+    writePaneViewMode('host-1', 'pane-1', 'screen')
+    expect(readPaneViewMode('host-1', 'pane-1')).toBe('screen')
+    const key = `herdrx.pane-view.v1.${encodeURIComponent('sess-a')}/${encodeURIComponent('host-1')}/${encodeURIComponent('pane-1')}`
+    expect(localStorage.getItem(key)).toBe('screen')
+    writePaneViewMode('host-1', 'pane-1', 'terminal')
+    expect(localStorage.getItem(key)).toBeNull()
+  })
+
   it('keeps chat mode per host and per pane', () => {
     writePaneViewMode('host-1', 'pane-1', 'chat')
     expect(readPaneViewMode('host-1', 'pane-1')).toBe('chat')

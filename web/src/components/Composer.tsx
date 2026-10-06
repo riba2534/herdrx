@@ -93,11 +93,13 @@ function InputModeMenu({ directInput, onDirectInput, onLocalInput }: {
   </div>
 }
 
-export function Composer({ hostID, paneID, visible, directInput, compact = false, variant = 'dock', sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages, mediaHost }: {
+export function Composer({ hostID, paneID, visible, directInput, localOnly = false, compact = false, variant = 'dock', sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages, mediaHost }: {
   hostID: string
   paneID: string
   visible: boolean
   directInput: boolean
+  /** 画面视图没有可聚焦的终端：只保留本地输入，隐藏「直接输入终端」。 */
+  localOnly?: boolean
   compact?: boolean
   /** `chat` 复用同一套草稿与发送事务，但按对话习惯让 Enter 直接发送。 */
   variant?: 'dock' | 'chat'
@@ -211,8 +213,8 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
   const empty = !value.trim()
   const canEdit = Boolean(paneID)
   const selectLocalInput = () => { onLocalInput(); textareaRef.current?.focus() }
-  return <div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
-    {compact && !chat && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}
+  return <div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}${localOnly ? ' composer-local-only' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
+    {compact && !chat && !localOnly && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}
     {mediaHost?.tray && <div className="composer-media">{mediaHost.tray}</div>}
     <textarea
       ref={textareaRef}
@@ -236,7 +238,7 @@ export function Composer({ hostID, paneID, visible, directInput, compact = false
       <Button className="button-primary composer-send" disabled={sendDisabled || (empty && !mediaHost?.canSend()) || sendingHere || !paneID} pending={sendingHere} onClick={sendNow}>发送</Button>
     </div>
     {(!compact || current.status !== 'idle') && <div className="composer-meta">
-      {!compact && !chat && <div className="composer-modes">
+      {!compact && !chat && !localOnly && <div className="composer-modes">
         <button type="button" className={directInput ? '' : 'composer-mode-active'} aria-pressed={!directInput} onClick={selectLocalInput}>本地输入</button>
         <button type="button" className={directInput ? 'composer-mode-active' : ''} aria-pressed={directInput} onClick={onDirectInput}>直接输入终端</button>
       </div>}
