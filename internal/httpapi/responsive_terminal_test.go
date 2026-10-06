@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,8 +285,18 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 	}
 	mobile.command("terminal.resize_v2", map[string]any{"resize_seq": 1, "cols": 40, "rows": 18})
 	mobile.read("terminal.resize.status")
-	desktop.send(map[string]any{"t": "call", "id": "wheel", "method": "terminal.scroll", "params": map[string]any{"stream_id": desktop.stream, "lines": -7, "column": 10, "row": 5}})
-	desktop.read("res")
+	// The controller reports "submitted" before its resize releases the
+	// operation lock, so a wheel sent at once may still find it adjusting.
+	// That refusal writes nothing to Herdr; only that transient case is retried.
+	for attempt := 0; ; attempt++ {
+		desktop.send(map[string]any{"t": "call", "id": "wheel", "method": "terminal.scroll", "params": map[string]any{"stream_id": desktop.stream, "lines": -7, "column": 10, "row": 5}})
+		if reply := readWheelReply(t, desktop); reply["t"] == "res" {
+			break
+		} else if attempt >= 50 || !strings.Contains(fmt.Sprint(reply["message"]), "正在切换或调整") {
+			t.Fatalf("unexpected error: %v", reply)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
 	if len(endpoint.commands) != 4 {
@@ -306,5 +317,25 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 	}
 	if total != 7 || len(endpoint.processes) != 3 {
 		t.Fatalf("scroll=%d processes=%d", total, len(endpoint.processes))
+	}
+}
+
+func readWheelReply(t *testing.T, b *geometryBrowser) map[string]any {
+	t.Helper()
+	for {
+		typ, data, err := b.ws.Read(b.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if typ == websocket.MessageBinary {
+			f, _ := terminalwire.Decode(data)
+			_ = b.ws.Write(b.ctx, websocket.MessageBinary, terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeAck, StreamID: f.StreamID, Seq: f.Seq}))
+			continue
+		}
+		var m map[string]any
+		_ = json.Unmarshal(data, &m)
+		if m["id"] == "wheel" && (m["t"] == "res" || m["t"] == "error") {
+			return m
+		}
 	}
 }
