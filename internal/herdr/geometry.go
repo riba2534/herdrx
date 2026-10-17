@@ -3,11 +3,14 @@ package herdr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"os/exec"
 	"strings"
 
 	"github.com/riba2534/herdrx/internal/terminalgeometry"
+	"golang.org/x/crypto/ssh"
 )
 
 func terminalPID(ctx context.Context, endpoint Endpoint, paneID string) (int, error) {
@@ -87,10 +90,20 @@ func (e *SSHEndpoint) TerminalGeometry(ctx context.Context, paneID string) (Term
 	if e.host.Transport == "tailcat" {
 		command = fmt.Sprintf("herdrx-terminal-geometry %d", pid)
 	}
+	// 远端读取程序失败时只在 stderr 说明原因；丢掉它就只剩退出码。
+	var stderr limitedSSHLog
+	session.setStderr(&stderr)
 	output, err := session.Output(command)
 	if err != nil {
 		if ctx.Err() != nil {
 			return TerminalGeometry{}, ctx.Err()
+		}
+		// 状态 1 表示读取程序已在远端运行并给出原因（如尺寸无法精确保持），与 CLI 版本或 Python 无关。
+		// 请求被拒绝、缺少命令（127）或连接失败（255）时 stderr 不可靠，保留下方原提示。
+		if reason := stderr.String(); reason != "" && remoteExitStatus(err) == 1 {
+			// Python 失败时 stderr 是完整 traceback，原因在最后一行。
+			reason = reason[strings.LastIndexByte(reason, '\n')+1:]
+			return TerminalGeometry{}, fmt.Errorf("无法读取远程终端尺寸（远程主机报告：%s），请在远程主机的 Herdr 中直接查看此终端: %w", reason, err)
 		}
 		if e.host.Transport == "tailcat" {
 			return TerminalGeometry{}, fmt.Errorf("无法读取远程终端尺寸，请更新远程主机上的 herdrx CLI 后重试: %w", err)
@@ -102,6 +115,20 @@ func (e *SSHEndpoint) TerminalGeometry(ctx context.Context, paneID string) (Term
 		return geometry, fmt.Errorf("decode remote terminal geometry: %w", err)
 	}
 	return geometry, geometry.Validate()
+}
+
+// remoteExitStatus 返回远端命令的退出状态；请求未执行或连接中断时为 -1。
+// 内置 SSH 客户端与系统 OpenSSH 分别以 ssh.ExitError 和 exec.ExitError 报告。
+func remoteExitStatus(err error) int {
+	var sshExit *ssh.ExitError
+	if errors.As(err, &sshExit) {
+		return sshExit.ExitStatus()
+	}
+	var processExit *exec.ExitError
+	if errors.As(err, &processExit) {
+		return processExit.ExitCode()
+	}
+	return -1
 }
 
 func (e *SSHEndpoint) OpenTerminalSocket(ctx context.Context) (net.Conn, error) {
