@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -130,9 +131,6 @@ func TestGeometryOnLocalSSHAndTailcatEndpoints(t *testing.T) {
 	for _, mode := range []string{"local", "ssh", "tailcat"} {
 		t.Run(mode, func(t *testing.T) {
 			if mode == "ssh" {
-				if runtime.GOOS != "linux" {
-					t.Skip("basic SSH geometry requires a Linux remote host")
-				}
 				if _, err := exec.LookPath("python3"); err != nil {
 					t.Skip("Python 3 is required for basic SSH geometry")
 				}
@@ -294,5 +292,35 @@ func serveGeometrySSH(conn net.Conn, config *ssh.ServerConfig, dir string, pids 
 				_ = channel.Reject(ssh.UnknownChannelType, "unsupported")
 			}
 		}(channel)
+	}
+}
+
+// The program travels inside single quotes through the remote login shell. A
+// single quote would end that argument early and run the rest as shell words.
+func TestRemoteGeometryProgramFitsSingleQuotedShellArgument(t *testing.T) {
+	if strings.Contains(remoteGeometryProgram, "'") {
+		t.Fatal("remote geometry program must not contain single quotes")
+	}
+}
+
+// A process outside any terminal session must be rejected rather than reporting
+// some other terminal's size. Setsid keeps the child from inheriting the test
+// runner's controlling terminal, so the case also holds on a developer's TTY.
+func TestRemoteGeometryProgramRejectsProcessWithoutTerminal(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("Python 3 is required for basic SSH geometry")
+	}
+	child := exec.Command("sleep", "60")
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	output, err := exec.Command("python3", "-c", remoteGeometryProgram, strconv.Itoa(child.Process.Pid)).CombinedOutput()
+	if err == nil {
+		t.Fatalf("geometry of a process without a terminal = %s, want an error", output)
+	}
+	if runtime.GOOS == "darwin" && !strings.Contains(string(output), "process has no controlling terminal") {
+		t.Fatalf("darwin error = %s, want the missing controlling terminal reason", output)
 	}
 }

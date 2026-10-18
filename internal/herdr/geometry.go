@@ -62,13 +62,26 @@ func (e *LocalEndpoint) OpenTerminalSocket(ctx context.Context) (net.Conn, error
 	return (&net.Dialer{}).DialContext(ctx, "unix", path)
 }
 
-// This fixed program only opens stdin's terminal and performs TIOCGWINSZ. The
-// validated integer PID is a separate argument; no remote data becomes code.
-const remoteGeometryProgram = `import os,sys,fcntl,termios,struct,json
-if sys.platform != "linux": raise RuntimeError("Linux Herdr host required")
+// This fixed program only opens the pane process's terminal and performs
+// TIOCGWINSZ. The validated integer PID is a separate argument; no remote data
+// becomes code. Linux reads stdin's terminal through procfs. macOS has no
+// procfs, so it follows terminalgeometry.ReadPID on darwin: /bin/ps reports the
+// controlling-terminal device the kernel records as major/minor ("??" when there
+// is none), the matching ptmx slave /dev/ttysNNN is opened, and the opened fd
+// must be that character device before its size is trusted. The program is sent
+// inside single quotes, so it must not contain one.
+const remoteGeometryProgram = `import os,sys,fcntl,termios,struct,json,stat,subprocess
 pid=int(sys.argv[1])
 if not 1 < pid <= 1073741824: raise RuntimeError("invalid terminal process id")
-fd=os.open("/proc/%d/fd/0" % pid,os.O_RDONLY|os.O_NOCTTY|os.O_NONBLOCK)
+if sys.platform == "linux": fd=os.open("/proc/%d/fd/0" % pid,os.O_RDONLY|os.O_NOCTTY|os.O_NONBLOCK)
+elif sys.platform == "darwin":
+ tdev=subprocess.check_output(["/bin/ps","-o","tdev=","-p",str(pid)]).decode().strip()
+ if "/" not in tdev: raise RuntimeError("process has no controlling terminal")
+ major,minor=(int(part) for part in tdev.split("/"))
+ fd=os.open("/dev/ttys%03d" % minor,os.O_RDONLY|os.O_NOCTTY|os.O_NONBLOCK)
+ info=os.fstat(fd)
+ if not stat.S_ISCHR(info.st_mode) or info.st_rdev != os.makedev(major,minor): os.close(fd); raise RuntimeError("terminal size source is not the controlling terminal")
+else: raise RuntimeError("preserving terminal geometry currently requires a Linux or macOS Herdr host")
 try: rows,cols,width,height=struct.unpack("HHHH",fcntl.ioctl(fd,termios.TIOCGWINSZ,bytes(8)))
 finally: os.close(fd)
 if not (10<=cols<=1000 and 3<=rows<=500) or width==65535 or height==65535 or width%cols or height%rows: raise RuntimeError("terminal size cannot be preserved exactly")
@@ -108,7 +121,7 @@ func (e *SSHEndpoint) TerminalGeometry(ctx context.Context, paneID string) (Term
 		if e.host.Transport == "tailcat" {
 			return TerminalGeometry{}, fmt.Errorf("无法读取远程终端尺寸，请更新远程主机上的 herdrx CLI 后重试: %w", err)
 		}
-		return TerminalGeometry{}, fmt.Errorf("无法读取远程终端尺寸，请确认 Herdr 主机为 Linux 且已安装 Python 3: %w", err)
+		return TerminalGeometry{}, fmt.Errorf("无法读取远程终端尺寸，请确认 Herdr 主机为 Linux 或 macOS 且已安装 Python 3: %w", err)
 	}
 	var geometry TerminalGeometry
 	if err := json.Unmarshal(output, &geometry); err != nil {

@@ -47,7 +47,7 @@ CLI v0.1.0-rc.2 起，网页连接命令可携带 20 分钟有效的中继授权
 普通历史由 Herdr 快照提供；全屏应用通过 Herdr 原生滚动通道接收鼠标或手指手势。为避免接入时改变终端网格或像素尺寸，这条通道要求：
 
 - Herdr 所在主机为 Linux 或 macOS，连接用户与 Herdr 用户相同。Linux 读取 pane 进程的 `/proc/<pid>/fd/0` 终端尺寸；macOS 没有 procfs，改为从内核进程表取得控制终端设备号，再核对 `/dev` 下同一字符设备后只读尺寸。
-- 基础 SSH 主机已安装 Python 3，并允许 Herdr API 与 client 两个 Unix socket 转发；这条路径的远端尺寸读取仍要求 Linux。本机与 Tailcat 接入在 macOS 上可用。
+- 基础 SSH 主机已安装 Python 3（macOS 可用 Xcode Command Line Tools 提供的 `/usr/bin/python3`），并允许 Herdr API 与 client 两个 Unix socket 转发。远端读取方式同上一条；macOS 用系统 `/bin/ps` 取得控制终端设备号。本机、Tailcat 与基础 SSH 接入在 macOS 上均可用。
 - Tailcat 使用与本次网站配套构建的 herdrx CLI，提供只读尺寸命令和 client socket 转发；不需要 Python。已有 CLI 更新后需按当前服务配置重启 herdrx 访问服务，Herdr 和任务继续运行。
 - 适配的 Herdr 私有协议为 20 和 22；固定真实实例回归覆盖 Herdr 0.8.2（20）、0.9.0 和 0.9.1（22）。其他版本及不能准确还原的像素尺寸会明确报错，不尝试猜测输入协议或改变尺寸。
 
