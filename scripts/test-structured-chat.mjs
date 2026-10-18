@@ -357,7 +357,7 @@ async function main() {
   }
   const callMethods = async () => (await callLines(callsFile)).map((entry) => entry.method)
   await expect.poll(spawnCount, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
-  const spawnsOnTerminal = await spawnCount()
+  const spawnsOnTerminal = await settledSpawnCount()
   const readsOnTerminal = (await callMethods()).filter((method) => method === 'pane.read').length
   await screenshot(page, '01-terminal')
 
