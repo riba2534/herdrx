@@ -231,7 +231,10 @@ while True:
     await expect(b.locator('.terminal-pane[data-terminal-status="可输入"]')).toHaveCount(1)
     assert.equal((await messages(b, 'sent', 'terminal.control.acquire')).length, 0, 'refresh restored temporary control')
     assert.equal((await state()).pid, pid, 'access changes recreated the task')
-    assert.deepEqual(errors, [])
+    // Returning to the foreground revalidates GET /api/me and the reload above
+    // aborts it; WebKit reports that same-origin abort as a pageerror "due to
+    // access control checks" (see test-pwa.mjs). Other errors still fail.
+    assert.deepEqual(errors.filter((message) => engine !== 'webkit' || !/\/api\/me due to access control checks\.?$/.test(message)), [])
     for (const context of contexts) await context.close()
     await browser.close(); browser = null
     console.log(`${engine}: real PTY observe, resize, confirmed handoff, old generation rejection, Chinese input, hidden release and refresh observation passed`)
