@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Snapshot } from '../types'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { Layout, Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
@@ -67,12 +68,14 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
     data-active={props.active ? 'true' : 'false'}
     data-direct-input={props.directInput ? 'true' : 'false'}
+    data-source-size={`${props.sourceCols}x${props.sourceRows}`}
+    onContextMenu={props.onContextMenu}
   >
     <button aria-label={`点 ${props.pane.pane_id} 终端直接输入`} onClick={() => props.onDirectInput?.()}>点终端</button>
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
@@ -835,6 +838,102 @@ describe('workbench split resize', () => {
     render(<WorkbenchPage hostID="host"/>)
     await screen.findByRole('button', { name: '切换工作区或终端' })
     expect(screen.queryByRole('separator', { name: '左右调整分屏' })).not.toBeInTheDocument()
+  })
+})
+
+describe('workbench pane zoom', () => {
+  function press(key: string, init: KeyboardEventInit = {}) {
+    fireEvent.keyDown(window, { key, ctrlKey: false, altKey: false, metaKey: false, ...init })
+  }
+  // Herdr 放大时仍按分屏给出每个 pane 的 rect，只把 zoomed 置真、focused_pane_id 指向被放大的 pane。
+  function tabLayout(zoomed: boolean, focused = 'w1:p1'): Layout {
+    return {
+      workspace_id: 'w1', tab_id: 'w1:t1', focused_pane_id: focused, zoomed,
+      area: { x: 0, y: 0, width: 120, height: 40 },
+      panes: [
+        { pane_id: 'w1:p1', focused: focused === 'w1:p1', rect: { x: 0, y: 0, width: 60, height: 40 } },
+        { pane_id: 'w1:p2', focused: focused === 'w1:p2', rect: { x: 60, y: 0, width: 60, height: 40 } },
+      ],
+      splits: [{ id: 'split_0_root', direction: 'right', ratio: 0.5, rect: { x: 0, y: 0, width: 120, height: 40 } }],
+    }
+  }
+  const paneCalls = () => call.mock.calls.filter(([method]) => String(method).startsWith('pane.'))
+
+  beforeEach(() => {
+    snapshot.panes = [
+      { pane_id: 'w1:p1', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term1', agent_status: 'idle', focused: true, revision: 1 },
+      { pane_id: 'w1:p2', workspace_id: 'w1', tab_id: 'w1:t1', terminal_id: 'term2', agent_status: 'idle', focused: false, revision: 1 },
+    ]
+    snapshot.layouts = [tabLayout(false)]
+  })
+
+  it('shows only the pane Herdr zoomed across the whole tab, and the split again after unzoom', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'false')
+    expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-active', 'true')
+
+    act(() => emitSnapshot({ ...snapshot, layouts: [tabLayout(true, 'w1:p2')] }))
+    await waitFor(() => expect(screen.queryByTestId('terminal-pane-w1:p1')).not.toBeInTheDocument())
+    const zoomedPane = screen.getByTestId('terminal-pane-w1:p2')
+    expect(zoomedPane).toHaveAttribute('data-active', 'true')
+    expect(zoomedPane).toHaveAttribute('data-source-size', '120x40')
+    expect(zoomedPane.parentElement).toHaveStyle({ left: '0px', top: '0px', width: '100%', height: '100%' })
+    expect(screen.queryByRole('separator', { name: '左右调整分屏' })).not.toBeInTheDocument()
+
+    act(() => emitSnapshot({ ...snapshot, layouts: [tabLayout(false, 'w1:p2')] }))
+    expect(await screen.findByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-active', 'false')
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'true')
+    expect(screen.getByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-source-size', '60x40')
+    expect(screen.getByRole('separator', { name: '左右调整分屏' })).toBeInTheDocument()
+  })
+
+  it('zooms the selected pane with prefix+z', async () => {
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByTestId('terminal-pane-w1:p2')
+    press('b', { ctrlKey: true })
+    press('z')
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.zoom', { pane_id: 'w1:p1' }))
+  })
+
+  it('moves between the panes of a zoomed tab locally without refocusing Herdr', async () => {
+    snapshot.layouts = [tabLayout(true, 'w1:p1')]
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-active', 'true')
+    expect(screen.queryByTestId('terminal-pane-w1:p2')).not.toBeInTheDocument()
+    call.mockClear()
+    press('b', { ctrlKey: true })
+    press('l')
+    expect(await screen.findByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'true')
+    expect(screen.queryByTestId('terminal-pane-w1:p1')).not.toBeInTheDocument()
+    // pane.zoom / pane.focus 会把原生 Herdr 窗口也切过去，本地换 pane 不该调用。
+    expect(paneCalls()).toEqual([])
+  })
+
+  it('follows the zoom when Herdr moves it to another pane', async () => {
+    snapshot.layouts = [tabLayout(true, 'w1:p1')]
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByTestId('terminal-pane-w1:p1')
+    act(() => emitSnapshot({ ...snapshot, layouts: [tabLayout(true, 'w1:p2')] }))
+    expect(await screen.findByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'true')
+    expect(screen.queryByTestId('terminal-pane-w1:p1')).not.toBeInTheDocument()
+  })
+
+  it('restores the split from the pane menu of a zoomed tab', async () => {
+    snapshot.layouts = [tabLayout(true, 'w1:p2')]
+    render(<WorkbenchPage hostID="host"/>)
+    fireEvent.contextMenu(await screen.findByTestId('terminal-pane-w1:p2'))
+    expect(screen.queryByRole('menuitem', { name: '最大化终端' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: '还原分屏' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.zoom', { pane_id: 'w1:p2', mode: 'off' }))
+  })
+
+  it('keeps the phone on its own pane when Herdr zooms another one', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-active', 'true')
+    act(() => emitSnapshot({ ...snapshot, layouts: [tabLayout(true, 'w1:p2')] }))
+    await waitFor(() => expect(screen.getByTestId('terminal-pane-w1:p1')).toHaveAttribute('data-active', 'true'))
+    expect(screen.queryByTestId('terminal-pane-w1:p2')).not.toBeInTheDocument()
   })
 })
 

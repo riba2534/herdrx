@@ -4,7 +4,7 @@ import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
+import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
@@ -787,7 +787,9 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     items.push(
       { id: 'split-right', label: '向右分屏', icon: <Columns2 size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { await client.call('pane.split', { workspace_id: pane.workspace_id, target_pane_id: pane.pane_id, direction: 'right', ratio: 0.5, focus: false }) }) },
       { id: 'split-down', label: '向下分屏', icon: <Rows2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.split', { workspace_id: pane.workspace_id, target_pane_id: pane.pane_id, direction: 'down', ratio: 0.5, focus: false }) }) },
-      { id: 'zoom', label: '最大化终端', icon: <Maximize2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.zoom', { pane_id: pane.pane_id, mode: 'toggle' }) }) },
+      currentLayout(snapshot, pane.tab_id)?.zoomed
+        ? { id: 'zoom', label: '还原分屏', icon: <Minimize2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.zoom', { pane_id: pane.pane_id, mode: 'off' }) }) }
+        : { id: 'zoom', label: '最大化终端', icon: <Maximize2 size={15}/>, onSelect: () => runAction(async () => { await client.call('pane.zoom', { pane_id: pane.pane_id, mode: 'toggle' }) }) },
       { id: 'right-click', label: pane.right_click_passthrough ? '恢复 Herdrx 右键菜单' : '将右键发送给终端（Shift+右键仍打开本菜单）', icon: <Menu size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { const value = pane.right_click_passthrough ? 'herdr' : 'pane'; await client.call('pane.input.set', { pane_id: pane.pane_id, right_click: value }); setPaneRightClickTarget(pane.pane_id, value) }) },
       { id: 'close', label: '关闭终端', icon: <Trash2 size={15}/>, danger: true, separatorBefore: true, onSelect: async () => { if (await confirm('关闭这个终端？其中运行的进程也会结束。', { title: '关闭终端', confirmLabel: '关闭终端' })) runAction(async () => { await client.call('pane.close', { pane_id: pane.pane_id }) }) } },
     )
@@ -866,7 +868,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const panes = layout?.panes.map((entry) => snapshot?.panes.find((pane) => pane.pane_id === entry.pane_id)).filter(Boolean) as Pane[] | undefined
   const activeTab = tabs.find((tab) => tab.tab_id === tabID)
   const activePane = panes?.find((pane) => pane.pane_id === paneID)
-  const visiblePanes = mobile ? panes?.filter((pane) => pane.pane_id === paneID) : panes
+  // Herdr keeps every pane's split rect while a tab is zoomed. The desktop then
+  // shows only the selected pane, across the whole tab, as a phone always does.
+  const zoomed = !mobile && Boolean(layout?.zoomed)
+  const visiblePanes = mobile || zoomed ? panes?.filter((pane) => pane.pane_id === paneID) : panes
+  // Take over the pane Herdr zooms, also when its zoom moves to another pane;
+  // picking a pane afterwards stays local, like every other selection here.
+  const zoomTarget = layout?.zoomed ? layout.focused_pane_id : ''
+  useEffect(() => {
+    if (!mobile && zoomTarget) setPaneID(zoomTarget)
+  }, [mobile, zoomTarget])
   const hostEntries = availableHosts.some((item) => item.id === hostID) ? availableHosts : [{ id: hostID, name: host?.name || '加载主机…' }, ...availableHosts]
   const retrySeconds = retryAt > now ? Math.max(1, Math.ceil((retryAt - now) / 1000)) : 0
   const disconnected = connection === 'degraded' || connection === 'offline'
@@ -972,7 +983,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>{herdrMayBeDown && host && <><p className="connection-overlay-hint">远程主机上的 Herdr 可能没有运行。</p><StartHerdrButton host={host} className="button-secondary" onStarted={(feedback) => { setNotice(feedback); client.retryNow() }}/></>}</div>}
         {visiblePanes?.map((pane) => {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
-          const sourceRect = layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
+          const sourceRect = zoomed ? layout?.area : layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
             <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} hostID={hostID} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} connected={connection === 'ready'} viewMode={paneModeFor(pane.pane_id)} onViewModeChange={(mode) => togglePaneMode(pane.pane_id, mode)} onPasteImages={(files) => void pasteImagesTo(pane.pane_id, files)} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} onDisplayChange={updateDisplay} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput} keyboardInset={keyboardInset}/>
           </div>
@@ -1055,6 +1066,7 @@ function currentLayout(snapshot: Snapshot | null, tabID: string): Layout | undef
 function paneStyle(layout: Layout, paneID: string) {
   const pane = layout.panes.find((item) => item.pane_id === paneID)
   if (!pane || !layout.area.width || !layout.area.height) return {}
+  if (layout.zoomed) return { left: 0, top: 0, width: '100%', height: '100%' }
   // Herdr's layout includes terminal-cell-sized separator gaps. Let each web
   // pane meet its neighbour; the CSS border supplies a single-pixel divider.
   const right = Math.min(layout.area.x + layout.area.width, ...layout.panes
