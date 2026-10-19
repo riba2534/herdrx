@@ -903,7 +903,10 @@ describe('workbench pane zoom', () => {
     call.mockClear()
     press('b', { ctrlKey: true })
     press('l')
-    expect(await screen.findByTestId('terminal-pane-w1:p2')).toHaveAttribute('data-active', 'true')
+    const picked = await screen.findByTestId('terminal-pane-w1:p2')
+    expect(picked).toHaveAttribute('data-active', 'true')
+    // Herdr 只把被放大的 pane 调成整块区域，本地换到的 pane 仍是分屏尺寸。
+    expect(picked).toHaveAttribute('data-source-size', '60x40')
     expect(screen.queryByTestId('terminal-pane-w1:p1')).not.toBeInTheDocument()
     // pane.zoom / pane.focus 会把原生 Herdr 窗口也切过去，本地换 pane 不该调用。
     expect(paneCalls()).toEqual([])
