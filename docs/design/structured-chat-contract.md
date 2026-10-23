@@ -63,18 +63,23 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 - **不返回任何用户 prompt 预览**；
 - 候选列表本身不构成对会话内容的读取。
 
-### 3.2 禁止自动绑定（纠正）
+### 3.2 禁止用候选自动绑定；`verified` 只来自 snapshot 证据
 
 **禁止"取 cwd 对应目录下 mtime 最新的文件"作为自动绑定。** 即使候选集合里只剩一个文件，
-服务端也**不得**自动认领：`messages` 保持 `[]`，由用户在列表里显式选择。
+服务端也**不得**自动认领：没有 hook 证据时 `messages` 保持 `[]`，由用户在列表里显式选择。
+目录名编码、pid 和 mtime 都不是绑定。
 
 - 用户操作文案固定为 **"选择此终端的会话记录"**。不要写成"已自动识别""检测到会话"这类
   暗示服务端已经确定归属的措辞。
 - 选择不是任意路径权限：`session` 只是一个不透明 id，服务端把它解析回自己已经认定过的
   那一个文件；客户端无法用它指向别处。
-- 自动绑定 `binding: 'verified'` 在契约中预留，**本期不得产生**。它要求严格且已验证的
-  pane/provider 会话证据（例如 agent hook 上报属于该 pane 的 session_id + transcript_path）。
-  herdrx 目前没有这类证据源，凭空返回 `verified` 就是臆造绑定。
+- `binding: 'verified'` 只在请求没有 `session`、且服务端 snapshot 的 `pane.agent_session`
+  （`kind` 为 `id` 或 `path`）指向**一个**文件，并且该文件里解码出的 cwd 与 pane cwd
+  精确相等时返回。证据里的 agent 必须与本 pane 的读取源一致。`kind=id` 的值不能含
+  `/`、`\` 或 NUL，也不能是 `.` / `..`。`kind=path` 只接受相对路径，拒绝绝对路径、
+  `..` 段和反斜杠，并且必须通过既有的 `transcriptRelAllowed`。文件不存在、cwd 不一致
+  或页面不支持时不返回 `verified`，改列候选。Cursor / Gemini 的 `kind=id` 没有单独的
+  相对路径，不扫目录树去找它。候选仍然不含 prompt 预览和路径。
 
 ### 3.3 目录名编码不能证明 cwd 归属（纠正）
 
@@ -97,7 +102,7 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
 | 不支持（agent / transport / cwd / 日志根 / 内部错误） | `supported:false` + `reason` + `messages:[]` |
 | supported，无 `session` | `supported:true` + `candidates` + `messages:[]`；候选为空时 `reason:'no_session_candidates'` |
 | supported，`session` 失效 | `supported:true` + `reason:'session_unavailable'` + 重新给出的 `candidates` + `messages:[]` + `reset:true` |
-| supported，已绑定 | `supported:true` + `messages` + `agent` + `session_id` + `binding:'selected'` + 游标 |
+| supported，已绑定 | `supported:true` + `messages` + `agent` + `session_id` + `binding:'selected'` 或 `'verified'` + 游标 |
 
 `reason` 取值是闭集合，见类型文件 `CHAT_REASONS`。文件为空时 `messages: []` 且无 `reason`——
 那是正常的空会话，不是降级。

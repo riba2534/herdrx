@@ -75,17 +75,22 @@ const (
 	ChatReasonInternalError        = "internal_error"
 )
 
-// 绑定来源。本期只允许 `selected`：即使候选只剩一个也**不自动认领**。
-// `verified` 在契约里预留但本期不得产生 —— herdrx 目前没有 hook 级别的 pane/provider
-// 会话证据源，凭空返回 verified 就是臆造绑定。
-const ChatBindingSelected = "selected"
+// 绑定来源。`selected` 只来自用户点选的不透明 session。`verified` 只来自
+// snapshot 里的 agent_session，并且对应文件的记录 cwd 与 pane cwd 一致。
+// 候选只剩一个、mtime 或目录名编码都不会产生绑定。
+const (
+	ChatBindingSelected = "selected"
+	ChatBindingVerified = "verified"
+)
 
 // TranscriptScope 是服务端自己取到的 pane 事实。agent 与 cwd 都来自
 // `endpoint.Snapshot`，**绝不接受客户端传入** —— 否则客户端可以谎报 cwd 去读别的项目。
+// Evidence 同样只来自 snapshot 的 agent_session，请求里没有 session 时才使用。
 type TranscriptScope struct {
-	PaneID string
-	Agent  string
-	CWD    string
+	PaneID   string
+	Agent    string
+	CWD      string
+	Evidence *AgentSession
 }
 
 // TranscriptRequest 是三个不透明值的组合。客户端只回传，不解析、不构造、不缓存成路径。
@@ -334,6 +339,9 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return transcriptDegrade(ChatReasonCWDUnavailable, agent)
 	}
 	if request.Session == "" {
+		if page, ok := transcriptFromEvidence(ctx, files, codec, scope, request); ok {
+			return page
+		}
 		return transcriptCandidates(ctx, files, codec, agent, cwd)
 	}
 	parts, ok := codec.open(request.Session, 3)
