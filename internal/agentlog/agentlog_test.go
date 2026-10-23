@@ -398,36 +398,54 @@ func TestBlockMarshalsContractShape(t *testing.T) {
 	}
 }
 
-func TestCursorStaysUnsupportedUntilVerifiedDecoder(t *testing.T) {
-	// 仓库里没有 Cursor 的磁盘样本，解码器注释也没有给出已验证的字段形状。
-	// 在两者出现之前，cursor 必须保持不支持，也不能把终端文本解成带 role 的记录。
-	if Supported("cursor") {
-		t.Fatal("cursor must stay unsupported until a verified on-disk decoder exists")
+func TestCursorAgentTranscriptUsesTheProvenShape(t *testing.T) {
+	// 形状逐字来自 franken_agent_detection cursor.rs 的 agent_transcript_tests。
+	const userLine = `{"role":"user","message":{"content":[{"type":"text","text":"find the bug"}]}}`
+	const assistantLine = `{"role":"assistant","message":{"content":[{"type":"text","text":"on it"},{"type":"tool_use","name":"Grep","input":{"pattern":"bug"}}]}}`
+	decoded := DecodeRange(LineContext{Agent: AgentCursor, SessionID: "sess-1"}, []byte(userLine+"\n"+assistantLine+"\nthis is not json\n"), 0)
+	if decoded.Failure != nil || decoded.Skipped != 1 {
+		t.Fatalf("decode = %+v", decoded)
 	}
+	records := UpsertEntries(decoded.Entries)
+	if len(records) != 2 || records[0].Role != RoleUser || records[0].Blocks[0].Text != "find the bug" {
+		t.Fatalf("user record = %+v", records)
+	}
+	if records[1].Role != RoleAssistant || records[1].Blocks[0].Text != "on it" || records[1].Blocks[1].Type != BlockToolCall || records[1].Blocks[1].Name != "Grep" {
+		t.Fatalf("assistant record = %+v", records[1])
+	}
+	// 终端文本、没有 role 的 Composer bubble，都不是这条 JSONL。
 	for _, line := range []string{
-		`{"role":"user","content":"hello"}`,
-		`{"type":"user","message":{"role":"user","content":"hello"},"cwd":"/srv/app"}`,
 		"user: hello from the terminal",
+		`{"type":"user","text":"composer bubble"}`,
+		`{"role":"user","message":{"content":[]}}`,
 	} {
-		record, skipped := DecodeLine(LineContext{Agent: "cursor", SessionID: "s"}, line)
-		if record != nil || skipped {
-			t.Fatalf("cursor line decoded without a verified decoder: line=%q record=%+v skipped=%v", line, record, skipped)
+		record, skipped := DecodeLine(LineContext{Agent: AgentCursor, SessionID: "sess-1"}, line)
+		if record != nil {
+			t.Fatalf("%q became a cursor record: %+v", line, record)
+		}
+		if line == "user: hello from the terminal" && !skipped {
+			t.Fatal("terminal text was treated as a valid cursor record")
 		}
 	}
-	ranged := DecodeRange(LineContext{Agent: "cursor", SessionID: "s"}, []byte("user: pane text\n"), 0)
-	if len(ranged.Entries) != 1 || ranged.Entries[0].Record != nil || ranged.Skipped != 0 || ranged.Failure != nil {
-		t.Fatalf("terminal text became a cursor transcript: %+v", ranged)
+	if CursorTranscriptRel("globalStorage/state.vscdb") || CursorTranscriptRel("proj/agent-transcripts/sid/subagents/sub/sub.jsonl") || CursorTranscriptRel("proj/agent-transcripts/sid/notes.jsonl") {
+		t.Fatal("non-primary cursor path was accepted")
+	}
+	if CursorWorkspacePath([]byte(`{"workspacePath":"Users-ibrahim-workspace-foo"}`)) != "" {
+		t.Fatal("slug was accepted as a workspace path")
+	}
+	if got := CursorWorkspacePath([]byte(`{"workspacePath":"/Users/ibrahim/workspace/foo"}`)); got != "/Users/ibrahim/workspace/foo" {
+		t.Fatalf("workspace = %q", got)
 	}
 }
 
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
-	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH} {
+	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini} {
 		if !Supported(agent) {
 			t.Fatalf("%s should be supported", agent)
 		}
 	}
-	// 与 claude/codex 同格式族的这些 agent 在各自的 decoder 与日志根被真实验证前一律不支持。
-	for _, agent := range []string{"openclaude", "grok", "omp", "gemini", "cursor", "", "CLAUDE", "DSH"} {
+	// 这些 harness 即使长得像 Claude 或 Pi，也没有在这里落地各自的 decoder。
+	for _, agent := range []string{"openclaude", "grok", "omp", "pi", "copilot", "opencode", "", "CLAUDE", "DSH"} {
 		if Supported(agent) {
 			t.Fatalf("%q must not be claimed as supported", agent)
 		}

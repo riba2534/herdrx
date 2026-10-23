@@ -382,15 +382,14 @@ func (f refusingTranscriptFS) Read(context.Context, transcriptRootKind, []transc
 	return nil, nil
 }
 
-func TestCursorPaneStaysUnsupportedUntilVerifiedDecoder(t *testing.T) {
-	if agentlog.Supported("cursor") {
-		t.Fatal("cursor must stay unsupported until a verified on-disk decoder exists")
-	}
-	page := readTranscript(context.Background(), refusingTranscriptFS{t: t}, newTranscriptCodecForTest(t), TranscriptScope{
-		PaneID: "p", Agent: "cursor", CWD: "/srv/app",
-	}, TranscriptRequest{})
-	if page.Supported || page.Reason != ChatReasonUnsupportedAgent || page.Agent != "" || len(page.Messages) != 0 || len(page.Candidates) != 0 {
-		t.Fatalf("cursor pane = %+v", page)
+func TestUnprovenHarnessesStayUnsupported(t *testing.T) {
+	for _, agent := range []string{"grok", "omp", "openclaude"} {
+		page := readTranscript(context.Background(), refusingTranscriptFS{t: t}, newTranscriptCodecForTest(t), TranscriptScope{
+			PaneID: "p", Agent: agent, CWD: "/srv/app",
+		}, TranscriptRequest{})
+		if page.Supported || page.Reason != ChatReasonUnsupportedAgent || len(page.Messages) != 0 {
+			t.Fatalf("%s pane = %+v", agent, page)
+		}
 	}
 }
 
@@ -403,7 +402,7 @@ func TestTranscriptDegradesForUnknownAgentAndMissingCWD(t *testing.T) {
 	if shell.Supported || shell.Reason != ChatReasonNoAgent {
 		t.Fatalf("shell pane = %+v", shell)
 	}
-	other := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "gemini", CWD: "/srv"}, TranscriptRequest{})
+	other := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "omp", CWD: "/srv"}, TranscriptRequest{})
 	if other.Supported || other.Reason != ChatReasonUnsupportedAgent {
 		t.Fatalf("unknown agent = %+v", other)
 	}
