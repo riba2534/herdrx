@@ -370,6 +370,30 @@ func TestTranscriptRefusesSymlinkedParentDirectory(t *testing.T) {
 	}
 }
 
+type refusingTranscriptFS struct{ t *testing.T }
+
+func (f refusingTranscriptFS) List(context.Context, transcriptRootKind, string, int) ([]transcriptEntry, error) {
+	f.t.Fatal("cursor transcript listed files")
+	return nil, nil
+}
+
+func (f refusingTranscriptFS) Read(context.Context, transcriptRootKind, []transcriptReadSpec) ([]transcriptReadResult, error) {
+	f.t.Fatal("cursor transcript read files")
+	return nil, nil
+}
+
+func TestCursorPaneStaysUnsupportedUntilVerifiedDecoder(t *testing.T) {
+	if agentlog.Supported("cursor") {
+		t.Fatal("cursor must stay unsupported until a verified on-disk decoder exists")
+	}
+	page := readTranscript(context.Background(), refusingTranscriptFS{t: t}, newTranscriptCodecForTest(t), TranscriptScope{
+		PaneID: "p", Agent: "cursor", CWD: "/srv/app",
+	}, TranscriptRequest{})
+	if page.Supported || page.Reason != ChatReasonUnsupportedAgent || page.Agent != "" || len(page.Messages) != 0 || len(page.Candidates) != 0 {
+		t.Fatalf("cursor pane = %+v", page)
+	}
+}
+
 func TestTranscriptDegradesForUnknownAgentAndMissingCWD(t *testing.T) {
 	home := t.TempDir()
 	codec := newTranscriptCodecForTest(t)

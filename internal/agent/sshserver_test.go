@@ -256,7 +256,21 @@ func TestUnpairedExecDenied_HerdrStageImageAndShell(t *testing.T) {
 		_ = sess.Close()
 	}
 
-	// 5. PTY 与 Shell 模式拒绝
+	// 5. herdrx-transcript 在协议层拒绝，未配对不能读会话记录
+	{
+		sess, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("create session: %v", err)
+		}
+		err = sess.Start(TranscriptCommand)
+		if err == nil {
+			_ = sess.Close()
+			t.Fatalf("expected transcript read to fail at protocol level (Session.Start) when unpaired")
+		}
+		_ = sess.Close()
+	}
+
+	// 6. PTY 与 Shell 模式拒绝
 	{
 		sess, err := client.NewSession()
 		if err != nil {
