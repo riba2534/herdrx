@@ -107,6 +107,15 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
   只按游标续读，不重新核对证据。
 - 浏览器拿到的 snapshot 不含 `agent_session`（它可能带远端绝对路径），只在服务端使用。
 
+另有一条直接读取路径（先于上面的候选匹配）：
+
+- `source` 以 `herdr:` 开头（agy 的集成上报 `herdr:antigravity_cli`），`agent` 等于本 pane 的读取源。
+- `kind: id`：Claude 与 DSH 按固定规则算出相对路径；值不能含 `/`、`\`、NUL，也不能是 `.` / `..`。
+  Cursor / Gemini 的 id 没有唯一相对路径，不扫目录树，交给上面的候选匹配。
+- `kind: path`：只接受相对日志根的路径，拒绝绝对路径、`..` 段和反斜杠，并且必须通过 `transcriptRelAllowed`。
+- 文件里解码出的 cwd 必须与 pane cwd 精确相等，否则不算命中，回到候选匹配。
+- 命中时返回的形状与上面相同（`verified` + `session` + `candidates`）。
+
 ### 3.3 目录名编码不能证明 cwd 归属（纠正）
 
 Claude 的日志目录名编码规则是「每个非字母数字字符替换为一个 `-`，**不折叠连续符号**」

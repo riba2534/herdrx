@@ -86,6 +86,7 @@ const (
 
 // TranscriptScope 是服务端自己取到的 pane 事实。agent 与 cwd 都来自
 // `endpoint.Snapshot`，**绝不接受客户端传入** —— 否则客户端可以谎报 cwd 去读别的项目。
+// Evidence 同样只来自 snapshot 的 agent_session，请求里没有 session 时才使用。
 type TranscriptScope struct {
 	PaneID string
 	Agent  string
@@ -342,6 +343,9 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return transcriptDegrade(ChatReasonCWDUnavailable, agent)
 	}
 	if request.Session == "" {
+		if page, ok := transcriptFromEvidence(ctx, files, codec, scope, request); ok {
+			return page
+		}
 		return transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence)
 	}
 	parts, ok := codec.open(request.Session, 3)

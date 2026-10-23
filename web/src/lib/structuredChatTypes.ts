@@ -136,8 +136,8 @@ export const CHAT_BINDINGS = ['selected', 'verified'] as const
 export type ChatBinding = (typeof CHAT_BINDINGS)[number]
 // 'selected' —— 用户在候选列表里显式选择了这条记录。
 // 'verified' —— 请求未带 `session` 时，Herdr 集成为该 pane 上报的 agent_session
-//              （source `herdr:<agent>`）恰好指向候选集合里的一份文件，服务端直接读取它。
-//              没有这条证据（例如未安装 Herdr 的 Agent 集成）时不产生，回退为用户手选。
+//              （source `herdr:*`）指向一份文件，且记录 cwd 与 pane cwd 一致，服务端直接读取它。
+//              单个候选、mtime 和目录名编码都不会产生这个绑定；没有这条证据时回退为用户手选。
 
 /**
  * 降级原因，闭集合。`supported` 的真假与 `reason` 的取值必须一一对应，不允许自造字符串。
@@ -209,7 +209,7 @@ export type StructuredChatQuery = {
  *    候选为空时 `reason: 'no_session_candidates'`。
  * 3. `supported: true` 且 `session` 失效 → `reason: 'session_unavailable'`，
  *    同时重新返回 `candidates` 让用户重选，`messages: []`，`reset: true`。
- * 4. `supported: true` 且已绑定 → `messages` 为该页记录，`binding: 'selected'`，
+ * 4. `supported: true` 且已绑定 → `messages` 为该页记录，`binding: 'selected'` 或 `'verified'`，
  *    附带 `agent` / `session_id` / 游标。文件为空时 `messages: []`，这不是错误。
  * 5. `supported: true`、无 `session` 且 Herdr 证据命中 → 同 4，但 `binding: 'verified'`，
  *    另带 `session`（命中的候选 id，之后续读用它）与完整 `candidates`。
