@@ -27,8 +27,11 @@ import (
 )
 
 // 支持结构化记录的 Agent，闭集合。契约里同样是闭集合：其余 Agent（含与 claude/codex
-// 同格式族的 openclaude / grok / omp）在各自的 decoder、日志根目录与 cwd 匹配规则被真实
-// 会话日志验证之前一律不支持，不猜、不通配。
+// 同格式族的 openclaude / grok / omp，以及 Cursor）在各自的 decoder、日志根目录与 cwd
+// 匹配规则被真实会话日志验证之前一律不支持，不猜、不通配。
+//
+// Cursor 目前没有解码器：本仓库没有可核对的磁盘样本，现有解码器注释也没有给出已验证的
+// 记录形状。在两者出现之前不得猜格式，也不得把 pane.read 的终端文本当成带 role 的会话记录。
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"

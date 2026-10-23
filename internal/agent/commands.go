@@ -45,6 +45,12 @@ func ParseCommand(raw string) (CommandSpec, error) {
 	if raw == "herdr --version" || raw == "herdr api schema --json" {
 		return CommandSpec{Args: fields}, nil
 	}
+	// Same shape as a fixed Herdr method such as pane.read: the grammar accepts
+	// this one name and nothing else. The daemon runs the bounded reader itself.
+	// Paths stay on stdin, so the command line cannot become a shell or an exec.
+	if raw == TranscriptCommand {
+		return CommandSpec{Internal: "transcript"}, nil
+	}
 	if len(fields) == 2 && fields[0] == "herdrx-terminal-geometry" {
 		pid, err := strconv.Atoi(fields[1])
 		if err != nil || pid <= 1 || pid > 1<<30 || strconv.Itoa(pid) != fields[1] {

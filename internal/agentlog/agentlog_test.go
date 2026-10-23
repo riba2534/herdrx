@@ -398,6 +398,28 @@ func TestBlockMarshalsContractShape(t *testing.T) {
 	}
 }
 
+func TestCursorStaysUnsupportedUntilVerifiedDecoder(t *testing.T) {
+	// 仓库里没有 Cursor 的磁盘样本，解码器注释也没有给出已验证的字段形状。
+	// 在两者出现之前，cursor 必须保持不支持，也不能把终端文本解成带 role 的记录。
+	if Supported("cursor") {
+		t.Fatal("cursor must stay unsupported until a verified on-disk decoder exists")
+	}
+	for _, line := range []string{
+		`{"role":"user","content":"hello"}`,
+		`{"type":"user","message":{"role":"user","content":"hello"},"cwd":"/srv/app"}`,
+		"user: hello from the terminal",
+	} {
+		record, skipped := DecodeLine(LineContext{Agent: "cursor", SessionID: "s"}, line)
+		if record != nil || skipped {
+			t.Fatalf("cursor line decoded without a verified decoder: line=%q record=%+v skipped=%v", line, record, skipped)
+		}
+	}
+	ranged := DecodeRange(LineContext{Agent: "cursor", SessionID: "s"}, []byte("user: pane text\n"), 0)
+	if len(ranged.Entries) != 1 || ranged.Entries[0].Record != nil || ranged.Skipped != 0 || ranged.Failure != nil {
+		t.Fatalf("terminal text became a cursor transcript: %+v", ranged)
+	}
+}
+
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
 	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH} {
 		if !Supported(agent) {
