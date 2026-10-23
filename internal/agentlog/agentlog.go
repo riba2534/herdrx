@@ -27,21 +27,29 @@ import (
 )
 
 // 支持结构化记录的 Agent，闭集合。契约里同样是闭集合：其余 Agent（含与 claude/codex
-// 同格式族的 openclaude / grok / omp，以及 Cursor）在各自的 decoder、日志根目录与 cwd
-// 匹配规则被真实会话日志验证之前一律不支持，不猜、不通配。
+// 同格式族的 openclaude / grok / omp）在各自的 decoder、日志根目录与 cwd 匹配规则被
+// 该 connector 自己的测试样本验证之前一律不支持，不猜、不通配。
 //
-// Cursor 目前没有解码器：本仓库没有可核对的磁盘样本，现有解码器注释也没有给出已验证的
-// 记录形状。在两者出现之前不得猜格式，也不得把 pane.read 的终端文本当成带 role 的会话记录。
+// Cursor 只解 `agent-transcripts/<sid>/<sid>.jsonl` 这一份已被测试钉住的形状。
+// Composer 的 state.vscdb 不是这份 JSONL，不能拿来冒充。Gemini 只解 session 文件里
+// 测试钉住的消息；工作区只认测试里的明确路径标记，不用目录哈希猜测。
+// pane.read 的终端文本永远不是会话记录。
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
 	// AgentDSH 是 DeepSeek Harness。只支持 v3 会话格式代际，见 DSHFormatVersion。
 	AgentDSH = "dsh"
+	// AgentCursor 是 Cursor Agent 的 JSONL transcript。形状来自
+	// franken_agent_detection cursor.rs 的 agent_transcript_tests。
+	AgentCursor = "cursor"
+	// AgentGemini 是 Gemini CLI 的 session 文件。形状来自 connector_gemini.rs
+	// 与 gemini.rs 的 session fixture。
+	AgentGemini = "gemini"
 )
 
 // Supported 报告该 agent 是否在本期支持范围内。
 func Supported(agent string) bool {
-	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH
+	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH || agent == AgentCursor || agent == AgentGemini
 }
 
 // 记录角色，闭集合。`tool` 不是 provider 的原生角色，而是派生角色：

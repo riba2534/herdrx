@@ -37,7 +37,7 @@ func TestTranscriptReaderListsAndReadsFixedRoot(t *testing.T) {
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// A Cursor directory must not become a readable root just because it exists.
+	// Cursor 的固定根可以列目录，但不能因此读到根外面的文件。
 	cursorPath := filepath.Join(home, ".cursor", "projects", "secret.jsonl")
 	if err := os.MkdirAll(filepath.Dir(cursorPath), 0o700); err != nil {
 		t.Fatal(err)
@@ -45,10 +45,23 @@ func TestTranscriptReaderListsAndReadsFixedRoot(t *testing.T) {
 	if err := os.WriteFile(cursorPath, []byte("secret-cursor-log"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	outside := filepath.Join(home, "outside.jsonl")
+	if err := os.WriteFile(outside, []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	cursor := readTranscriptRequest(t, home, `{"op":"list","agent":"cursor","depth":4}`)
-	if cursor.OK || cursor.Error != "unknown_agent" {
-		t.Fatalf("cursor root accepted: %+v", cursor)
+	if !cursor.OK {
+		t.Fatalf("cursor root = %+v", cursor)
+	}
+	for _, entry := range cursor.Entries {
+		if strings.Contains(entry.Rel, "outside") || strings.Contains(entry.Rel, home) {
+			t.Fatalf("cursor list escaped the root: %+v", cursor.Entries)
+		}
+	}
+	grok := readTranscriptRequest(t, home, `{"op":"list","agent":"grok","depth":1}`)
+	if grok.OK || grok.Error != "unknown_agent" {
+		t.Fatalf("unproven agent accepted: %+v", grok)
 	}
 
 	rel := agentlog.ClaudeProjectDir(cwd)

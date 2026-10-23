@@ -20,12 +20,13 @@
  * 支持结构化记录的 Agent，闭集合。
  * 其余 Agent（含与 claude/codex 同格式族的 openclaude / grok / omp）在各自的 decoder、
  * 日志根目录与 cwd 匹配规则被真实会话日志验证之前，一律 `supported: false`，不猜、不通配。
+ * `cursor` 与 `gemini` 只覆盖各自 connector 测试钉住的会话文件，不合并到别的 harness。
  *
  * `dsh`（DeepSeek Harness）与上面两类不同：它的会话日志是项目目录/会话目录下的 JSONL
  * （压缩时是 zstd 帧），首行 header 带精确 `cwd` 与 session `id`。它进入这个闭集合**不代表**
  * 可以直接从窗口标题推断 pane 正在运行 DSH——见 `CHAT_SOURCES`。
  */
-export const CHAT_AGENTS = ['claude', 'codex', 'dsh'] as const
+export const CHAT_AGENTS = ['claude', 'codex', 'dsh', 'cursor', 'gemini'] as const
 export type ChatAgent = (typeof CHAT_AGENTS)[number]
 
 /**
@@ -33,7 +34,7 @@ export type ChatAgent = (typeof CHAT_AGENTS)[number]
  * 不能声明 pane 正在运行什么。
  *
  * 现行契约只接受 `source=dsh`，且只在 snapshot 的 `pane.agent` 为空或不认识时才会生效
- * （已识别的 claude / codex 不允许被客户端覆盖）。省略该参数 = 按服务端从 snapshot 得到的
+ * （已识别的 claude / codex / cursor / gemini 不允许被客户端覆盖）。省略该参数 = 按服务端从 snapshot 得到的
  * agent 读取。请求里**永远不允许**出现 `agent=` 之类的客户端声明。
  *
  * 客户端不得据此推断 Agent 身份：读取源只是用户对"读哪一类日志"的显式选择。
