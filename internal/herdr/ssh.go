@@ -72,7 +72,7 @@ type SSHEndpoint struct {
 	socketPath string
 	extraClose io.Closer
 
-	// 仅缓存已知 transport 策略限制；瞬时读取失败不能禁用共享主机的会话读取。
+	// 仅缓存「接入方式本身没有读取器」。命令失败、超时和空输出不能禁用共享主机的会话读取。
 	// 见 transcript_ssh.go。
 	transcriptMu          sync.Mutex
 	transcriptUnsupported bool

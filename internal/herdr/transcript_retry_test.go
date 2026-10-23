@@ -24,13 +24,17 @@ func (*transcriptRetryTransport) Close() error { return nil }
 
 type transcriptRetrySession struct {
 	output  string
+	command string
 	waitErr error
 	closed  atomic.Bool
 	onWait  func()
 }
 
 func (s *transcriptRetrySession) Output(string) ([]byte, error) { return []byte(s.output), s.waitErr }
-func (*transcriptRetrySession) Start(string) error              { return nil }
+func (s *transcriptRetrySession) Start(command string) error {
+	s.command = command
+	return nil
+}
 func (s *transcriptRetrySession) Wait() error {
 	if s.onWait != nil {
 		s.onWait()

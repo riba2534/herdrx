@@ -239,7 +239,7 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    越界拒绝写一条 `transcript.denied`。
 8. **不进 RPC 白名单**：见 §1。
 
-进程内和远端实现共用同一套语义；Tailcat 复用 SSH 通道时自动获得同样能力，不额外放权。
+进程内和远端实现共用同一套语义。Tailcat 的 access daemon 没有任意 exec，也不接受 shell 或 python 读取器。结构化读取是白名单命令 `herdrx-transcript`（与 `pane.read` 一样只允许这一个固定名字，命令行不带路径）。请求走 stdin，daemon 在进程内按与现有读取器相同的边界执行：固定日志根、逐段拒绝符号链接、单次字节数有界，响应沿用 `TranscriptPage`，不回传 cwd。命令执行失败可以重试，不得把这台主机缓存成永久不支持；只有接入方式本身没有该能力时才返回 `unsupported_transport`。SSH 主机继续使用原有受限读取器。
 
 ---
 
@@ -292,6 +292,9 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 7. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
    一律拒绝；"未 seeded 的 header 却带继承标记"只有读完所有帧才能发现，与有界读取预算冲突，
    **未强制**。不得声称该不变式已完整验证。
+8. **Cursor**——仓库里没有可核对的磁盘记录样本，解码器注释也没有给出已验证的字段形状。
+   在有 fixture 或注释证明之前，`cursor` 保持 `unsupported_agent`。不得用 `pane.read`
+   终端文本填充 `messages`。
 
 在这些点被真实隔离会话验证之前，正确行为是返回 §4 的降级形状，而不是返回看起来合理的假记录。
 

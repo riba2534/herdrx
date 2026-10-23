@@ -984,6 +984,11 @@ func (s *PermanentTailcatServer) handleSession(ctx context.Context, newChan ssh.
 			} else {
 				_, _ = io.WriteString(ch, remotePath+"\n")
 			}
+		case "transcript":
+			if err := agent.ServeTranscript(ch, ch); err != nil {
+				_, _ = io.WriteString(ch.Stderr(), "transcript reader failed\n")
+				status = 1
+			}
 		default:
 			// 真实执行配置中指定的 HerdrBin 绝对路径！
 			base := agent.ExecutableCommand(spec, s.herdrBin)

@@ -25,7 +25,7 @@ type TranscriptDiagnostics interface {
 // Transcript 实现 `TranscriptEndpoint`。
 //
 // 本机之外的三种接入共用同一个 `*SSHEndpoint`：原生 SSH 与 Tailcat 走 `cryptoSSHClient`，
-// 系统 OpenSSH 走 ControlMaster 上的 exec。只缓存已知 transport 的能力限制；
+// 系统 OpenSSH 走 ControlMaster 上的 exec。只缓存「这个接入方式根本没有读取器」；
 // 超时、空输出、命令失败均可重试，不能污染同一主机其他 pane 的读取能力。
 func (e *SSHEndpoint) Transcript(ctx context.Context, scope TranscriptScope, request TranscriptRequest) (TranscriptPage, error) {
 	codec, err := transcriptTokens()
@@ -179,12 +179,29 @@ type transcriptRemoteResponse struct {
 	Reads   []transcriptRemoteResult `json:"reads"`
 }
 
+// transcriptTailcatCommand 是 access daemon 白名单里的固定命令，与 pane.read
+// 同属「只允许这一个名字」。命令行不带路径、不经过 shell，也不投送 python。
+// 请求仍走 stdin，应答仍是下面的 JSON 协议。
+const transcriptTailcatCommand = "herdrx-transcript"
+
+// transcriptCommandFor 选出这个接入方式允许使用的读取器。
+// 空 transport 与 ssh 继续用原来的 python 读取器。tailcat 只用白名单命令。
+// 其他接入方式没有安全的读取器，这才是可以缓存的能力缺失。
+func transcriptCommandFor(transport string) (string, bool) {
+	switch transport {
+	case "tailcat":
+		return transcriptTailcatCommand, true
+	case "", "ssh":
+		return transcriptReaderCommand, true
+	default:
+		return "", false
+	}
+}
+
 func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcriptRemoteRequest) (transcriptRemoteResponse, error) {
-	if e.host.Transport == "tailcat" {
-		// Tailcat 的 access daemon 只接受严格白名单的命令语法（herdr 与少量内部子命令），
-		// 没有任意 exec，也不允许把自定义读取器投送过去。所以这里给明确的不支持，
-		// 而不是把 `python3 -c ...` 发过去等它拒绝。
-		e.markTranscriptUnsupported("tailcat agent command grammar has no arbitrary exec")
+	command, ok := transcriptCommandFor(e.host.Transport)
+	if !ok {
+		e.markTranscriptUnsupported("transport has no whitelisted transcript reader")
 		return transcriptRemoteResponse{}, errTranscriptTransport
 	}
 	payload, err := json.Marshal(request)
@@ -209,7 +226,12 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 	}
 	var stderr limitedSSHLog
 	session.setStderr(&stderr)
-	if err := session.Start(transcriptReaderCommand); err != nil {
+	if err := session.Start(command); err != nil {
+		if e.host.Transport == "tailcat" {
+			// 旧 daemon 拒绝未知命令时必须可以重试：更新 CLI 后同一条连接再读即可。
+			// 不要把它记成「这台主机永远不能读会话记录」。
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		return transcriptRemoteResponse{}, err
 	}
 	go func() {
@@ -232,6 +254,9 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 		return transcriptRemoteResponse{}, fmt.Errorf("会话记录读取中断，请重试")
 	}
 	if waitErr != nil {
+		if e.host.Transport == "tailcat" {
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请确认 python3 可用后重试")
 	}
 	response := transcriptRemoteResponse{}
