@@ -49,6 +49,10 @@ func (f *localTranscriptFS) rootParts(root transcriptRootKind) ([]string, error)
 	case transcriptRootDSH:
 		// 固定根，来自上游 `dshHomePath('sessions')`；自定义 DSH_HOME 不在本期支持范围。
 		return []string{".dsh", "sessions"}, nil
+	case transcriptRootCursor:
+		return []string{".cursor", "projects"}, nil
+	case transcriptRootGemini:
+		return []string{".gemini", "tmp"}, nil
 	default:
 		return nil, errTranscriptRoot
 	}

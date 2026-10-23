@@ -292,9 +292,11 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 7. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
    一律拒绝；"未 seeded 的 header 却带继承标记"只有读完所有帧才能发现，与有界读取预算冲突，
    **未强制**。不得声称该不变式已完整验证。
-8. **Cursor**——仓库里没有可核对的磁盘记录样本，解码器注释也没有给出已验证的字段形状。
-   在有 fixture 或注释证明之前，`cursor` 保持 `unsupported_agent`。不得用 `pane.read`
-   终端文本填充 `messages`。
+8. **Cursor Composer 的 `state.vscdb` 与其它未落地 connector**——Cursor 只读取
+   `agent-transcripts/<sid>/<sid>.jsonl`，工作区只认 `.workspace-trusted` 的
+   `workspacePath`。Gemini 只读取 `session-*.json[l]`，工作区只认测试钉住的路径标记。
+   `openclaude` / `grok` / `omp` 以及没有按各自 fixture 落地的 harness 仍是
+   `unsupported_agent`。不得用 `pane.read` 终端文本填充 `messages`。
 
 在这些点被真实隔离会话验证之前，正确行为是返回 §4 的降级形状，而不是返回看起来合理的假记录。
 

@@ -85,6 +85,9 @@ func decodeLine(context LineContext, line string) lineOutcome {
 		return lineOutcome{record: record, skipped: skipped}
 	case AgentDSH:
 		return decodeDSHLine(context, line)
+	case AgentCursor:
+		record, skipped := decodeCursorLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
 	default:
 		return lineOutcome{}
 	}

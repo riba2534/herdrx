@@ -52,6 +52,10 @@ const (
 	transcriptMaxListEntries = 500
 	// Codex 会话目录的最大递归深度（`sessions/YYYY/MM/DD/rollout-*.jsonl`）。
 	transcriptMaxCodexDepth = 4
+	// Cursor Agent transcript：`<project>/agent-transcripts/<sid>/<sid>.jsonl`。
+	transcriptMaxCursorDepth = 4
+	// Gemini：`<hash>/chats/session-*.json[l]`。
+	transcriptMaxGeminiDepth = 3
 	// 规范消息路径探测的总预算；未找到 response_item 时须扫完文件才能认定 event_msg。
 	transcriptCodexProbeMaxBytes = 8 << 20
 )
@@ -191,6 +195,8 @@ const (
 	transcriptRootClaude transcriptRootKind = "claude"
 	transcriptRootCodex  transcriptRootKind = "codex"
 	transcriptRootDSH    transcriptRootKind = "dsh"
+	transcriptRootCursor transcriptRootKind = "cursor"
+	transcriptRootGemini transcriptRootKind = "gemini"
 )
 
 func transcriptRootFor(agent string) transcriptRootKind {
@@ -199,6 +205,10 @@ func transcriptRootFor(agent string) transcriptRootKind {
 		return transcriptRootCodex
 	case agentlog.AgentDSH:
 		return transcriptRootDSH
+	case agentlog.AgentCursor:
+		return transcriptRootCursor
+	case agentlog.AgentGemini:
+		return transcriptRootGemini
 	}
 	return transcriptRootClaude
 }
@@ -297,6 +307,10 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 		}
 		expected, ok := dshRelForSession(cwd, sessionID, name)
 		return ok && expected == rel
+	case agentlog.AgentCursor:
+		return agentlog.CursorTranscriptRel(rel) && agentlog.CursorSessionID(rel) == sessionID
+	case agentlog.AgentGemini:
+		return agentlog.GeminiSessionRel(rel)
 	}
 	return false
 }
@@ -407,6 +421,12 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
+	case agentlog.AgentCursor:
+		// 项目目录名把分隔符折成 `-`，不能用来认 cwd。先列出主 transcript，
+		// 再用同级 `.workspace-trusted` 的 workspacePath 精确比对。
+		entries, err = files.List(ctx, root, "", transcriptMaxCursorDepth)
+	case agentlog.AgentGemini:
+		entries, err = files.List(ctx, root, "", transcriptMaxGeminiDepth)
 	default:
 		entries, err = files.List(ctx, root, "", transcriptMaxCodexDepth)
 	}
@@ -429,6 +449,10 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			if !keep && dshForeignGeneration(name) {
 				foreign = true
 			}
+		case agentlog.AgentCursor:
+			keep = agentlog.CursorTranscriptRel(entry.Rel)
+		case agentlog.AgentGemini:
+			keep = agentlog.GeminiSessionRel(entry.Rel)
 		default:
 			keep = agentlog.CodexSessionFile(name)
 		}
@@ -468,6 +492,28 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 				continue
 			}
 			shape := shapes[position]
+			if agent == agentlog.AgentCursor {
+				workspace, err := cursorWorkspace(ctx, files, entry.Rel)
+				if err != nil {
+					return nil, false, err
+				}
+				if workspace == "" {
+					continue
+				}
+				shape.CWD = workspace
+				shape.SessionID = agentlog.CursorSessionID(entry.Rel)
+			}
+			if agent == agentlog.AgentGemini {
+				document, err := readGeminiDocument(ctx, files, entry.Rel, result.Size)
+				if errors.Is(err, errTranscriptLimit) {
+					continue
+				}
+				if err != nil {
+					return nil, false, err
+				}
+				shape.CWD = document.CWD
+				shape.SessionID = document.SessionID
+			}
 			// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
 			if shape.CWD != cwd {
 				continue
@@ -476,6 +522,12 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			switch agent {
 			case agentlog.AgentClaude:
 				sessionID = agentlog.SessionStem(baseName(entry.Rel))
+			case agentlog.AgentCursor:
+				sessionID = agentlog.CursorSessionID(entry.Rel)
+			case agentlog.AgentGemini:
+				if sessionID == "" {
+					continue
+				}
 			case agentlog.AgentDSH:
 				// 会话 id 只认 header；同时要求目录段**逐字**等于该 id 的规范编码 ——
 				// 这是「严格 canonical 目录规则」的一半，另一半由归属判定给出。
@@ -629,6 +681,9 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	if agent == agentlog.AgentDSH && agentlog.DSHCompressedSessionFile(baseName(rel)) {
 		return transcriptDSHCompressedMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
 	}
+	if agent == agentlog.AgentGemini {
+		return transcriptGeminiMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
+	}
 	root := transcriptRootFor(agent)
 	shapes, heads, err := transcriptShapes(ctx, files, root, agent, []string{rel})
 	if err != nil {
@@ -645,6 +700,17 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	shape := shapes[0]
+	if agent == agentlog.AgentCursor {
+		workspace, err := cursorWorkspace(ctx, files, rel)
+		if err != nil {
+			return transcriptDegradeFromError(err, agent)
+		}
+		if workspace == "" || workspace != cwd {
+			return transcriptSessionLost(ctx, files, codec, agent, cwd)
+		}
+		shape.CWD = workspace
+		shape.SessionID = sessionID
+	}
 	// 空文件（或还没有任何完整行）是正常的「空会话」，不是降级，也不能因此判定归属；
 	// 但只要文件里已经有完整记录，cwd 就必须精确相等 —— 这是归属的唯一证明。
 	empty := len(head.Data) == 0 || !hasCompleteLine(head.Data)
