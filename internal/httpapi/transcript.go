@@ -121,7 +121,7 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 		if cwd == "" {
 			cwd = strings.TrimSpace(pane.CWD)
 		}
-		scope := herdr.TranscriptScope{PaneID: paneID, Agent: agent, CWD: cwd}
+		scope := herdr.TranscriptScope{PaneID: paneID, Agent: agent, CWD: cwd, Evidence: pane.AgentSession}
 		value, callErr := reader.Transcript(ctx, scope, read)
 		if callErr != nil {
 			writeError(writer, http.StatusBadGateway, "transcript_unavailable", callErr.Error())
@@ -165,7 +165,7 @@ func (a *API) recordTranscriptAccess(request *http.Request, host store.Host, pag
 	case page.Reason == herdr.ChatReasonUnsupportedTransport:
 		// 诊断文本是「远端缺 python3」这类可执行信息，只进审计与日志，不进冻结的响应字段。
 		a.audit(request, "transcript.unavailable", "host", host.ID, map[string]any{"pane_id": paneID, "transport": host.Transport, "detail": detail})
-	case page.Binding == herdr.ChatBindingSelected && requested:
+	case page.Binding == herdr.ChatBindingSelected && requested || page.Binding == herdr.ChatBindingVerified:
 		a.audit(request, "transcript.opened", "host", host.ID, map[string]any{
 			"pane_id":    paneID,
 			"agent":      page.Agent,

@@ -129,10 +129,9 @@ export type ChatSessionCandidate = {
 /** 服务端是否把该会话绑定到 pane。 */
 export const CHAT_BINDINGS = ['selected', 'verified'] as const
 export type ChatBinding = (typeof CHAT_BINDINGS)[number]
-// 'selected' —— 用户在候选列表里显式选择了这条记录。这是本期唯一允许产生的绑定。
-// 'verified' —— 服务端用严格且已验证的 pane/provider 会话证据自动绑定（例如 agent hook
-//              上报了属于该 pane 的 session_id + transcript_path）。**本期不得产生**：
-//              herdrx 目前没有任何这类证据源，凭空返回 'verified' 就是臆造绑定。
+// 'selected' —— 用户在候选列表里显式选择了这条记录。
+// 'verified' —— snapshot 的 agent_session（kind id 或 path）对应一个文件，且记录 cwd
+//              与 pane cwd 一致。单个候选、mtime 和目录名编码都不会产生这个绑定。
 
 /**
  * 降级原因，闭集合。`supported` 的真假与 `reason` 的取值必须一一对应，不允许自造字符串。
@@ -199,7 +198,7 @@ export type StructuredChatQuery = {
  *    候选为空时 `reason: 'no_session_candidates'`。
  * 3. `supported: true` 且 `session` 失效 → `reason: 'session_unavailable'`，
  *    同时重新返回 `candidates` 让用户重选，`messages: []`，`reset: true`。
- * 4. `supported: true` 且已绑定 → `messages` 为该页记录，`binding: 'selected'`，
+ * 4. `supported: true` 且已绑定 → `messages` 为该页记录，`binding: 'selected'` 或 `'verified'`，
  *    附带 `agent` / `session_id` / 游标。文件为空时 `messages: []`，这不是错误。
  */
 export type StructuredChatResponse = {

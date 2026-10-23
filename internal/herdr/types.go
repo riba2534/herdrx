@@ -48,21 +48,30 @@ type Scroll struct {
 }
 
 type Pane struct {
-	ID                    string  `json:"pane_id"`
-	WorkspaceID           string  `json:"workspace_id"`
-	TabID                 string  `json:"tab_id"`
-	TerminalID            string  `json:"terminal_id"`
-	Label                 string  `json:"label,omitempty"`
-	TerminalTitle         string  `json:"terminal_title,omitempty"`
-	TerminalTitleStripped string  `json:"terminal_title_stripped,omitempty"`
-	Agent                 string  `json:"agent,omitempty"`
-	AgentStatus           string  `json:"agent_status"`
-	CWD                   string  `json:"cwd,omitempty"`
-	ForegroundCWD         string  `json:"foreground_cwd,omitempty"`
-	Focused               bool    `json:"focused"`
-	Revision              int64   `json:"revision"`
-	RightClickPassthrough bool    `json:"right_click_passthrough"`
-	Scroll                *Scroll `json:"scroll,omitempty"`
+	ID                    string        `json:"pane_id"`
+	WorkspaceID           string        `json:"workspace_id"`
+	TabID                 string        `json:"tab_id"`
+	TerminalID            string        `json:"terminal_id"`
+	Label                 string        `json:"label,omitempty"`
+	TerminalTitle         string        `json:"terminal_title,omitempty"`
+	TerminalTitleStripped string        `json:"terminal_title_stripped,omitempty"`
+	Agent                 string        `json:"agent,omitempty"`
+	AgentStatus           string        `json:"agent_status"`
+	AgentSession          *AgentSession `json:"agent_session,omitempty"`
+	CWD                   string        `json:"cwd,omitempty"`
+	ForegroundCWD         string        `json:"foreground_cwd,omitempty"`
+	Focused               bool          `json:"focused"`
+	Revision              int64         `json:"revision"`
+	RightClickPassthrough bool          `json:"right_click_passthrough"`
+	Scroll                *Scroll       `json:"scroll,omitempty"`
+}
+
+// AgentSession 是 Herdr 在 pane 上附带的 hook 证据。没有上报时对象省略，不补空值。
+type AgentSession struct {
+	Source string `json:"source,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Value  string `json:"value,omitempty"`
 }
 
 type Agent struct {
