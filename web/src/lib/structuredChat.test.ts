@@ -79,13 +79,15 @@ describe('structuredChatPath', () => {
 
 describe('paneAgentRejectsReadSource', () => {
   it('rejects an explicit DSH source only for recognized non-DSH agents', () => {
-    // 已识别的 claude / codex：服务端不接受客户端覆盖读取源。
+    // 已识别的读取源：服务端不接受客户端覆盖。
     expect(paneAgentRejectsReadSource('claude')).toBe(true)
     expect(paneAgentRejectsReadSource(' codex ')).toBe(true)
+    expect(paneAgentRejectsReadSource('cursor')).toBe(true)
+    expect(paneAgentRejectsReadSource('gemini')).toBe(true)
     // 未识别 / 未知 / 本来就是 dsh：都允许用户显式选择 DSH。
     expect(paneAgentRejectsReadSource('')).toBe(false)
     expect(paneAgentRejectsReadSource(undefined)).toBe(false)
-    expect(paneAgentRejectsReadSource('gemini')).toBe(false)
+    expect(paneAgentRejectsReadSource('grok')).toBe(false)
     expect(paneAgentRejectsReadSource('dsh')).toBe(false)
   })
 })
@@ -135,12 +137,13 @@ describe('normalizeStructuredChatResponse', () => {
       supported: true,
       candidates: [
         { id: 'c1', agent: 'claude', session_id: 's1', updated_at: '2026-09-13T04:00:00Z' },
-        { id: 'c2', agent: 'gemini', session_id: 's2', updated_at: '' },
-        { id: 'c3', agent: 'codex', session_id: 's3' },
+        { id: 'c2', agent: 'grok', session_id: 's2', updated_at: '' },
+        { id: 'c3', agent: 'cursor', session_id: 's3' },
+        { id: 'c4', agent: 'gemini', session_id: 's4', updated_at: '' },
       ],
       reason: 'made_up_reason',
     })
-    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3'])
+    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3', 'c4'])
     expect(normalized.reason).toBeUndefined()
   })
 
