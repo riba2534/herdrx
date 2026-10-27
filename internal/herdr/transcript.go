@@ -373,7 +373,7 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return relabelTranscript(transcriptCandidates(ctx, files, codec, agent, cwd), reported, agent)
 	}
 	parts, ok := codec.open(request.Session, 3)
-	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, cwd, parts[1], parts[2]) {
+	if !ok || parts[0] != agent || !transcriptRelAllowedAny(files, agent, cwd, parts[1], parts[2]) {
 		return relabelTranscript(transcriptSessionLost(ctx, files, codec, agent, cwd), reported, agent)
 	}
 	return relabelTranscript(transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request), reported, agent)
@@ -466,18 +466,14 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 	case agentlog.AgentClaude:
 		// 目录名编码只能**缩小搜索范围**：编码是有损的（`/a-b` 与 `/a/b` 同码），
 		// 所以这里只列出与当前 cwd 编码同名的那一个目录，归属仍由记录内容判定。
-		entries, err = files.List(ctx, root, agentlog.ClaudeProjectDir(cwd), 1)
+		entries, err = listCWDProjects(ctx, files, root, cwd, claudeProject, 1)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
 	case agentlog.AgentDSH:
 		// `projectKey` 同样只能缩小范围（分隔符折叠 + 截断都有损），而且目录下还有一层
 		// 会话目录，所以按两层列。归属仍由 header 里 cwd 的精确相等判定。
-		project, ok := dshProjectDir(cwd)
-		if !ok {
-			return nil, false, nil
-		}
-		entries, err = files.List(ctx, root, project, 2)
+		entries, err = listCWDProjects(ctx, files, root, cwd, dshProjectDir, 2)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
@@ -488,12 +484,12 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 		// 项目之前就报 read_limit_exceeded。
 		return collectCursorCandidates(ctx, files, codec, cwd)
 	case agentlog.AgentPi:
-		entries, err = files.List(ctx, root, agentlog.PiProjectDir(cwd), 1)
+		entries, err = listCWDProjects(ctx, files, root, cwd, piProject, 1)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
 	case agentlog.AgentGrok:
-		entries, err = files.List(ctx, root, agentlog.GrokProjectDir(cwd), 2)
+		entries, err = listCWDProjects(ctx, files, root, cwd, grokProject, 2)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
@@ -581,7 +577,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			}
 			if agent == agentlog.AgentGrok {
 				decoded := agentlog.GrokCWD(entry.Rel)
-				if decoded == "" || decoded != cwd {
+				if decoded == "" || !cwdMatch(files, decoded, cwd) {
 					continue
 				}
 				shape.CWD = decoded
@@ -599,7 +595,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 				shape.SessionID = document.SessionID
 			}
 			// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
-			if shape.CWD != cwd {
+			if !cwdMatch(files, shape.CWD, cwd) {
 				continue
 			}
 			sessionID := shape.SessionID
@@ -801,7 +797,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		if err != nil {
 			return transcriptDegradeFromError(err, agent)
 		}
-		if workspace == "" || workspace != cwd {
+		if workspace == "" || !cwdMatch(files, workspace, cwd) {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
 		shape.CWD = workspace
@@ -809,7 +805,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	}
 	if agent == agentlog.AgentGrok {
 		decoded := agentlog.GrokCWD(rel)
-		if decoded == "" || decoded != cwd || agentlog.GrokSessionID(rel) != sessionID {
+		if decoded == "" || !cwdMatch(files, decoded, cwd) || agentlog.GrokSessionID(rel) != sessionID {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
 		shape.CWD = decoded
@@ -829,7 +825,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			// 分页通常只读尾部窗口，header 行不在其中，所以这个检查不能省。
 			return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 		}
-		if shape.CWD != cwd {
+		if !cwdMatch(files, shape.CWD, cwd) {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
 		if (agent == agentlog.AgentCodex || agent == agentlog.AgentTraex || agent == agentlog.AgentDSH || agent == agentlog.AgentPi) && shape.SessionID != "" && shape.SessionID != sessionID {

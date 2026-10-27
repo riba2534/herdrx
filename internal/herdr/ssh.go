@@ -77,6 +77,8 @@ type SSHEndpoint struct {
 	transcriptMu          sync.Mutex
 	transcriptUnsupported bool
 	transcriptReason      string
+	transcriptHome        string
+	transcriptHomeReal    string
 }
 
 func DialSSHEndpoint(ctx context.Context, options SSHOptions) (*SSHEndpoint, error) {

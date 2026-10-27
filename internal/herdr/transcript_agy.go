@@ -49,7 +49,7 @@ func (f *localTranscriptFS) ReadAgy(ctx context.Context, query transcriptAgyQuer
 		return transcriptAgyBatch{}, errTranscriptDenied
 	}
 	parts := []string{".gemini", "antigravity-cli", "conversations", query.Rel}
-	file, err := openRegularNoFollow(f.home, parts)
+	file, err := openRegularNoFollow(f.resolvedHome(), parts)
 	if err != nil {
 		return transcriptAgyBatch{}, err
 	}
@@ -58,7 +58,7 @@ func (f *localTranscriptFS) ReadAgy(ctx context.Context, query transcriptAgyQuer
 	if statErr != nil {
 		return transcriptAgyBatch{}, errTranscriptDenied
 	}
-	path := filepath.Join(f.home, ".gemini", "antigravity-cli", "conversations", query.Rel)
+	path := filepath.Join(f.resolvedHome(), ".gemini", "antigravity-cli", "conversations", query.Rel)
 	rows, end, err := agentlog.QueryAgyDB(ctx, path, agentlog.AgyBounds{
 		HasAfter: query.HasAfter, After: query.After,
 		HasBefore: query.HasBefore, Before: query.Before,

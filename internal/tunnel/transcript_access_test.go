@@ -2,9 +2,11 @@ package tunnel
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/riba2534/herdrx/internal/agent"
@@ -57,8 +59,26 @@ func TestPermanentTranscriptCommandIsWhitelisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(output, []byte(home)) || bytes.Contains(output, []byte(`"cwd"`)) || !bytes.Contains(output, []byte(`"ok":true`)) {
+	if bytes.Contains(output, []byte(`"cwd"`)) || !bytes.Contains(output, []byte(`"ok":true`)) {
 		t.Fatalf("transcript response = %s", output)
+	}
+	var response struct {
+		Home  string `json:"home"`
+		Reads []struct {
+			Data string `json:"data"`
+			Rel  string `json:"rel"`
+		} `json:"reads"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Home != home {
+		t.Fatalf("home spelling = %q", response.Home)
+	}
+	for _, read := range response.Reads {
+		if strings.Contains(read.Data, home) || strings.Contains(read.Rel, home) {
+			t.Fatalf("read leaked home: %+v", read)
+		}
 	}
 }
 

@@ -48,7 +48,7 @@ func collectCursorCandidates(ctx context.Context, files transcriptFS, codec tran
 		if err != nil {
 			return nil, false, err
 		}
-		if workspace != cwd {
+		if !cwdMatch(files, workspace, cwd) {
 			continue
 		}
 		listed, err := files.List(ctx, transcriptRootCursor, project.Rel+"/agent-transcripts", 2)
@@ -72,7 +72,7 @@ func collectCursorCandidates(ctx context.Context, files transcriptFS, codec tran
 		if err != nil {
 			return nil, false, err
 		}
-		if workspace != cwd {
+		if !cwdMatch(files, workspace, cwd) {
 			continue
 		}
 		sessionID := agentlog.CursorSessionID(entry.Rel)
