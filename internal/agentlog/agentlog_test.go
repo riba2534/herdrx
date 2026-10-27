@@ -438,6 +438,17 @@ func TestCursorAgentTranscriptUsesTheProvenShape(t *testing.T) {
 	}
 }
 
+func TestRolloutSessionIDUsesTheFirstUUID(t *testing.T) {
+	const sessionID = "11111111-2222-4333-8444-555555555555"
+	name := "rollout-2026-10-27T12-00-00-" + sessionID + "_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl"
+	if RolloutSessionID(name) != sessionID || !RolloutMatchesSession(name, sessionID) {
+		t.Fatalf("traex id = %q", RolloutSessionID(name))
+	}
+	if !RolloutMatchesSession("rollout-2026-09-13T04-25-03-sess-1.jsonl", "sess-1") {
+		t.Fatal("codex suffix was not accepted")
+	}
+}
+
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
 	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok, "traex", "traecli"} {
 		if !Supported(agent) {

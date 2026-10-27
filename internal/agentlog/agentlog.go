@@ -39,6 +39,9 @@ import (
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
+	// AgentTraex 是 Trae CLI。日志在 `~/.trae/cli/sessions`，不是 `~/.codex`。
+	// Herdr 的 hook 往往仍把 agent 报成 codex。
+	AgentTraex = "traex"
 	// AgentDSH 是 DeepSeek Harness。只支持 v3 会话格式代际，见 DSHFormatVersion。
 	AgentDSH = "dsh"
 	// AgentCursor 是 Cursor Agent 的 JSONL transcript。形状来自
@@ -56,21 +59,31 @@ const (
 	AgentGrok = "grok"
 )
 
-// TranscriptFormat 把同源的进程名收成同一个读取器。
-// traex / traecli 是 Codex 的分叉，日志仍写在 `~/.codex/sessions`。
+// TranscriptFormat 把别名收成读取器名。traecli 与 traex 是同一个读取器。
 func TranscriptFormat(agent string) string {
 	switch strings.TrimSpace(agent) {
-	case "traex", "traecli":
-		return AgentCodex
+	case "traecli", AgentTraex:
+		return AgentTraex
 	default:
 		return agent
 	}
 }
 
+// SameTranscriptAgent 报告两个进程名是否共用一份会话日志。
+// traex 的 hook 把 agent 报成 codex，所以这两个名字在 kind=id 上互通。
+func SameTranscriptAgent(left, right string) bool {
+	left = TranscriptFormat(left)
+	right = TranscriptFormat(right)
+	if left == right {
+		return true
+	}
+	return (left == AgentCodex || left == AgentTraex) && (right == AgentCodex || right == AgentTraex)
+}
+
 // Supported 报告该 agent 是否在本期支持范围内。
 func Supported(agent string) bool {
 	switch TranscriptFormat(agent) {
-	case AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok:
+	case AgentClaude, AgentCodex, AgentTraex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok:
 		return true
 	default:
 		return false

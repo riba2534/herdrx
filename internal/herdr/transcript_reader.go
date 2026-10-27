@@ -10,7 +10,7 @@ package herdr
 // 远端没有 python3 时**明确返回不支持**，绝不退回不安全的读法。
 const transcriptReaderSource = `import base64, errno, json, os, re, sqlite3, stat, sys
 
-ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "dsh": ".dsh/sessions", "cursor": ".cursor/projects", "gemini": ".gemini/tmp", "agy": ".gemini/antigravity-cli/conversations", "pi": ".pi/agent/sessions", "grok": ".grok/sessions"}
+ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "traex": ".trae/cli/sessions", "dsh": ".dsh/sessions", "cursor": ".cursor/projects", "gemini": ".gemini/tmp", "agy": ".gemini/antigravity-cli/conversations", "pi": ".pi/agent/sessions", "grok": ".grok/sessions"}
 AGY_DB = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.db$")
 AGY_STEP_BYTES = 1 << 20
 AGY_TOTAL_BYTES = 768 << 10

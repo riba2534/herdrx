@@ -199,6 +199,7 @@ type transcriptRootKind string
 const (
 	transcriptRootClaude transcriptRootKind = "claude"
 	transcriptRootCodex  transcriptRootKind = "codex"
+	transcriptRootTraex  transcriptRootKind = "traex"
 	transcriptRootDSH    transcriptRootKind = "dsh"
 	transcriptRootCursor transcriptRootKind = "cursor"
 	transcriptRootGemini transcriptRootKind = "gemini"
@@ -211,6 +212,8 @@ func transcriptRootFor(agent string) transcriptRootKind {
 	switch agent {
 	case agentlog.AgentCodex:
 		return transcriptRootCodex
+	case agentlog.AgentTraex:
+		return transcriptRootTraex
 	case agentlog.AgentDSH:
 		return transcriptRootDSH
 	case agentlog.AgentCursor:
@@ -310,9 +313,10 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	case agentlog.AgentClaude:
 		// `<编码目录>/<会话 id>.jsonl`：直属一层。
 		return len(parts) == 2 && agentlog.ClaudeSessionFile(name)
-	case agentlog.AgentCodex:
-		// `YYYY/MM/DD/rollout-*.jsonl`：层数有界，不做递归通配。
-		return len(parts) >= 1 && len(parts) <= transcriptMaxCodexDepth+1 && agentlog.CodexSessionFile(name)
+	case agentlog.AgentCodex, agentlog.AgentTraex:
+		// `YYYY/MM/DD/rollout-*.jsonl`。kind=id 跨根查找时，第一段可以是
+		// `trae-root` 或 `codex-root`，用来记住文件在哪一个日志根，不会把它传给文件系统。
+		return rolloutRelAllowed(parts)
 	case agentlog.AgentDSH:
 		// `<项目目录>/<会话目录>/session.v3.jsonl[.zstd]`：恰好三层。
 		if len(parts) != 3 {
@@ -775,7 +779,8 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	if agent == agentlog.AgentAgy {
 		return transcriptAgyMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
 	}
-	root := transcriptRootFor(agent)
+	sealedRel := rel
+	root, rel := rolloutStorage(agent, rel)
 	shapes, heads, err := transcriptShapes(ctx, files, root, agent, []string{rel})
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
@@ -827,7 +832,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		if shape.CWD != cwd {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
-		if (agent == agentlog.AgentCodex || agent == agentlog.AgentDSH || agent == agentlog.AgentPi) && shape.SessionID != "" && shape.SessionID != sessionID {
+		if (agent == agentlog.AgentCodex || agent == agentlog.AgentTraex || agent == agentlog.AgentDSH || agent == agentlog.AgentPi) && shape.SessionID != "" && shape.SessionID != sessionID {
 			// 请求里的 session 与文件里解析出的会话 id 不再对应同一个文件。
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
@@ -837,16 +842,16 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 文件身份来自 stat，Codex 的规范路径也绑定到游标；追加首个 response_item
 	// 改变规范路径时重建旧视图，避免已展示的 event_msg 与新记录双记。
 	identity := head.Identity
-	if agent == agentlog.AgentCodex {
+	if agent == agentlog.AgentCodex || agent == agentlog.AgentTraex {
 		if !shape.ResponseItemPath {
-			shape.ResponseItemPath, err = transcriptCodexResponsePath(ctx, files, rel, head)
+			shape.ResponseItemPath, err = transcriptCodexResponsePath(ctx, files, root, rel, head)
 			if err != nil {
 				return transcriptDegradeFromError(err, agent)
 			}
 		}
 		identity += ":" + strconv.FormatBool(shape.ResponseItemPath)
 	}
-	token := []string{sessionID, rel, identity}
+	token := []string{sessionID, sealedRel, identity}
 
 	start := size - transcriptInitialWindowBytes
 	if start < 0 {
@@ -981,6 +986,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			last++
 		}
 	}
+	first, last = includeWholeLines(records, first, last)
 
 	pageStart := trueStart
 	page := TranscriptPage{
@@ -1011,7 +1017,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		page.HasMore = last < len(records) || start+transcriptInitialWindowBytes < size
 	}
 
-	next, err := codec.seal(sessionID, rel, identity, strconv.FormatInt(consumed, 10))
+	next, err := codec.seal(sessionID, sealedRel, identity, strconv.FormatInt(consumed, 10))
 	if err != nil {
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
@@ -1026,13 +1032,27 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 或已经读到文件开头时才收起入口。
 	offeredPrevious := backward && decoded.Consumed > trueStart
 	if pageStart > 0 && offeredPrevious {
-		previous, err := codec.seal(sessionID, rel, identity, strconv.FormatInt(pageStart, 10))
+		previous, err := codec.seal(sessionID, sealedRel, identity, strconv.FormatInt(pageStart, 10))
 		if err != nil {
 			return transcriptDegrade(ChatReasonInternalError, agent)
 		}
 		page.PrevCursor = previous
 	}
 	return page
+}
+
+// includeWholeLines 不把同一行里的多条记录拆到两页。traex 的 append 把多个 item 写在一行。
+func includeWholeLines(records []agentlog.RangeEntry, first, last int) (int, int) {
+	if first >= last || len(records) == 0 {
+		return first, last
+	}
+	for first > 0 && records[first].Start == records[first-1].Start {
+		first--
+	}
+	for last < len(records) && records[last-1].Start == records[last].Start {
+		last++
+	}
+	return first, last
 }
 
 // transcriptCursorOffset 解开游标并校验它绑定的正是这个会话与这个文件身份。
@@ -1147,14 +1167,14 @@ func hasCompleteLine(data []byte) bool { return bytes.IndexByte(data, '\n') >= 0
 // transcriptCodexResponsePath 在有界范围内查找规范 response_item。
 // 首部身份字段齐全不能证明文件没有 response_item：前面的 turn_context 可以很长。
 // 只有确实扫到文件末尾才能采用 event_msg；超过预算时明确降级。
-func transcriptCodexResponsePath(ctx context.Context, files transcriptFS, rel string, head transcriptReadResult) (bool, error) {
+func transcriptCodexResponsePath(ctx context.Context, files transcriptFS, root transcriptRootKind, rel string, head transcriptReadResult) (bool, error) {
 	var pending []byte
 	for offset := int64(0); offset < head.Size; {
 		if offset >= transcriptCodexProbeMaxBytes {
 			return false, errTranscriptLimit
 		}
 		length := min(int64(transcriptInitialWindowBytes), head.Size-offset, int64(transcriptCodexProbeMaxBytes)-offset, int64(transcriptMaxReadBytes-len(pending)))
-		part, err := transcriptReadOne(ctx, files, transcriptRootCodex, rel, offset, length)
+		part, err := transcriptReadOne(ctx, files, root, rel, offset, length)
 		if err != nil {
 			return false, err
 		}
