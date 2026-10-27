@@ -383,7 +383,7 @@ func (f refusingTranscriptFS) Read(context.Context, transcriptRootKind, []transc
 }
 
 func TestUnprovenHarnessesStayUnsupported(t *testing.T) {
-	for _, agent := range []string{"grok", "omp", "openclaude"} {
+	for _, agent := range []string{"omp", "openclaude", "kilo"} {
 		page := readTranscript(context.Background(), refusingTranscriptFS{t: t}, newTranscriptCodecForTest(t), TranscriptScope{
 			PaneID: "p", Agent: agent, CWD: "/srv/app",
 		}, TranscriptRequest{})

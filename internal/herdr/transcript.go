@@ -207,6 +207,8 @@ const (
 	transcriptRootCursor transcriptRootKind = "cursor"
 	transcriptRootGemini transcriptRootKind = "gemini"
 	transcriptRootAgy    transcriptRootKind = "agy"
+	transcriptRootPi     transcriptRootKind = "pi"
+	transcriptRootGrok   transcriptRootKind = "grok"
 )
 
 func transcriptRootFor(agent string) transcriptRootKind {
@@ -221,6 +223,10 @@ func transcriptRootFor(agent string) transcriptRootKind {
 		return transcriptRootGemini
 	case agentlog.AgentAgy:
 		return transcriptRootAgy
+	case agentlog.AgentPi:
+		return transcriptRootPi
+	case agentlog.AgentGrok:
+		return transcriptRootGrok
 	}
 	return transcriptRootClaude
 }
@@ -327,6 +333,10 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 		return agentlog.GeminiSessionRel(rel)
 	case agentlog.AgentAgy:
 		return agentlog.AgyDBRel(rel) && agentlog.AgySessionID(rel) == sessionID
+	case agentlog.AgentPi:
+		return len(parts) == 2 && parts[0] == agentlog.PiProjectDir(cwd) && agentlog.PiSessionID(name) == sessionID
+	case agentlog.AgentGrok:
+		return agentlog.GrokHistoryRel(rel) && agentlog.GrokCWD(rel) == cwd && agentlog.GrokSessionID(rel) == sessionID
 	}
 	return false
 }
@@ -336,7 +346,8 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 // readTranscript 是共用引擎：判定 agent / cwd → 解析候选或会话 → 按游标切片 → 返回记录。
 // 它从不返回 Go 错误：所有失败都表达成契约里的降级形状，客户端才能渲染诚实的空态。
 func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest) TranscriptPage {
-	agent := strings.TrimSpace(scope.Agent)
+	reported := strings.TrimSpace(scope.Agent)
+	agent := agentlog.TranscriptFormat(reported)
 	if agent == "" {
 		return transcriptDegrade(ChatReasonNoAgent, "")
 	}
@@ -345,21 +356,44 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		// 闭集合之外的字符串。
 		return transcriptDegrade(ChatReasonUnsupportedAgent, "")
 	}
+	scope.Agent = agent
+	if scope.Evidence != nil {
+		evidence := *scope.Evidence
+		evidence.Agent = agentlog.TranscriptFormat(evidence.Agent)
+		scope.Evidence = &evidence
+	}
 	cwd := strings.TrimSpace(scope.CWD)
 	if !strings.HasPrefix(cwd, "/") {
-		return transcriptDegrade(ChatReasonCWDUnavailable, agent)
+		return relabelTranscript(transcriptDegrade(ChatReasonCWDUnavailable, agent), reported, agent)
 	}
 	if request.Session == "" {
 		if page, ok := transcriptFromEvidence(ctx, files, codec, scope, request); ok {
-			return page
+			return relabelTranscript(page, reported, agent)
 		}
-		return transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence)
+		return relabelTranscript(transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence), reported, agent)
 	}
 	parts, ok := codec.open(request.Session, 3)
 	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, cwd, parts[1], parts[2]) {
-		return transcriptSessionLost(ctx, files, codec, agent, cwd)
+		return relabelTranscript(transcriptSessionLost(ctx, files, codec, agent, cwd), reported, agent)
 	}
-	return transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request)
+	return relabelTranscript(transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request), reported, agent)
+}
+
+// relabelTranscript 把读取器名换回 pane 上的进程名（traex 仍显示 traex）。
+// 令牌内部用的是读取器名，客户端不解析令牌。
+func relabelTranscript(page TranscriptPage, reported, format string) TranscriptPage {
+	if reported == "" || reported == format {
+		return page
+	}
+	if page.Agent == format {
+		page.Agent = reported
+	}
+	for index := range page.Candidates {
+		if page.Candidates[index].Agent == format {
+			page.Candidates[index].Agent = reported
+		}
+	}
+	return page
 }
 
 func transcriptDegrade(reason, agent string) TranscriptPage {
@@ -467,6 +501,10 @@ func transcriptRootParts(root transcriptRootKind) []string {
 		return []string{".gemini", "tmp"}
 	case transcriptRootAgy:
 		return []string{".gemini", "antigravity-cli", "conversations"}
+	case transcriptRootPi:
+		return []string{".pi", "agent", "sessions"}
+	case transcriptRootGrok:
+		return []string{".grok", "sessions"}
 	}
 	return nil
 }
@@ -517,9 +555,21 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			return nil, false, nil
 		}
 	case agentlog.AgentCursor:
-		// 项目目录名把分隔符折成 `-`，不能用来认 cwd。先列出主 transcript，
-		// 再用同级 `.workspace-trusted` 的 workspacePath 精确比对。
-		entries, err = files.List(ctx, root, "", transcriptMaxCursorDepth)
+		// 项目目录名把分隔符折成 `-`，不能用来认 cwd。先按项目目录读
+		// `.workspace-trusted`，只有 workspacePath 对上才列出那个项目的 transcript。
+		// 不能把所有项目的 jsonl 一起塞进 500 项预算，否则家目录会话会在看到自己的
+		// 项目之前就报 read_limit_exceeded。
+		return collectCursorCandidates(ctx, files, codec, cwd)
+	case agentlog.AgentPi:
+		entries, err = files.List(ctx, root, agentlog.PiProjectDir(cwd), 1)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
+	case agentlog.AgentGrok:
+		entries, err = files.List(ctx, root, agentlog.GrokProjectDir(cwd), 2)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
 	case agentlog.AgentGemini:
 		entries, err = files.List(ctx, root, "", transcriptMaxGeminiDepth)
 	default:
@@ -546,6 +596,10 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			}
 		case agentlog.AgentCursor:
 			keep = agentlog.CursorTranscriptRel(entry.Rel)
+		case agentlog.AgentPi:
+			keep = agentlog.PiSessionRel(entry.Rel)
+		case agentlog.AgentGrok:
+			keep = agentlog.GrokHistoryRel(entry.Rel)
 		case agentlog.AgentGemini:
 			keep = agentlog.GeminiSessionRel(entry.Rel)
 		default:
@@ -598,6 +652,14 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 				shape.CWD = workspace
 				shape.SessionID = agentlog.CursorSessionID(entry.Rel)
 			}
+			if agent == agentlog.AgentGrok {
+				decoded := agentlog.GrokCWD(entry.Rel)
+				if decoded == "" || decoded != cwd {
+					continue
+				}
+				shape.CWD = decoded
+				shape.SessionID = agentlog.GrokSessionID(entry.Rel)
+			}
 			if agent == agentlog.AgentGemini {
 				document, err := readGeminiDocument(ctx, files, entry.Rel, result.Size)
 				if errors.Is(err, errTranscriptLimit) {
@@ -620,6 +682,14 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			case agentlog.AgentCursor:
 				sessionID = agentlog.CursorSessionID(entry.Rel)
 			case agentlog.AgentGemini:
+				if sessionID == "" {
+					continue
+				}
+			case agentlog.AgentPi:
+				if sessionID == "" || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
+					continue
+				}
+			case agentlog.AgentGrok:
 				if sessionID == "" {
 					continue
 				}
@@ -809,6 +879,14 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		shape.CWD = workspace
 		shape.SessionID = sessionID
 	}
+	if agent == agentlog.AgentGrok {
+		decoded := agentlog.GrokCWD(rel)
+		if decoded == "" || decoded != cwd || agentlog.GrokSessionID(rel) != sessionID {
+			return transcriptSessionLost(ctx, files, codec, agent, cwd)
+		}
+		shape.CWD = decoded
+		shape.SessionID = sessionID
+	}
 	// 空文件（或还没有任何完整行）是正常的「空会话」，不是降级，也不能因此判定归属；
 	// 但只要文件里已经有完整记录，cwd 就必须精确相等 —— 这是归属的唯一证明。
 	empty := len(head.Data) == 0 || !hasCompleteLine(head.Data)
@@ -826,7 +904,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		if shape.CWD != cwd {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
-		if (agent == agentlog.AgentCodex || agent == agentlog.AgentDSH) && shape.SessionID != "" && shape.SessionID != sessionID {
+		if (agent == agentlog.AgentCodex || agent == agentlog.AgentDSH || agent == agentlog.AgentPi) && shape.SessionID != "" && shape.SessionID != sessionID {
 			// 请求里的 session 与文件里解析出的会话 id 不再对应同一个文件。
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}

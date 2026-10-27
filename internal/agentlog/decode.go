@@ -88,6 +88,12 @@ func decodeLine(context LineContext, line string) lineOutcome {
 	case AgentCursor:
 		record, skipped := decodeCursorLine(context, line)
 		return lineOutcome{record: record, skipped: skipped}
+	case AgentPi:
+		record, skipped := decodePiLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
+	case AgentGrok:
+		record, skipped := decodeGrokLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
 	default:
 		return lineOutcome{}
 	}
@@ -279,6 +285,18 @@ func ReadFileShape(agent string, data []byte) FileShape {
 			}
 			if shape.SessionID == "" {
 				shape.SessionID = extractString(payload["id"])
+			}
+		case AgentPi:
+			if extractString(record["type"]) != "session" {
+				continue
+			}
+			if shape.CWD == "" {
+				if cwd := extractString(record["cwd"]); strings.HasPrefix(cwd, "/") {
+					shape.CWD = cwd
+				}
+			}
+			if shape.SessionID == "" {
+				shape.SessionID = extractString(record["id"])
 			}
 		}
 	}

@@ -18,16 +18,17 @@
 
 /**
  * 支持结构化记录的 Agent，闭集合。
- * 其余 Agent（含与 claude/codex 同格式族的 openclaude / grok / omp）在各自的 decoder、
+ * 其余 Agent（含与 claude/codex 同格式族的 openclaude / omp）在各自的 decoder、
  * 日志根目录与 cwd 匹配规则被真实会话日志验证之前，一律 `supported: false`，不猜、不通配。
  * `cursor` 与 `gemini` 只覆盖各自 connector 测试钉住的会话文件，不合并到别的 harness。
- * `agy` 只读 `~/.gemini/antigravity-cli/conversations/<uuid>.db`，uuid 来自 snapshot 的 agent_session。
+ * `agy` 只读 `~/.gemini/antigravity-cli/conversations/<uuid>.db`。
+ * `traex` / `traecli` 与 codex 共用 rollout 读取器。`pi` 与 `grok` 只读各自的会话文件。
  *
  * `dsh`（DeepSeek Harness）与上面两类不同：它的会话日志是项目目录/会话目录下的 JSONL
  * （压缩时是 zstd 帧），首行 header 带精确 `cwd` 与 session `id`。它进入这个闭集合**不代表**
  * 可以直接从窗口标题推断 pane 正在运行 DSH——见 `CHAT_SOURCES`。
  */
-export const CHAT_AGENTS = ['claude', 'codex', 'dsh', 'cursor', 'gemini', 'agy'] as const
+export const CHAT_AGENTS = ['claude', 'codex', 'dsh', 'cursor', 'gemini', 'agy', 'pi', 'grok', 'traex', 'traecli'] as const
 export type ChatAgent = (typeof CHAT_AGENTS)[number]
 
 /**

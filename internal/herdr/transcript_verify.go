@@ -27,14 +27,25 @@ func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec trans
 			return verifyDSHID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentAgy:
 			return verifyAgyID(ctx, files, codec, scope, request, evidence.Value)
+		case agentlog.AgentCursor:
+			return verifyCursorID(ctx, files, codec, scope, request, evidence.Value)
+		case agentlog.AgentPi:
+			return verifyPiID(ctx, files, codec, scope, request, evidence.Value)
+		case agentlog.AgentGrok:
+			return verifyGrokID(ctx, files, codec, scope, request, evidence.Value)
 		default:
 			// Cursor / Gemini 的 id 没有唯一相对路径。不扫目录树去找它。
 			return TranscriptPage{}, false
 		}
 	case "path":
-		// agy 只接受 kind=id 的 uuid。不读客户端传来的路径。
-		if scope.Agent == agentlog.AgentAgy {
+		// agy 与 grok 只接受 kind=id。不读客户端传来的路径。
+		if scope.Agent == agentlog.AgentAgy || scope.Agent == agentlog.AgentGrok {
 			return TranscriptPage{}, false
+		}
+		// Pi 的 hook 优先上报绝对文件路径。不打开那个路径，只取出文件名里的会话 id，
+		// 再在 pane cwd 对应的目录里找同 id 的文件。
+		if scope.Agent == agentlog.AgentPi {
+			return verifyPiReportedPath(ctx, files, codec, scope, request, evidence.Value)
 		}
 		return verifyEvidencePath(ctx, files, codec, scope, request, evidence.Value)
 	default:
@@ -65,6 +76,93 @@ func verifyClaudeID(ctx context.Context, files transcriptFS, codec transcriptCod
 	rel := agentlog.ClaudeProjectDir(scope.CWD) + "/" + name
 	shape, ok := evidenceAdmitted(ctx, files, scope.Agent, rel)
 	if !ok || shape.CWD != scope.CWD {
+		return TranscriptPage{}, false
+	}
+	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+}
+
+func verifyCursorID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
+	if !agentlog.CursorSessionFile(sessionID + ".jsonl") {
+		return TranscriptPage{}, false
+	}
+	projects, err := files.List(ctx, transcriptRootCursor, "", 1)
+	if err != nil {
+		return TranscriptPage{}, false
+	}
+	rel := ""
+	matches := 0
+	for _, project := range projects {
+		if !project.Dir || project.Link || strings.Contains(project.Rel, "/") {
+			continue
+		}
+		candidate := project.Rel + "/agent-transcripts/" + sessionID + "/" + sessionID + ".jsonl"
+		if !agentlog.CursorTranscriptRel(candidate) {
+			continue
+		}
+		workspace, err := cursorWorkspace(ctx, files, candidate)
+		if err != nil || workspace != scope.CWD {
+			continue
+		}
+		if _, ok := evidenceAdmitted(ctx, files, scope.Agent, candidate); !ok {
+			continue
+		}
+		matches++
+		rel = candidate
+	}
+	if matches != 1 {
+		return TranscriptPage{}, false
+	}
+	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+}
+
+func verifyPiReportedPath(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, value string) (TranscriptPage, bool) {
+	if validEvidencePath(value) {
+		return verifyEvidencePath(ctx, files, codec, scope, request, value)
+	}
+	name := value
+	if index := strings.LastIndexAny(name, `/\`); index >= 0 {
+		name = name[index+1:]
+	}
+	sessionID := agentlog.PiSessionID(name)
+	if sessionID == "" {
+		return TranscriptPage{}, false
+	}
+	return verifyPiID(ctx, files, codec, scope, request, sessionID)
+}
+
+func verifyPiID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) {
+		return TranscriptPage{}, false
+	}
+	entries, err := files.List(ctx, transcriptRootPi, agentlog.PiProjectDir(scope.CWD), 1)
+	if err != nil {
+		return TranscriptPage{}, false
+	}
+	rel := ""
+	matches := 0
+	for _, entry := range entries {
+		if entry.Dir || entry.Link || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
+			continue
+		}
+		shape, ok := evidenceAdmitted(ctx, files, scope.Agent, entry.Rel)
+		if !ok || shape.CWD != scope.CWD || shape.SessionID != sessionID {
+			continue
+		}
+		matches++
+		rel = entry.Rel
+	}
+	if matches != 1 {
+		return TranscriptPage{}, false
+	}
+	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+}
+
+func verifyGrokID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || !agentlog.GrokHistoryRel(agentlog.GrokProjectDir(scope.CWD)+"/"+sessionID+"/chat_history.jsonl") {
+		return TranscriptPage{}, false
+	}
+	rel := agentlog.GrokProjectDir(scope.CWD) + "/" + sessionID + "/chat_history.jsonl"
+	if agentlog.GrokCWD(rel) != scope.CWD {
 		return TranscriptPage{}, false
 	}
 	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
@@ -127,6 +225,10 @@ func evidencePathSessionID(agent, rel string) string {
 		return agentlog.CursorSessionID(rel)
 	case agentlog.AgentClaude, agentlog.AgentCodex:
 		return agentlog.SessionStem(baseName(rel))
+	case agentlog.AgentPi:
+		return agentlog.PiSessionID(baseName(rel))
+	case agentlog.AgentGrok:
+		return agentlog.GrokSessionID(rel)
 	default:
 		return ""
 	}

@@ -33,6 +33,8 @@ var transcriptRoots = map[string]string{
 	"cursor": ".cursor/projects",
 	"gemini": ".gemini/tmp",
 	"agy":    ".gemini/antigravity-cli/conversations",
+	"pi":     ".pi/agent/sessions",
+	"grok":   ".grok/sessions",
 }
 
 type transcriptWireRequest struct {

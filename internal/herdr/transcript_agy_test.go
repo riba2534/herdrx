@@ -81,19 +81,19 @@ func TestAgyVerifiedIDReadsTheNamedDatabase(t *testing.T) {
 
 	for _, value := range []string{"not-a-uuid", "../" + uuid, uuid + ".db", "/tmp/" + uuid, "."} {
 		bad := scope
-		bad.Evidence = &AgentSession{Agent: agentlog.AgentAgy, Kind: "id", Value: value}
+		bad.Evidence = &AgentSession{Source: "herdr:test", Agent: agentlog.AgentAgy, Kind: "id", Value: value}
 		rejected := readTranscript(context.Background(), files, codec, bad, TranscriptRequest{})
 		if rejected.Binding == ChatBindingVerified {
 			t.Fatalf("id %q verified", value)
 		}
 	}
 	asPath := scope
-	asPath.Evidence = &AgentSession{Agent: agentlog.AgentAgy, Kind: "path", Value: uuid + ".db"}
+	asPath.Evidence = &AgentSession{Source: "herdr:test", Agent: agentlog.AgentAgy, Kind: "path", Value: uuid + ".db"}
 	if readTranscript(context.Background(), files, codec, asPath, TranscriptRequest{}).Binding == ChatBindingVerified {
 		t.Fatal("agy path evidence was verified")
 	}
 	missing := scope
-	missing.Evidence = &AgentSession{Agent: agentlog.AgentAgy, Kind: "id", Value: "33333333-2222-4333-8444-555555555555"}
+	missing.Evidence = &AgentSession{Source: "herdr:test", Agent: agentlog.AgentAgy, Kind: "id", Value: "33333333-2222-4333-8444-555555555555"}
 	if readTranscript(context.Background(), files, codec, missing, TranscriptRequest{}).Binding == ChatBindingVerified {
 		t.Fatal("missing agy file was verified")
 	}
