@@ -24,11 +24,17 @@ func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec trans
 			return verifyClaudeID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentDSH:
 			return verifyDSHID(ctx, files, codec, scope, request, evidence.Value)
+		case agentlog.AgentAgy:
+			return verifyAgyID(ctx, files, codec, scope, request, evidence.Value)
 		default:
 			// Cursor / Gemini 的 id 没有唯一相对路径。不扫目录树去找它。
 			return TranscriptPage{}, false
 		}
 	case "path":
+		// agy 只接受 kind=id 的 uuid。不读客户端传来的路径。
+		if scope.Agent == agentlog.AgentAgy {
+			return TranscriptPage{}, false
+		}
 		return verifyEvidencePath(ctx, files, codec, scope, request, evidence.Value)
 	default:
 		return TranscriptPage{}, false
@@ -61,6 +67,13 @@ func verifyClaudeID(ctx context.Context, files transcriptFS, codec transcriptCod
 		return TranscriptPage{}, false
 	}
 	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+}
+
+func verifyAgyID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
+	if !agentlog.AgyUUID(sessionID) {
+		return TranscriptPage{}, false
+	}
+	return finishVerified(ctx, files, codec, scope, request, sessionID, sessionID+".db")
 }
 
 func verifyDSHID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {

@@ -202,6 +202,7 @@ const (
 	transcriptRootDSH    transcriptRootKind = "dsh"
 	transcriptRootCursor transcriptRootKind = "cursor"
 	transcriptRootGemini transcriptRootKind = "gemini"
+	transcriptRootAgy    transcriptRootKind = "agy"
 )
 
 func transcriptRootFor(agent string) transcriptRootKind {
@@ -214,6 +215,8 @@ func transcriptRootFor(agent string) transcriptRootKind {
 		return transcriptRootCursor
 	case agentlog.AgentGemini:
 		return transcriptRootGemini
+	case agentlog.AgentAgy:
+		return transcriptRootAgy
 	}
 	return transcriptRootClaude
 }
@@ -228,6 +231,8 @@ var (
 	// errTranscriptTransport 表示当前接入方式拿不到受限读取能力。
 	errTranscriptTransport = errors.New("structured chat transport unsupported")
 	errTranscriptLimit     = errors.New("structured chat read limit exceeded")
+	// errTranscriptUnrecognized 表示文件在，但不是这个读取器认识的会话库。
+	errTranscriptUnrecognized = errors.New("structured chat unrecognized")
 )
 
 type transcriptEntry struct {
@@ -316,6 +321,8 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 		return agentlog.CursorTranscriptRel(rel) && agentlog.CursorSessionID(rel) == sessionID
 	case agentlog.AgentGemini:
 		return agentlog.GeminiSessionRel(rel)
+	case agentlog.AgentAgy:
+		return agentlog.AgyDBRel(rel) && agentlog.AgySessionID(rel) == sessionID
 	}
 	return false
 }
@@ -365,6 +372,8 @@ func transcriptDegradeFromError(err error, agent string) TranscriptPage {
 		return transcriptDegrade(ChatReasonReadDenied, agent)
 	case errors.Is(err, errTranscriptLimit):
 		return transcriptDegrade(ChatReasonReadLimitExceeded, agent)
+	case errors.Is(err, errTranscriptUnrecognized):
+		return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 	default:
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
@@ -405,6 +414,11 @@ func transcriptSessionLost(ctx context.Context, files transcriptFS, codec transc
 // collectCandidates 列出当前 cwd 的候选会话。第二个返回值表示「找到了会话目录，但没有
 // 本实现支持的产物代际」——调用方据此区分「这里没有会话」与「这里的会话读不了」。
 func collectCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string) ([]agentlog.Candidate, bool, error) {
+	// agy 的会话 id 就是文件名。没有 hook 证据时不扫 conversations 目录，
+	// 也不用 mtime 挑一个。
+	if agent == agentlog.AgentAgy {
+		return nil, false, nil
+	}
 	root := transcriptRootFor(agent)
 	var (
 		entries []transcriptEntry
@@ -691,6 +705,9 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	}
 	if agent == agentlog.AgentGemini {
 		return transcriptGeminiMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
+	}
+	if agent == agentlog.AgentAgy {
+		return transcriptAgyMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
 	}
 	root := transcriptRootFor(agent)
 	shapes, heads, err := transcriptShapes(ctx, files, root, agent, []string{rel})

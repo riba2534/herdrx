@@ -6,8 +6,9 @@
 // `<root>/<项目目录>/<会话目录>/session.v3.jsonl[.zstd]` —— 既不是 Herdr 协议的 RPC，
 // 也不是终端屏幕文本。
 //
-// 本包只做「一行 JSONL → 一条记录」的纯函数转换：不碰文件系统、不碰网络、不认识 Herdr，
+// 本包只做「一行 JSONL → 一条记录」的纯函数转换：JSONL 解码不碰文件系统、不碰网络、不认识 Herdr，
 // 因此可以用离线 fixture 完整测试，也便于对照上游 provider 的真实形状核对。
+// Antigravity 的 sqlite 读取是例外，见 agy_db.go：它只按调用方给出的路径只读打开那一个库。
 // DSH 的 zstd 帧由调用方（herdr 传输层）有界解压成明文字节后喂进来，本包不参与解压。
 //
 // 输出形状与冻结契约 `web/src/lib/structuredChatTypes.ts` 一一对应：
@@ -33,6 +34,7 @@ import (
 // Cursor 只解 `agent-transcripts/<sid>/<sid>.jsonl` 这一份已被测试钉住的形状。
 // Composer 的 state.vscdb 不是这份 JSONL，不能拿来冒充。Gemini 只解 session 文件里
 // 测试钉住的消息；工作区只认测试里的明确路径标记，不用目录哈希猜测。
+// Antigravity CLI（agy）只解 `conversations/<uuid>.db` 里的 steps.step_payload。
 // pane.read 的终端文本永远不是会话记录。
 const (
 	AgentClaude = "claude"
@@ -45,11 +47,14 @@ const (
 	// AgentGemini 是 Gemini CLI 的 session 文件。形状来自 connector_gemini.rs
 	// 与 gemini.rs 的 session fixture。
 	AgentGemini = "gemini"
+	// AgentAgy 是 Antigravity CLI。会话 id 就是
+	// `~/.gemini/antigravity-cli/conversations/<uuid>.db` 的文件名。
+	AgentAgy = "agy"
 )
 
 // Supported 报告该 agent 是否在本期支持范围内。
 func Supported(agent string) bool {
-	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH || agent == AgentCursor || agent == AgentGemini
+	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH || agent == AgentCursor || agent == AgentGemini || agent == AgentAgy
 }
 
 // 记录角色，闭集合。`tool` 不是 provider 的原生角色，而是派生角色：

@@ -53,6 +53,8 @@ func (f *localTranscriptFS) rootParts(root transcriptRootKind) ([]string, error)
 		return []string{".cursor", "projects"}, nil
 	case transcriptRootGemini:
 		return []string{".gemini", "tmp"}, nil
+	case transcriptRootAgy:
+		return []string{".gemini", "antigravity-cli", "conversations"}, nil
 	default:
 		return nil, errTranscriptRoot
 	}
