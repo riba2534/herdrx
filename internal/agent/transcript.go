@@ -91,6 +91,8 @@ type transcriptWireResponse struct {
 	Steps    []transcriptWireStep  `json:"steps,omitempty"`
 	Identity string                `json:"identity,omitempty"`
 	End      bool                  `json:"end,omitempty"`
+	Home     string                `json:"home,omitempty"`
+	HomeReal string                `json:"home_real,omitempty"`
 }
 
 // ServeTranscript reads one whitelisted request and writes one JSON response.

@@ -56,6 +56,20 @@ func (e *SSHEndpoint) transcriptUnavailable() bool {
 	return e.transcriptUnsupported
 }
 
+func (e *SSHEndpoint) rememberTranscriptHome(response transcriptRemoteResponse) {
+	if !strings.HasPrefix(response.Home, "/") {
+		return
+	}
+	real := response.HomeReal
+	if !strings.HasPrefix(real, "/") {
+		real = response.Home
+	}
+	e.transcriptMu.Lock()
+	defer e.transcriptMu.Unlock()
+	e.transcriptHome = response.Home
+	e.transcriptHomeReal = real
+}
+
 func (e *SSHEndpoint) markTranscriptUnsupported(reason string) {
 	e.transcriptMu.Lock()
 	defer e.transcriptMu.Unlock()
@@ -195,6 +209,8 @@ type transcriptRemoteResponse struct {
 	Steps    []transcriptRemoteStep   `json:"steps"`
 	Identity string                   `json:"identity"`
 	End      bool                     `json:"end"`
+	Home     string                   `json:"home"`
+	HomeReal string                   `json:"home_real"`
 }
 
 // transcriptTailcatCommand 是 access daemon 白名单里的固定命令，与 pane.read
@@ -282,6 +298,7 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 		// 空输出、截断或非 JSON 都不能证明主机永久缺失能力。
 		return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器返回空或无效响应，请重试")
 	}
+	e.rememberTranscriptHome(response)
 	if !response.OK {
 		if request.Op == "agy" && response.Error == "unknown_op" {
 			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器还不认识 Antigravity 记录，请更新远程主机上的 herdrx CLI 后重试")

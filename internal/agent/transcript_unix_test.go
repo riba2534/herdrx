@@ -295,8 +295,8 @@ func TestTranscriptCommandOnPairedSSHServesBoundedRead(t *testing.T) {
 	if err := session.Wait(); err != nil {
 		t.Fatalf("wait: %v stderr=%s", err, stderr.String())
 	}
-	if bytes.Contains(stdout.Bytes(), []byte(home)) || bytes.Contains(stdout.Bytes(), []byte(`"cwd"`)) {
-		t.Fatalf("response leaked cwd or home: %s", stdout.Bytes())
+	if bytes.Contains(stdout.Bytes(), []byte(`"cwd"`)) {
+		t.Fatalf("response leaked cwd: %s", stdout.Bytes())
 	}
 	var response transcriptWireResponse
 	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
@@ -304,6 +304,12 @@ func TestTranscriptCommandOnPairedSSHServesBoundedRead(t *testing.T) {
 	}
 	if !response.OK || len(response.Reads) != 1 || !response.Reads[0].Exists || response.Reads[0].Identity == "" {
 		t.Fatalf("ssh response = %+v", response)
+	}
+	if response.Home != home || response.HomeReal == "" {
+		t.Fatalf("home spellings = %+v", response)
+	}
+	if strings.Contains(response.Reads[0].Data, home) {
+		t.Fatal("read payload contained the home path")
 	}
 }
 
@@ -346,6 +352,45 @@ func hasRel(entries []transcriptWireEntry, rel string) bool {
 		}
 	}
 	return false
+}
+
+func TestTranscriptReaderFollowsOnlyTheHomeSymlink(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(real, ".claude", "projects"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	response, err := serveTranscript(link, []byte(`{"op":"list","agent":"claude","depth":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Home != link || response.HomeReal == "" || response.HomeReal == link {
+		t.Fatalf("symlink home = %+v", response)
+	}
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "projects"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(real, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(real, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := serveTranscript(link, []byte(`{"op":"list","agent":"claude","depth":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denied.OK || denied.Error != "denied" {
+		t.Fatalf("symlinked .claude = %+v", denied)
+	}
 }
 
 func TestTranscriptReaderQueriesAgyDatabase(t *testing.T) {

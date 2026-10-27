@@ -20,7 +20,17 @@ const (
 	fileFlags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
 )
 
-func serveTranscript(home string, raw []byte) (transcriptWireResponse, error) {
+func serveTranscript(home string, raw []byte) (response transcriptWireResponse, err error) {
+	logical := home
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil || !strings.HasPrefix(resolved, "/") {
+		return transcriptWireResponse{Error: "home_unavailable", Home: logical, HomeReal: logical}, nil
+	}
+	defer func() {
+		response.Home = logical
+		response.HomeReal = resolved
+	}()
+	home = resolved
 	request, err := decodeTranscriptRequest(raw)
 	if err != nil {
 		return transcriptWireResponse{Error: "bad_request"}, nil
