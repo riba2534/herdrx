@@ -439,13 +439,13 @@ func TestCursorAgentTranscriptUsesTheProvenShape(t *testing.T) {
 }
 
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
-	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini} {
+	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok, "traex", "traecli"} {
 		if !Supported(agent) {
 			t.Fatalf("%s should be supported", agent)
 		}
 	}
-	// 这些 harness 即使长得像 Claude 或 Pi，也没有在这里落地各自的 decoder。
-	for _, agent := range []string{"openclaude", "grok", "omp", "pi", "copilot", "opencode", "", "CLAUDE", "DSH"} {
+	// 这些 harness 即使长得像已经支持的读取器，也没有在这里落地各自的 decoder。
+	for _, agent := range []string{"openclaude", "omp", "copilot", "opencode", "", "CLAUDE", "DSH"} {
 		if Supported(agent) {
 			t.Fatalf("%q must not be claimed as supported", agent)
 		}

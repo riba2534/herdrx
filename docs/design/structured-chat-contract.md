@@ -309,7 +309,13 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    不认识的 step_type 跳过。这条映射还没有对着一份真实的长会话复核；
    `herdrx transcript-debug --agy <file>` 只打印 idx、step_type、role、块种类和
    文本长度，供在持有真实文件的机器上核对。
-   `openclaude` / `grok` / `omp` 以及没有按各自 fixture 落地的 harness 仍是
+   `traex` 与 `traecli` 使用 Codex 的 rollout 读取器，不另写解码。Pi 读取
+   `~/.pi/agent/sessions/--<cwd>--/<时间戳>_<id>.jsonl`，会话 id 来自文件名与
+   header，cwd 必须与 pane 一致；hook 上报的绝对路径不直接打开。Grok 只读
+   `chat_history.jsonl`，目录名是百分号编码的 cwd，`reasoning` 丢掉，
+   `synthetic_reason` 记成 system。已识别的 Cursor 会话从尾部分页，不再因为
+   其它项目的 transcript 占满 500 项目录预算而整页 `read_limit_exceeded`。
+   `openclaude` / `omp` 以及没有按各自 fixture 落地的 harness 仍是
    `unsupported_agent`。不得用 `pane.read` 终端文本填充 `messages`。
 
 在这些点被真实隔离会话验证之前，正确行为是返回 §4 的降级形状，而不是返回看起来合理的假记录。
