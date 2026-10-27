@@ -21,12 +21,13 @@
  * 其余 Agent（含与 claude/codex 同格式族的 openclaude / grok / omp）在各自的 decoder、
  * 日志根目录与 cwd 匹配规则被真实会话日志验证之前，一律 `supported: false`，不猜、不通配。
  * `cursor` 与 `gemini` 只覆盖各自 connector 测试钉住的会话文件，不合并到别的 harness。
+ * `agy` 只读 `~/.gemini/antigravity-cli/conversations/<uuid>.db`，uuid 来自 snapshot 的 agent_session。
  *
  * `dsh`（DeepSeek Harness）与上面两类不同：它的会话日志是项目目录/会话目录下的 JSONL
  * （压缩时是 zstd 帧），首行 header 带精确 `cwd` 与 session `id`。它进入这个闭集合**不代表**
  * 可以直接从窗口标题推断 pane 正在运行 DSH——见 `CHAT_SOURCES`。
  */
-export const CHAT_AGENTS = ['claude', 'codex', 'dsh', 'cursor', 'gemini'] as const
+export const CHAT_AGENTS = ['claude', 'codex', 'dsh', 'cursor', 'gemini', 'agy'] as const
 export type ChatAgent = (typeof CHAT_AGENTS)[number]
 
 /**
@@ -34,7 +35,7 @@ export type ChatAgent = (typeof CHAT_AGENTS)[number]
  * 不能声明 pane 正在运行什么。
  *
  * 现行契约只接受 `source=dsh`，且只在 snapshot 的 `pane.agent` 为空或不认识时才会生效
- * （已识别的 claude / codex / cursor / gemini 不允许被客户端覆盖）。省略该参数 = 按服务端从 snapshot 得到的
+ * （已识别的 claude / codex / cursor / gemini / agy 不允许被客户端覆盖）。省略该参数 = 按服务端从 snapshot 得到的
  * agent 读取。请求里**永远不允许**出现 `agent=` 之类的客户端声明。
  *
  * 客户端不得据此推断 Agent 身份：读取源只是用户对"读哪一类日志"的显式选择。
@@ -130,8 +131,10 @@ export type ChatSessionCandidate = {
 export const CHAT_BINDINGS = ['selected', 'verified'] as const
 export type ChatBinding = (typeof CHAT_BINDINGS)[number]
 // 'selected' —— 用户在候选列表里显式选择了这条记录。
-// 'verified' —— snapshot 的 agent_session（kind id 或 path）对应一个文件，且记录 cwd
-//              与 pane cwd 一致。单个候选、mtime 和目录名编码都不会产生这个绑定。
+// 'verified' —— snapshot 的 agent_session（kind id 或 path）对应一个文件。
+//              有记录 cwd 的读取器还要求它与 pane cwd 一致。agy 的 kind=id 就是
+//              会话 uuid，文件名即该 uuid，库内没有 cwd 字段，因此不比较记录 cwd。
+//              单个候选、mtime 和目录名编码都不会产生这个绑定。
 
 /**
  * 降级原因，闭集合。`supported` 的真假与 `reason` 的取值必须一一对应，不允许自造字符串。

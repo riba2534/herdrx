@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 	"golang.org/x/sys/unix"
+	_ "modernc.org/sqlite"
 )
 
 func readTranscriptRequest(t *testing.T, home string, payload string) transcriptWireResponse {
@@ -344,6 +346,41 @@ func hasRel(entries []transcriptWireEntry, rel string) bool {
 		}
 	}
 	return false
+}
+
+func TestTranscriptReaderQueriesAgyDatabase(t *testing.T) {
+	home := t.TempDir()
+	const uuid = "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, uuid+".db")
+	payload := []byte{0x0a, 0x03, 'n', 'o', 'p'}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE steps (idx integer primary key, step_type integer, status integer, step_format integer, step_payload blob)`); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO steps (idx, step_type, status, step_format, step_payload) VALUES (2, 14, 3, 0, ?)`, payload); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	response := readTranscriptRequest(t, home, `{"op":"agy","agent":"agy","rel":"`+uuid+`.db","agy_limit":10}`)
+	if !response.OK || !response.End || len(response.Steps) != 1 || response.Steps[0].Idx != 2 || response.Steps[0].Data == "" {
+		t.Fatalf("agy = %+v", response)
+	}
+	if strings.Contains(response.Steps[0].Data, "nop") {
+		t.Fatal("payload was not encoded")
+	}
+	escaped := readTranscriptRequest(t, home, `{"op":"agy","agent":"agy","rel":"../`+uuid+`.db"}`)
+	if escaped.OK || escaped.Error != "denied" {
+		t.Fatalf("escaped agy = %+v", escaped)
+	}
 }
 
 func itoa(value int) string {

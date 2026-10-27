@@ -79,7 +79,10 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
   `/`、`\` 或 NUL，也不能是 `.` / `..`。`kind=path` 只接受相对路径，拒绝绝对路径、
   `..` 段和反斜杠，并且必须通过既有的 `transcriptRelAllowed`。文件不存在、cwd 不一致
   或页面不支持时不返回 `verified`，改列候选。Cursor / Gemini 的 `kind=id` 没有单独的
-  相对路径，不扫目录树去找它。候选仍然不含 prompt 预览和路径。
+  相对路径，不扫目录树去找它。Antigravity CLI（`agy`）的 `kind=id` 就是会话 uuid，
+  唯一文件是 `~/.gemini/antigravity-cli/conversations/<uuid>.db`。这份库没有 cwd
+  字段，所以这条绑定不比较解码出的 cwd，也拒绝 `kind=path`，并且没有证据时不扫描
+  该目录。候选仍然不含 prompt 预览和路径。
 
 ### 3.3 目录名编码不能证明 cwd 归属（纠正）
 
@@ -300,6 +303,12 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 8. **Cursor Composer 的 `state.vscdb` 与其它未落地 connector**——Cursor 只读取
    `agent-transcripts/<sid>/<sid>.jsonl`，工作区只认 `.workspace-trusted` 的
    `workspacePath`。Gemini 只读取 `session-*.json[l]`，工作区只认测试钉住的路径标记。
+   Antigravity CLI（`agy`）读取 `conversations/<uuid>.db` 的 `steps.step_payload`
+   （未加密 protobuf）。角色按 CortexStepType 的名字落地：14 user、15 assistant、
+   132 tool、101/17/23 system。23 是检查点而不是 planner 回复。思考字段不输出。
+   不认识的 step_type 跳过。这条映射还没有对着一份真实的长会话复核；
+   `herdrx transcript-debug --agy <file>` 只打印 idx、step_type、role、块种类和
+   文本长度，供在持有真实文件的机器上核对。
    `openclaude` / `grok` / `omp` 以及没有按各自 fixture 落地的 harness 仍是
    `unsupported_agent`。不得用 `pane.read` 终端文本填充 `messages`。
 

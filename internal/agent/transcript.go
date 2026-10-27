@@ -25,22 +25,28 @@ const (
 )
 
 // transcriptRoots are the only directories a transcript read may enter.
-// Callers never supply a root. Cursor is intentionally absent: no verified
-// on-disk shape exists in this repo.
+// Callers never supply a root. agy is one sqlite file named by the session uuid.
 var transcriptRoots = map[string]string{
 	"claude": ".claude/projects",
 	"codex":  ".codex/sessions",
 	"dsh":    ".dsh/sessions",
 	"cursor": ".cursor/projects",
 	"gemini": ".gemini/tmp",
+	"agy":    ".gemini/antigravity-cli/conversations",
 }
 
 type transcriptWireRequest struct {
-	Op    string               `json:"op"`
-	Agent string               `json:"agent"`
-	Rel   string               `json:"rel"`
-	Depth int                  `json:"depth"`
-	Reads []transcriptWireSpec `json:"reads"`
+	Op           string               `json:"op"`
+	Agent        string               `json:"agent"`
+	Rel          string               `json:"rel"`
+	Depth        int                  `json:"depth"`
+	Reads        []transcriptWireSpec `json:"reads"`
+	AgyHasAfter  bool                 `json:"agy_has_after,omitempty"`
+	AgyAfter     int64                `json:"agy_after,omitempty"`
+	AgyHasBefore bool                 `json:"agy_has_before,omitempty"`
+	AgyBefore    int64                `json:"agy_before,omitempty"`
+	AgyDesc      bool                 `json:"agy_desc,omitempty"`
+	AgyLimit     int                  `json:"agy_limit,omitempty"`
 }
 
 type transcriptWireSpec struct {
@@ -65,11 +71,23 @@ type transcriptWireRead struct {
 	Identity string `json:"identity"`
 }
 
+type transcriptWireStep struct {
+	Idx      int64  `json:"idx"`
+	StepType int    `json:"step_type"`
+	Status   int    `json:"status"`
+	Format   int    `json:"step_format"`
+	Data     string `json:"data,omitempty"`
+	Oversize bool   `json:"oversize,omitempty"`
+}
+
 type transcriptWireResponse struct {
-	OK      bool                  `json:"ok"`
-	Error   string                `json:"error,omitempty"`
-	Entries []transcriptWireEntry `json:"entries,omitempty"`
-	Reads   []transcriptWireRead  `json:"reads,omitempty"`
+	OK       bool                  `json:"ok"`
+	Error    string                `json:"error,omitempty"`
+	Entries  []transcriptWireEntry `json:"entries,omitempty"`
+	Reads    []transcriptWireRead  `json:"reads,omitempty"`
+	Steps    []transcriptWireStep  `json:"steps,omitempty"`
+	Identity string                `json:"identity,omitempty"`
+	End      bool                  `json:"end,omitempty"`
 }
 
 // ServeTranscript reads one whitelisted request and writes one JSON response.

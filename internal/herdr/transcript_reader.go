@@ -8,9 +8,12 @@ package herdr
 // 被 ELOOP 拒绝，最终必须是普通文件；请求经 stdin 以 JSON 传入，从不进入命令行。
 //
 // 远端没有 python3 时**明确返回不支持**，绝不退回不安全的读法。
-const transcriptReaderSource = `import base64, errno, json, os, stat, sys
+const transcriptReaderSource = `import base64, errno, json, os, re, sqlite3, stat, sys
 
-ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "dsh": ".dsh/sessions", "cursor": ".cursor/projects", "gemini": ".gemini/tmp"}
+ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "dsh": ".dsh/sessions", "cursor": ".cursor/projects", "gemini": ".gemini/tmp", "agy": ".gemini/antigravity-cli/conversations"}
+AGY_DB = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.db$")
+AGY_STEP_BYTES = 1 << 20
+AGY_TOTAL_BYTES = 768 << 10
 CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 DIR_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0) | CLOEXEC
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | CLOEXEC | os.O_NONBLOCK
@@ -184,6 +187,72 @@ def op_read(root_fd, request):
     return {"ok": True, "reads": results}
 
 
+def op_agy(home, root_fd, request):
+    rel = request.get("rel")
+    if not isinstance(rel, str) or AGY_DB.fullmatch(rel) is None:
+        return {"ok": False, "error": "denied"}
+    try:
+        fd = open_file(root_fd, rel)
+    except OSError as exc:
+        return {"ok": False, "error": classify(exc)}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return {"ok": False, "error": "denied"}
+        identity = "%x:%x" % (info.st_dev, info.st_ino)
+    finally:
+        os.close(fd)
+    limit = request.get("agy_limit") or 64
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+        limit = 64
+    if limit > 200:
+        limit = 200
+    after = request.get("agy_after") or 0
+    before = request.get("agy_before") or 0
+    if isinstance(after, bool) or not isinstance(after, int) or after < 0:
+        return {"ok": False, "error": "denied"}
+    if isinstance(before, bool) or not isinstance(before, int) or before < 0:
+        return {"ok": False, "error": "denied"}
+    has_after = 1 if request.get("agy_has_after") is True else 0
+    has_before = 1 if request.get("agy_has_before") is True else 0
+    order = "DESC" if request.get("agy_desc") is True else "ASC"
+    path = os.path.join(home, ROOTS["agy"], rel)
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+    except sqlite3.Error:
+        return {"ok": False, "error": "unrecognized"}
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA busy_timeout=2000")
+        try:
+            fetched = conn.execute(
+                "SELECT idx, IFNULL(step_type,0), IFNULL(status,0), IFNULL(step_format,0), IFNULL(length(step_payload),0), "
+                "CASE WHEN IFNULL(length(step_payload),0) > ? THEN NULL ELSE step_payload END "
+                "FROM steps WHERE (? = 0 OR idx > ?) AND (? = 0 OR idx < ?) ORDER BY idx " + order + " LIMIT ?",
+                (AGY_STEP_BYTES, has_after, after, has_before, before, limit),
+            ).fetchall()
+        except sqlite3.Error:
+            return {"ok": False, "error": "unrecognized"}
+    finally:
+        conn.close()
+    steps = []
+    total = 0
+    stopped = False
+    for idx, step_type, status, step_format, length, payload in fetched:
+        size = 0 if payload is None else len(payload)
+        if steps and total + size > AGY_TOTAL_BYTES:
+            stopped = True
+            break
+        total += size
+        item = {"idx": idx, "step_type": step_type, "status": status, "step_format": step_format}
+        if payload is None and length > AGY_STEP_BYTES:
+            item["oversize"] = True
+        elif payload:
+            item["data"] = base64.b64encode(payload).decode("ascii")
+        steps.append(item)
+    return {"ok": True, "identity": identity, "end": (not stopped) and len(fetched) < limit, "steps": steps}
+
+
 def main():
     try:
         raw = sys.stdin.read()
@@ -214,6 +283,8 @@ def main():
             return op_read(root_fd, request)
         if op == "probe":
             return {"ok": True}
+        if op == "agy":
+            return op_agy(home, root_fd, request)
         return {"ok": False, "error": "unknown_op"}
     finally:
         os.close(root_fd)

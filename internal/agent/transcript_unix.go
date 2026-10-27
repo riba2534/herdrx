@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/riba2534/herdrx/internal/agentlog"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,6 +41,8 @@ func serveTranscript(home string, raw []byte) (transcriptWireResponse, error) {
 		return readTranscript(rootFD, request), nil
 	case "probe":
 		return transcriptWireResponse{OK: true}, nil
+	case "agy":
+		return serveAgy(home, rootName, rootFD, request), nil
 	default:
 		return transcriptWireResponse{Error: "unknown_op"}, nil
 	}
@@ -275,6 +279,50 @@ func readTranscriptOne(rootFD int, spec transcriptWireSpec) transcriptWireRead {
 	}
 	result.Data = base64.StdEncoding.EncodeToString(buffer[:got])
 	return result
+}
+
+func serveAgy(home, rootName string, rootFD int, request transcriptWireRequest) transcriptWireResponse {
+	if !agentlog.AgyDBRel(request.Rel) {
+		return transcriptWireResponse{Error: "denied"}
+	}
+	fd, err := openRegular(rootFD, request.Rel)
+	if err != nil {
+		return transcriptWireResponse{Error: classifyTranscript(err)}
+	}
+	var stat unix.Stat_t
+	statErr := unix.Fstat(fd, &stat)
+	unix.Close(fd)
+	if statErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return transcriptWireResponse{Error: "denied"}
+	}
+	limit := request.AgyLimit
+	if limit <= 0 {
+		limit = 64
+	}
+	rows, end, err := agentlog.QueryAgyDB(nil, filepath.Join(home, filepath.FromSlash(rootName), request.Rel), agentlog.AgyBounds{
+		HasAfter: request.AgyHasAfter, After: request.AgyAfter,
+		HasBefore: request.AgyHasBefore, Before: request.AgyBefore,
+		Desc: request.AgyDesc, Limit: limit,
+	})
+	if err != nil {
+		switch {
+		case os.IsNotExist(err):
+			return transcriptWireResponse{Error: "not_found"}
+		case errors.Is(err, agentlog.ErrAgyUnrecognized):
+			return transcriptWireResponse{Error: "unrecognized"}
+		default:
+			return transcriptWireResponse{Error: "denied"}
+		}
+	}
+	steps := make([]transcriptWireStep, 0, len(rows))
+	for _, row := range rows {
+		step := transcriptWireStep{Idx: row.Idx, StepType: row.StepType, Status: row.Status, Format: row.StepFormat, Oversize: row.Oversize}
+		if len(row.Payload) > 0 {
+			step.Data = base64.StdEncoding.EncodeToString(row.Payload)
+		}
+		steps = append(steps, step)
+	}
+	return transcriptWireResponse{OK: true, Identity: fmt.Sprintf("%x:%x", stat.Dev, stat.Ino), End: end, Steps: steps}
 }
 
 func classifyTranscript(err error) string {

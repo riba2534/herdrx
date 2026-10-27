@@ -22,6 +22,7 @@ import (
 
 	"github.com/mdp/qrterminal/v3"
 	"github.com/riba2534/herdrx/internal/agent"
+	"github.com/riba2534/herdrx/internal/agentlog"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/tunnel"
 	"github.com/tailscale/tailcat"
@@ -83,6 +84,8 @@ func Run(args []string, stdout, stderr io.Writer, env Environment) int {
 	case "version", "--version", "-V":
 		fmt.Fprintf(stdout, "herdrx %s\n", Version)
 		return 0
+	case "transcript-debug":
+		return runTranscriptDebug(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -918,6 +921,25 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  self-test Check binary compatibility and read an identity offline")
 	fmt.Fprintln(w, "  rollback  Restore the previous compatible herdrx binary")
 	fmt.Fprintln(w, "  version   Print version information")
+	fmt.Fprintln(w, "  transcript-debug  Print Antigravity step sizes (--agy file)")
+}
+
+func runTranscriptDebug(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("transcript-debug", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	agy := fs.String("agy", "", "Antigravity conversation sqlite file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *agy == "" {
+		fmt.Fprintln(stderr, "usage: herdrx transcript-debug --agy <file>")
+		return 2
+	}
+	if err := agentlog.WriteAgyDebug(stdout, *agy); err != nil {
+		fmt.Fprintln(stderr, "无法读取 Antigravity 会话文件")
+		return 1
+	}
+	return 0
 }
 
 func runLogs(args []string, stdout, stderr io.Writer) int {

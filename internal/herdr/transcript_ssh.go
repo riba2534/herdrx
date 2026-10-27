@@ -76,7 +76,7 @@ type sshTranscriptFS struct {
 }
 
 func (f *sshTranscriptFS) rememberReadError(err error) {
-	if err != nil && !errors.Is(err, errTranscriptTransport) && !errors.Is(err, errTranscriptRoot) && !errors.Is(err, errTranscriptNotFound) && !errors.Is(err, errTranscriptDenied) {
+	if err != nil && !errors.Is(err, errTranscriptTransport) && !errors.Is(err, errTranscriptRoot) && !errors.Is(err, errTranscriptNotFound) && !errors.Is(err, errTranscriptDenied) && !errors.Is(err, errTranscriptUnrecognized) {
 		f.transientErr = err
 	}
 }
@@ -142,11 +142,17 @@ func (f *sshTranscriptFS) Read(ctx context.Context, root transcriptRootKind, spe
 // 请求经 stdin 以 JSON 传递，**不拼进命令行**：远端命令字符串里只有服务端自己的常量，
 // 任何用户可控的字节都不会成为 shell 语法。
 type transcriptRemoteRequest struct {
-	Op    string                 `json:"op"`
-	Agent string                 `json:"agent,omitempty"`
-	Rel   string                 `json:"rel,omitempty"`
-	Depth int                    `json:"depth,omitempty"`
-	Reads []transcriptRemoteRead `json:"reads,omitempty"`
+	Op           string                 `json:"op"`
+	Agent        string                 `json:"agent,omitempty"`
+	Rel          string                 `json:"rel,omitempty"`
+	Depth        int                    `json:"depth,omitempty"`
+	Reads        []transcriptRemoteRead `json:"reads,omitempty"`
+	AgyHasAfter  bool                   `json:"agy_has_after,omitempty"`
+	AgyAfter     int64                  `json:"agy_after,omitempty"`
+	AgyHasBefore bool                   `json:"agy_has_before,omitempty"`
+	AgyBefore    int64                  `json:"agy_before,omitempty"`
+	AgyDesc      bool                   `json:"agy_desc,omitempty"`
+	AgyLimit     int                    `json:"agy_limit,omitempty"`
 }
 
 type transcriptRemoteRead struct {
@@ -172,11 +178,23 @@ type transcriptRemoteResult struct {
 	Identity string `json:"identity"`
 }
 
+type transcriptRemoteStep struct {
+	Idx      int64  `json:"idx"`
+	StepType int    `json:"step_type"`
+	Status   int    `json:"status"`
+	Format   int    `json:"step_format"`
+	Data     string `json:"data,omitempty"`
+	Oversize bool   `json:"oversize,omitempty"`
+}
+
 type transcriptRemoteResponse struct {
-	OK      bool                     `json:"ok"`
-	Error   string                   `json:"error"`
-	Entries []transcriptRemoteEntry  `json:"entries"`
-	Reads   []transcriptRemoteResult `json:"reads"`
+	OK       bool                     `json:"ok"`
+	Error    string                   `json:"error"`
+	Entries  []transcriptRemoteEntry  `json:"entries"`
+	Reads    []transcriptRemoteResult `json:"reads"`
+	Steps    []transcriptRemoteStep   `json:"steps"`
+	Identity string                   `json:"identity"`
+	End      bool                     `json:"end"`
 }
 
 // transcriptTailcatCommand 是 access daemon 白名单里的固定命令，与 pane.read
@@ -265,11 +283,16 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 		return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器返回空或无效响应，请重试")
 	}
 	if !response.OK {
+		if request.Op == "agy" && response.Error == "unknown_op" {
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器还不认识 Antigravity 记录，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		switch response.Error {
 		case "root_unavailable", "home_unavailable":
 			return transcriptRemoteResponse{}, errTranscriptRoot
 		case "not_found":
 			return transcriptRemoteResponse{}, errTranscriptNotFound
+		case "unrecognized":
+			return transcriptRemoteResponse{}, errTranscriptUnrecognized
 		case "denied", "bad_request", "unknown_agent", "unknown_op":
 			return transcriptRemoteResponse{}, errTranscriptDenied
 		}
