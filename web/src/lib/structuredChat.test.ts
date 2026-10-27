@@ -84,6 +84,7 @@ describe('paneAgentRejectsReadSource', () => {
     expect(paneAgentRejectsReadSource(' codex ')).toBe(true)
     expect(paneAgentRejectsReadSource('cursor')).toBe(true)
     expect(paneAgentRejectsReadSource('gemini')).toBe(true)
+    expect(paneAgentRejectsReadSource('agy')).toBe(true)
     // 未识别 / 未知 / 本来就是 dsh：都允许用户显式选择 DSH。
     expect(paneAgentRejectsReadSource('')).toBe(false)
     expect(paneAgentRejectsReadSource(undefined)).toBe(false)
@@ -140,10 +141,11 @@ describe('normalizeStructuredChatResponse', () => {
         { id: 'c2', agent: 'grok', session_id: 's2', updated_at: '' },
         { id: 'c3', agent: 'cursor', session_id: 's3' },
         { id: 'c4', agent: 'gemini', session_id: 's4', updated_at: '' },
+        { id: 'c5', agent: 'agy', session_id: 's5', updated_at: '' },
       ],
       reason: 'made_up_reason',
     })
-    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3', 'c4'])
+    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3', 'c4', 'c5'])
     expect(normalized.reason).toBeUndefined()
   })
 
