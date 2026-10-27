@@ -22,7 +22,8 @@
  * 日志根目录与 cwd 匹配规则被真实会话日志验证之前，一律 `supported: false`，不猜、不通配。
  * `cursor` 与 `gemini` 只覆盖各自 connector 测试钉住的会话文件，不合并到别的 harness。
  * `agy` 只读 `~/.gemini/antigravity-cli/conversations/<uuid>.db`。
- * `traex` / `traecli` 与 codex 共用 rollout 读取器。`pi` 与 `grok` 只读各自的会话文件。
+ * `traex` / `traecli` 读 `~/.trae/cli/sessions`。hook 把它报成 codex 时，kind=id 也会查这个根。
+ * `pi` 与 `grok` 只读各自的会话文件。
  *
  * `dsh`（DeepSeek Harness）与上面两类不同：它的会话日志是项目目录/会话目录下的 JSONL
  * （压缩时是 zstd 帧），首行 header 带精确 `cwd` 与 session `id`。它进入这个闭集合**不代表**

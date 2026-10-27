@@ -12,7 +12,7 @@ import (
 func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest) (TranscriptPage, bool) {
 	evidence := scope.Evidence
 	// 只认 Herdr 自己的集成上报。agy 的 source 是 `herdr:antigravity_cli`，不等于 `herdr:agy`。
-	if evidence == nil || !strings.HasPrefix(evidence.Source, "herdr:") || evidence.Agent != scope.Agent || !agentlog.Supported(scope.Agent) {
+	if evidence == nil || !strings.HasPrefix(evidence.Source, "herdr:") || !agentlog.SameTranscriptAgent(evidence.Agent, scope.Agent) || !agentlog.Supported(scope.Agent) {
 		return TranscriptPage{}, false
 	}
 	switch evidence.Kind {
@@ -21,6 +21,8 @@ func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec trans
 			return TranscriptPage{}, false
 		}
 		switch scope.Agent {
+		case agentlog.AgentCodex, agentlog.AgentTraex:
+			return verifyRolloutID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentClaude:
 			return verifyClaudeID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentDSH:

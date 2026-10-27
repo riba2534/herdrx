@@ -1,9 +1,35 @@
 package agentlog
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+// rolloutUUID 是文件名里的会话 uuid。traex 的第一个 uuid 才是 session id，
+// 后面还有 `_<第二个 uuid>`。
+var rolloutUUID = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// RolloutSessionID 返回 rollout 文件名里的第一个 uuid。没有时返回空串。
+func RolloutSessionID(name string) string {
+	if !CodexSessionFile(name) {
+		return ""
+	}
+	return rolloutUUID.FindString(name)
+}
+
+// RolloutMatchesSession 报告文件名是否指向这个会话 id。
+// traex 认第一个 uuid；Codex 的 id 也可能直接接在最后一个 `-` 后面。
+func RolloutMatchesSession(name, sessionID string) bool {
+	if sessionID == "" || !CodexSessionFile(name) || strings.ContainsAny(sessionID, `/\`) {
+		return false
+	}
+	if RolloutSessionID(name) == sessionID {
+		return true
+	}
+	stem := strings.TrimSuffix(name, ".jsonl")
+	return strings.HasSuffix(stem, "-"+sessionID)
+}
 
 // Codex 的两种记录形状。同一份会话文件可能同时出现 `response_item` 与 `event_msg`，
 // 描述同一个轮次；也可能出现旧式「未包裹的 response_item」（记录本身就是 item，
@@ -14,6 +40,56 @@ const (
 	codexEventTurnAborted   = "turn_aborted"
 	codexRecordCompacted    = "compacted"
 )
+
+// decodeCodexOutcome 解码一行 Codex 或 traex 日志。history_mutation 的 append
+// 可以在同一行产出多条记录；replace 是压缩，整行跳过。
+func decodeCodexOutcome(context LineContext, line string) lineOutcome {
+	record := parseJSONObject(line)
+	if record == nil {
+		return lineOutcome{skipped: true}
+	}
+	if extractString(record["type"]) == "history_mutation" {
+		return decodeHistoryMutation(context, record)
+	}
+	decoded, skipped := decodeCodexLine(context, line)
+	return lineOutcome{record: decoded, skipped: skipped}
+}
+
+func decodeHistoryMutation(context LineContext, record map[string]any) lineOutcome {
+	payload := asRecord(record["payload"])
+	if payload == nil || extractString(payload["operation"]) != "append" {
+		return lineOutcome{}
+	}
+	items, _ := payload["items"].([]any)
+	at := parseTimestamp(record["timestamp"])
+	records := make([]*Record, 0, len(items))
+	for index, value := range items {
+		item := asRecord(value)
+		if item == nil {
+			continue
+		}
+		switch extractString(item["type"]) {
+		case "reasoning", "trae_extra_info":
+			continue
+		case "message":
+			if extractString(item["role"]) == "developer" {
+				continue
+			}
+		}
+		id := extractString(item["id"])
+		if id == "" {
+			id = context.SessionID + ":" + strconv.FormatInt(context.Offset, 10) + ":" + strconv.Itoa(index)
+		}
+		decoded, _ := codexItem(item, id, at)
+		if decoded != nil {
+			records = append(records, decoded)
+		}
+	}
+	if len(records) == 0 {
+		return lineOutcome{}
+	}
+	return lineOutcome{record: records[0], records: records}
+}
 
 // decodeCodexLine 把一行 Codex JSONL 解码成一条记录。
 //
