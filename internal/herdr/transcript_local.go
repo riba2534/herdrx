@@ -60,7 +60,7 @@ func (f *localTranscriptFS) anchored(root transcriptRootKind, rel string) (strin
 	parts := make([]string, 0, len(rootParts)+len(relParts))
 	parts = append(parts, rootParts...)
 	parts = append(parts, relParts...)
-	return filepath.Join(f.home, filepath.FromSlash(strings.Join(parts, "/"))), parts, nil
+	return filepath.Join(f.resolvedHome(), filepath.FromSlash(strings.Join(parts, "/"))), parts, nil
 }
 
 func (f *localTranscriptFS) List(ctx context.Context, root transcriptRootKind, rel string, depth int) ([]transcriptEntry, error) {
@@ -74,14 +74,14 @@ func (f *localTranscriptFS) List(ctx context.Context, root transcriptRootKind, r
 	}
 	// 先验日志根本身：`.claude/projects` / `.codex/sessions` 不存在或不是目录时，
 	// 这是 log_root_unavailable（能力缺失），而不是「这个 cwd 没有候选」。
-	if err := transcriptVerifyNoSymlink(f.home, rootParts); err != nil {
+	if err := transcriptVerifyNoSymlink(f.resolvedHome(), rootParts); err != nil {
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, errTranscriptRoot
 		}
 		return nil, err
 	}
 	// 再验根以下的部分：日志根存在、但当前 cwd 的目录还没有，才是「候选为空」。
-	if err := transcriptVerifyNoSymlink(filepath.Join(f.home, filepath.FromSlash(strings.Join(rootParts, "/"))), parts[len(rootParts):]); err != nil {
+	if err := transcriptVerifyNoSymlink(filepath.Join(f.resolvedHome(), filepath.FromSlash(strings.Join(rootParts, "/"))), parts[len(rootParts):]); err != nil {
 		return nil, err
 	}
 	entries := make([]transcriptEntry, 0, 16)
@@ -176,7 +176,7 @@ func (f *localTranscriptFS) readOne(ctx context.Context, rootParts []string, spe
 	parts = append(parts, rootParts...)
 	parts = append(parts, relParts...)
 	// 逐段 openat + O_NOFOLLOW：既有符号链接拒绝，也没有 test-then-open 的竞态窗口。
-	file, err := openRegularNoFollow(f.home, parts)
+	file, err := openRegularNoFollow(f.resolvedHome(), parts)
 	if err != nil {
 		return transcriptReadResult{Err: err}
 	}

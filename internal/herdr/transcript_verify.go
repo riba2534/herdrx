@@ -75,12 +75,15 @@ func verifyClaudeID(ctx context.Context, files transcriptFS, codec transcriptCod
 	if !agentlog.ClaudeSessionFile(name) {
 		return TranscriptPage{}, false
 	}
-	rel := agentlog.ClaudeProjectDir(scope.CWD) + "/" + name
-	shape, ok := evidenceAdmitted(ctx, files, scope.Agent, rel)
-	if !ok || shape.CWD != scope.CWD {
-		return TranscriptPage{}, false
+	for _, spelling := range cwdSpellings(files, scope.CWD) {
+		rel := agentlog.ClaudeProjectDir(spelling) + "/" + name
+		shape, ok := evidenceAdmitted(ctx, files, scope.Agent, rel)
+		if !ok || !cwdMatch(files, shape.CWD, scope.CWD) {
+			continue
+		}
+		return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
 	}
-	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+	return TranscriptPage{}, false
 }
 
 func verifyCursorID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
@@ -102,7 +105,7 @@ func verifyCursorID(ctx context.Context, files transcriptFS, codec transcriptCod
 			continue
 		}
 		workspace, err := cursorWorkspace(ctx, files, candidate)
-		if err != nil || workspace != scope.CWD {
+		if err != nil || !cwdMatch(files, workspace, scope.CWD) {
 			continue
 		}
 		if _, ok := evidenceAdmitted(ctx, files, scope.Agent, candidate); !ok {
@@ -136,22 +139,24 @@ func verifyPiID(ctx context.Context, files transcriptFS, codec transcriptCodec, 
 	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) {
 		return TranscriptPage{}, false
 	}
-	entries, err := files.List(ctx, transcriptRootPi, agentlog.PiProjectDir(scope.CWD), 1)
-	if err != nil {
-		return TranscriptPage{}, false
-	}
 	rel := ""
 	matches := 0
-	for _, entry := range entries {
-		if entry.Dir || entry.Link || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
+	for _, spelling := range cwdSpellings(files, scope.CWD) {
+		entries, err := files.List(ctx, transcriptRootPi, agentlog.PiProjectDir(spelling), 1)
+		if err != nil {
 			continue
 		}
-		shape, ok := evidenceAdmitted(ctx, files, scope.Agent, entry.Rel)
-		if !ok || shape.CWD != scope.CWD || shape.SessionID != sessionID {
-			continue
+		for _, entry := range entries {
+			if entry.Dir || entry.Link || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
+				continue
+			}
+			shape, ok := evidenceAdmitted(ctx, files, scope.Agent, entry.Rel)
+			if !ok || !cwdMatch(files, shape.CWD, scope.CWD) || shape.SessionID != sessionID {
+				continue
+			}
+			matches++
+			rel = entry.Rel
 		}
-		matches++
-		rel = entry.Rel
 	}
 	if matches != 1 {
 		return TranscriptPage{}, false
@@ -160,14 +165,19 @@ func verifyPiID(ctx context.Context, files transcriptFS, codec transcriptCodec, 
 }
 
 func verifyGrokID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
-	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || !agentlog.GrokHistoryRel(agentlog.GrokProjectDir(scope.CWD)+"/"+sessionID+"/chat_history.jsonl") {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) {
 		return TranscriptPage{}, false
 	}
-	rel := agentlog.GrokProjectDir(scope.CWD) + "/" + sessionID + "/chat_history.jsonl"
-	if agentlog.GrokCWD(rel) != scope.CWD {
-		return TranscriptPage{}, false
+	for _, spelling := range cwdSpellings(files, scope.CWD) {
+		rel := agentlog.GrokProjectDir(spelling) + "/" + sessionID + "/chat_history.jsonl"
+		if !agentlog.GrokHistoryRel(rel) || !cwdMatch(files, agentlog.GrokCWD(rel), scope.CWD) {
+			continue
+		}
+		if page, ok := finishVerified(ctx, files, codec, scope, request, sessionID, rel); ok {
+			return page, true
+		}
 	}
-	return finishVerified(ctx, files, codec, scope, request, sessionID, rel)
+	return TranscriptPage{}, false
 }
 
 func verifyAgyID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
@@ -179,16 +189,18 @@ func verifyAgyID(ctx context.Context, files transcriptFS, codec transcriptCodec,
 
 func verifyDSHID(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID string) (TranscriptPage, bool) {
 	for _, name := range []string{"session.v3.jsonl", "session.v3.jsonl.zstd"} {
-		rel, ok := dshRelForSession(scope.CWD, sessionID, name)
-		if !ok || !transcriptRelAllowed(scope.Agent, scope.CWD, sessionID, rel) {
-			continue
-		}
-		shape, admitted := evidenceAdmitted(ctx, files, scope.Agent, rel)
-		if !admitted || shape.DSHVersion != agentlog.DSHFormatVersion || shape.SessionID != sessionID || shape.CWD != scope.CWD {
-			continue
-		}
-		if page, ok := finishVerified(ctx, files, codec, scope, request, sessionID, rel); ok {
-			return page, true
+		for _, spelling := range cwdSpellings(files, scope.CWD) {
+			rel, ok := dshRelForSession(spelling, sessionID, name)
+			if !ok || !transcriptRelAllowed(scope.Agent, spelling, sessionID, rel) {
+				continue
+			}
+			shape, admitted := evidenceAdmitted(ctx, files, scope.Agent, rel)
+			if !admitted || shape.DSHVersion != agentlog.DSHFormatVersion || shape.SessionID != sessionID || !cwdMatch(files, shape.CWD, scope.CWD) {
+				continue
+			}
+			if page, ok := finishVerified(ctx, files, codec, scope, request, sessionID, rel); ok {
+				return page, true
+			}
 		}
 	}
 	return TranscriptPage{}, false
@@ -201,17 +213,17 @@ func verifyEvidencePath(ctx context.Context, files transcriptFS, codec transcrip
 	sessionID := evidencePathSessionID(scope.Agent, rel)
 	if scope.Agent == agentlog.AgentDSH {
 		shape, ok := evidenceAdmitted(ctx, files, scope.Agent, rel)
-		if !ok || shape.DSHVersion != agentlog.DSHFormatVersion || shape.SessionID == "" || shape.CWD != scope.CWD {
+		if !ok || shape.DSHVersion != agentlog.DSHFormatVersion || shape.SessionID == "" || !cwdMatch(files, shape.CWD, scope.CWD) {
 			return TranscriptPage{}, false
 		}
 		sessionID = shape.SessionID
 	}
-	if !transcriptRelAllowed(scope.Agent, scope.CWD, sessionID, rel) {
+	if !transcriptRelAllowedAny(files, scope.Agent, scope.CWD, sessionID, rel) {
 		return TranscriptPage{}, false
 	}
 	if scope.Agent == agentlog.AgentClaude || scope.Agent == agentlog.AgentCodex {
 		shape, ok := evidenceAdmitted(ctx, files, scope.Agent, rel)
-		if !ok || shape.CWD != scope.CWD {
+		if !ok || !cwdMatch(files, shape.CWD, scope.CWD) {
 			return TranscriptPage{}, false
 		}
 		if sessionID == "" {
@@ -257,7 +269,7 @@ func evidenceAdmitted(ctx context.Context, files transcriptFS, agent, rel string
 }
 
 func finishVerified(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest, sessionID, rel string) (TranscriptPage, bool) {
-	if rel == "" || !transcriptRelAllowed(scope.Agent, scope.CWD, sessionID, rel) {
+	if rel == "" || !transcriptRelAllowedAny(files, scope.Agent, scope.CWD, sessionID, rel) {
 		return TranscriptPage{}, false
 	}
 	page := transcriptMessages(ctx, files, codec, scope.Agent, scope.CWD, sessionID, rel, request)

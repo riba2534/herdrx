@@ -69,7 +69,7 @@ func transcriptGeminiMessages(ctx context.Context, files transcriptFS, codec tra
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
 	}
-	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || document.CWD != cwd {
+	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || !cwdMatch(files, document.CWD, cwd) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	sessionID = document.SessionID
@@ -260,7 +260,7 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 	if sessionID == "" {
 		sessionID = document.SessionID
 	}
-	proven := headDoc.CWD == cwd || document.CWD == cwd
+	proven := cwdMatch(files, headDoc.CWD, cwd) || cwdMatch(files, document.CWD, cwd)
 	if sessionID == "" || !proven {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}

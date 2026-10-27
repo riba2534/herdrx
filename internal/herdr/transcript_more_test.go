@@ -5,12 +5,119 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
+
+func TestHomeSymlinkReadsLogsAndMatchesBothSpellings(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	realCwd := real + "/proj"
+	linkCwd := link + "/proj"
+	writeLines(t, claudeSessionPath(real, realCwd, "sess-real"), []string{claudeUser("u-real", realCwd, "真实家目录")})
+	writeLines(t, claudeSessionPath(real, linkCwd, "sess-link"), []string{claudeUser("u-link", linkCwd, "链接家目录")})
+	files := &localTranscriptFS{home: link}
+	codec := newTranscriptCodecForTest(t)
+
+	fromLink := TranscriptScope{
+		PaneID: "p", Agent: agentlog.AgentClaude, CWD: linkCwd,
+		Evidence: &AgentSession{Source: "hook", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-real"},
+	}
+	page := readTranscript(context.Background(), files, codec, fromLink, TranscriptRequest{})
+	if page.Binding != ChatBindingVerified || len(page.Messages) != 1 || page.Messages[0].Blocks[0].Text != "真实家目录" {
+		t.Fatalf("link pane / real record = %+v", page)
+	}
+	fromReal := TranscriptScope{
+		PaneID: "p", Agent: agentlog.AgentClaude, CWD: realCwd,
+		Evidence: &AgentSession{Source: "hook", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-link"},
+	}
+	page = readTranscript(context.Background(), files, codec, fromReal, TranscriptRequest{})
+	if page.Binding != ChatBindingVerified || len(page.Messages) != 1 || page.Messages[0].Blocks[0].Text != "链接家目录" {
+		t.Fatalf("real pane / link record = %+v", page)
+	}
+
+	outside := filepath.Join(base, "outside")
+	writeLines(t, filepath.Join(outside, "projects", agentlog.ClaudeProjectDir(realCwd), "sess-x.jsonl"), []string{claudeUser("u-x", realCwd, "不该读到")})
+	if err := os.Rename(filepath.Join(real, ".claude"), filepath.Join(real, ".claude-real")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(real, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	denied := readTranscript(context.Background(), files, codec, fromLink, TranscriptRequest{})
+	if denied.Reason != ChatReasonReadDenied || len(denied.Messages) != 0 {
+		t.Fatalf("symlinked .claude under a symlinked home = %+v", denied)
+	}
+	encoded, _ := json.Marshal(denied)
+	if strings.Contains(string(encoded), "不该读到") {
+		t.Fatal("followed .claude symlink")
+	}
+}
+
+func TestPythonReaderFollowsOnlyTheHomeSymlink(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.MkdirAll(filepath.Join(real, ".claude", "projects"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	request, _ := json.Marshal(transcriptRemoteRequest{Op: "list", Agent: "claude", Depth: 1})
+	output := runPythonTranscript(t, link, request)
+	var response transcriptRemoteResponse
+	if err := json.Unmarshal(output, &response); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || response.Home != link || response.HomeReal == "" || response.HomeReal == link {
+		t.Fatalf("python symlink home = %+v", response)
+	}
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(filepath.Join(outside, "projects"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(real, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(real, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	output = runPythonTranscript(t, link, request)
+	response = transcriptRemoteResponse{}
+	if err := json.Unmarshal(output, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || response.Error != "denied" {
+		t.Fatalf("python followed .claude = %+v", response)
+	}
+}
+
+func runPythonTranscript(t *testing.T, home string, request []byte) []byte {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", transcriptReaderSource)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Stdin = strings.NewReader(string(request))
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return output
+}
 
 func TestCodexIDBindsTheTraexRoot(t *testing.T) {
 	home := t.TempDir()

@@ -264,9 +264,20 @@ def main():
     agent = request.get("agent")
     if agent not in ROOTS:
         return {"ok": False, "error": "unknown_agent"}
-    home = os.path.expanduser("~")
+    logical = os.path.expanduser("~")
+    if not logical.startswith("/"):
+        return {"ok": False, "error": "home_unavailable"}
+    try:
+        home = os.path.realpath(logical)
+    except OSError:
+        return {"ok": False, "error": "home_unavailable"}
     if not home.startswith("/"):
         return {"ok": False, "error": "home_unavailable"}
+    def finish(payload):
+        if isinstance(payload, dict):
+            payload["home"] = logical
+            payload["home_real"] = home
+        return payload
     try:
         home_fd = os.open(home, DIR_FLAGS)
         try:
@@ -274,18 +285,18 @@ def main():
         finally:
             os.close(home_fd)
     except OSError as exc:
-        return {"ok": False, "error": "root_unavailable" if exc.errno == errno.ENOENT else "denied"}
+        return finish({"ok": False, "error": "root_unavailable" if exc.errno == errno.ENOENT else "denied"})
     try:
         op = request.get("op")
         if op == "list":
-            return op_list(root_fd, request)
+            return finish(op_list(root_fd, request))
         if op == "read":
-            return op_read(root_fd, request)
+            return finish(op_read(root_fd, request))
         if op == "probe":
-            return {"ok": True}
+            return finish({"ok": True})
         if op == "agy":
-            return op_agy(home, root_fd, request)
-        return {"ok": False, "error": "unknown_op"}
+            return finish(op_agy(home, root_fd, request))
+        return finish({"ok": False, "error": "unknown_op"})
     finally:
         os.close(root_fd)
 

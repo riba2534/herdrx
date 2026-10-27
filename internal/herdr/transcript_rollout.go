@@ -116,7 +116,7 @@ func walkRollouts(ctx context.Context, files transcriptFS, root transcriptRootKi
 			continue
 		}
 		shape := shapes[0]
-		if shape.SessionID != sessionID || shape.CWD != cwd {
+		if shape.SessionID != sessionID || !cwdMatch(files, shape.CWD, cwd) {
 			continue
 		}
 		*matches = append(*matches, entry.Rel)
