@@ -121,19 +121,27 @@ func TestVerifiedDSHIDUsesHeaderCWD(t *testing.T) {
 	}
 }
 
-func TestCursorSessionIDDoesNotScanForVerification(t *testing.T) {
+func TestCursorSessionIDVerifiesTheWorkspaceFile(t *testing.T) {
 	home := t.TempDir()
 	codec := newTranscriptCodecForTest(t)
 	files := &localTranscriptFS{home: home}
 	cwd := "/srv/proj"
 	writeCursorTranscript(t, home, "proj", "sess-1", cwd, `{"role":"user","message":{"content":[{"type":"text","text":"cursor text"}]}}`)
+	writeCursorTranscript(t, home, "other", "sess-1", "/srv/other", `{"role":"user","message":{"content":[{"type":"text","text":"别人的 cursor"}]}}`)
 	scope := TranscriptScope{
 		PaneID: "p", Agent: agentlog.AgentCursor, CWD: cwd,
 		Evidence: &AgentSession{Source: "hook", Agent: agentlog.AgentCursor, Kind: "id", Value: "sess-1"},
 	}
 	page := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{})
-	if page.Binding != "" || len(page.Messages) != 0 {
-		t.Fatalf("cursor id was verified without a path: %+v", page)
+	if page.Binding != ChatBindingVerified || len(page.Messages) != 1 || page.Messages[0].Blocks[0].Text != "cursor text" {
+		t.Fatalf("cursor id = %+v", page)
+	}
+	wrong := scope
+	wrong.CWD = "/srv/missing"
+	wrong.Evidence = scope.Evidence
+	rejected := readTranscript(context.Background(), files, codec, wrong, TranscriptRequest{})
+	if rejected.Binding == ChatBindingVerified {
+		t.Fatalf("cursor cwd mismatch verified: %+v", rejected)
 	}
 }
 

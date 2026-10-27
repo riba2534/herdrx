@@ -61,9 +61,9 @@ func TestTranscriptReaderListsAndReadsFixedRoot(t *testing.T) {
 			t.Fatalf("cursor list escaped the root: %+v", cursor.Entries)
 		}
 	}
-	grok := readTranscriptRequest(t, home, `{"op":"list","agent":"grok","depth":1}`)
-	if grok.OK || grok.Error != "unknown_agent" {
-		t.Fatalf("unproven agent accepted: %+v", grok)
+	unknown := readTranscriptRequest(t, home, `{"op":"list","agent":"omp","depth":1}`)
+	if unknown.OK || unknown.Error != "unknown_agent" {
+		t.Fatalf("unproven agent accepted: %+v", unknown)
 	}
 
 	rel := agentlog.ClaudeProjectDir(cwd)

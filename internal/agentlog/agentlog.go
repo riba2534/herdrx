@@ -50,11 +50,31 @@ const (
 	// AgentAgy 是 Antigravity CLI。会话 id 就是
 	// `~/.gemini/antigravity-cli/conversations/<uuid>.db` 的文件名。
 	AgentAgy = "agy"
+	// AgentPi 是 Pi 编码代理。会话在 `~/.pi/agent/sessions/--<cwd>--/`。
+	AgentPi = "pi"
+	// AgentGrok 是 Grok CLI。会话在 `~/.grok/sessions/<百分号编码的 cwd>/<uuid>/`。
+	AgentGrok = "grok"
 )
+
+// TranscriptFormat 把同源的进程名收成同一个读取器。
+// traex / traecli 是 Codex 的分叉，日志仍写在 `~/.codex/sessions`。
+func TranscriptFormat(agent string) string {
+	switch strings.TrimSpace(agent) {
+	case "traex", "traecli":
+		return AgentCodex
+	default:
+		return agent
+	}
+}
 
 // Supported 报告该 agent 是否在本期支持范围内。
 func Supported(agent string) bool {
-	return agent == AgentClaude || agent == AgentCodex || agent == AgentDSH || agent == AgentCursor || agent == AgentGemini || agent == AgentAgy
+	switch TranscriptFormat(agent) {
+	case AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok:
+		return true
+	default:
+		return false
+	}
 }
 
 // 记录角色，闭集合。`tool` 不是 provider 的原生角色，而是派生角色：
