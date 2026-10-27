@@ -309,7 +309,10 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    不认识的 step_type 跳过。这条映射还没有对着一份真实的长会话复核；
    `herdrx transcript-debug --agy <file>` 只打印 idx、step_type、role、块种类和
    文本长度，供在持有真实文件的机器上核对。
-   `traex` 与 `traecli` 使用 Codex 的 rollout 读取器，不另写解码。Pi 读取
+   `traex` 的日志在 `~/.trae/cli/sessions`，行是 `history_mutation`。hook 把 agent
+   报成 `codex` 时，kind=id 先查 `~/.codex/sessions` 再查 traex 根，用文件名里的
+   第一个 uuid 和 `session_meta.id` 确认，不按 mtime 挑选。`replace` 是压缩，跳过。
+   Pi 读取
    `~/.pi/agent/sessions/--<cwd>--/<时间戳>_<id>.jsonl`，会话 id 来自文件名与
    header，cwd 必须与 pane 一致；hook 上报的绝对路径不直接打开。Grok 只读
    `chat_history.jsonl`，目录名是百分号编码的 cwd，`reasoning` 丢掉，

@@ -11,7 +11,7 @@ import (
 // 只有支持且 reason 为空、并且记录 cwd 已经对上时才返回 verified。其余情况交给候选列表。
 func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest) (TranscriptPage, bool) {
 	evidence := scope.Evidence
-	if evidence == nil || evidence.Agent != scope.Agent || !agentlog.Supported(scope.Agent) {
+	if evidence == nil || !agentlog.SameTranscriptAgent(evidence.Agent, scope.Agent) || !agentlog.Supported(scope.Agent) {
 		return TranscriptPage{}, false
 	}
 	switch evidence.Kind {
@@ -20,6 +20,8 @@ func transcriptFromEvidence(ctx context.Context, files transcriptFS, codec trans
 			return TranscriptPage{}, false
 		}
 		switch scope.Agent {
+		case agentlog.AgentCodex, agentlog.AgentTraex:
+			return verifyRolloutID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentClaude:
 			return verifyClaudeID(ctx, files, codec, scope, request, evidence.Value)
 		case agentlog.AgentDSH:

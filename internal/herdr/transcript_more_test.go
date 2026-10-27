@@ -12,23 +12,100 @@ import (
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
 
-func TestTraexUsesTheCodexReader(t *testing.T) {
+func TestCodexIDBindsTheTraexRoot(t *testing.T) {
 	home := t.TempDir()
 	cwd := "/srv/proj"
-	writeLines(t, codexSessionPath(home, "2026/09/13", "rollout-2026-09-13T04-25-03-traex"), []string{
-		codexMeta("sess-traex", cwd),
-		codexMessage("user", "traex 的问题"),
+	const (
+		sessionID = "11111111-2222-4333-8444-555555555555"
+		otherID   = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	)
+	name := "rollout-2026-10-27T12-00-00-" + sessionID + "_" + otherID
+	writeLines(t, traexSessionPath(home, "2026/10/27", name), []string{traexFixture(sessionID, cwd)})
+	writeLines(t, traexSessionPath(home, "2026/10/27", "rollout-2026-10-27T13-00-00-"+otherID+"_"+sessionID), []string{
+		codexMeta(otherID, cwd),
+		codexMessage("user", "更新的另一场"),
+	})
+	writeLines(t, codexSessionPath(home, "2026/10/27", "rollout-2026-10-27T14-00-00-"+sessionID), []string{
+		codexMeta(sessionID, "/srv/other"),
+		codexMessage("user", "codex 里同名但 cwd 不对"),
 	})
 	files := &localTranscriptFS{home: home}
 	codec := newTranscriptCodecForTest(t)
-	page := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "traex", CWD: cwd}, TranscriptRequest{})
-	if !page.Supported || page.Agent != "traex" || len(page.Candidates) != 1 || page.Binding != "" {
-		t.Fatalf("traex candidates = %+v", page)
+	scope := TranscriptScope{
+		PaneID: "p", Agent: agentlog.AgentCodex, CWD: cwd,
+		Evidence: &AgentSession{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: sessionID},
 	}
-	bound := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "traecli", CWD: cwd}, TranscriptRequest{Session: page.Candidates[0].ID})
-	if bound.Agent != "traecli" || len(bound.Messages) != 1 || bound.Messages[0].Blocks[0].Text != "traex 的问题" {
-		t.Fatalf("traex page = %+v", bound)
+	page := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{})
+	if page.Binding != ChatBindingVerified || page.Agent != agentlog.AgentCodex || page.SessionID != sessionID {
+		t.Fatalf("binding = %+v", page)
 	}
+	text := joinedText(page.Messages)
+	for _, want := range []string{"traex 问题", "file body", "patched", "plain codex line"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in %s", want, text)
+		}
+	}
+	for _, secret := range []string{"DEV_SECRET", "THINK_SECRET", "REPLACE_SECRET", "EVENT_SECRET", "EXTRA_SECRET", "更新的另一场", "cwd 不对"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("leaked %s in %s", secret, text)
+		}
+	}
+	ids := map[string]bool{}
+	for _, message := range page.Messages {
+		ids[message.ID] = true
+	}
+	for _, id := range []string{"u1", "fc1", "fo1", "cc1", "co1"} {
+		if !ids[id] {
+			t.Fatalf("missing record %s in %+v", id, page.Messages)
+		}
+	}
+	encoded, _ := json.Marshal(page)
+	if strings.Contains(string(encoded), `"cwd"`) {
+		t.Fatalf("cwd leaked: %s", encoded)
+	}
+
+	asTraex := scope
+	asTraex.Agent = "traex"
+	asTraex.Evidence = &AgentSession{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: sessionID}
+	traexPage := readTranscript(context.Background(), files, codec, asTraex, TranscriptRequest{})
+	if traexPage.Binding != ChatBindingVerified || traexPage.Agent != "traex" || !strings.Contains(joinedText(traexPage.Messages), "traex 问题") {
+		t.Fatalf("traex agent = %+v", traexPage)
+	}
+}
+
+func traexSessionPath(home, date, name string) string {
+	return filepath.Join(home, ".trae", "cli", "sessions", filepath.FromSlash(date), name+".jsonl")
+}
+
+func traexFixture(sessionID, cwd string) string {
+	return strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"` + sessionID + `","session_id":"` + sessionID + `","cwd":"` + cwd + `","originator":"traex-tui"}}`,
+		`{"type":"history_mutation","payload":{"version":1,"commit_id":"c1","operation":"append","turn_id":"t1","items":[` +
+			`{"type":"message","id":"u1","role":"user","content":[{"type":"input_text","text":"traex 问题"}],"internal_chat_message_metadata_passthrough":{"ignored":true}},` +
+			`{"type":"message","id":"d1","role":"developer","content":[{"type":"input_text","text":"DEV_SECRET"}]},` +
+			`{"type":"reasoning","id":"r1","summary":[{"type":"summary_text","text":"THINK_SECRET"}]},` +
+			`{"type":"function_call","id":"fc1","name":"read_file","arguments":{"path":"a.go"},"call_id":"call_1"},` +
+			`{"type":"function_call_output","id":"fo1","call_id":"call_1","output":"file body"},` +
+			`{"type":"custom_tool_call","id":"cc1","name":"apply_patch","input":{"patch":"x"},"call_id":"call_2"},` +
+			`{"type":"custom_tool_call_output","id":"co1","call_id":"call_2","output":"patched"},` +
+			`{"type":"trae_extra_info","id":"x1","info":"EXTRA_SECRET"}]}}`,
+		`{"type":"history_mutation","payload":{"operation":"replace","turn_id":"t1","items":[{"type":"message","id":"u9","role":"user","content":[{"type":"input_text","text":"REPLACE_SECRET"}]}]}}`,
+		`{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"agent_message","id":"dup","content":[{"type":"output_text","text":"EVENT_SECRET"}]}}}`,
+		`{"type":"token_usage_record","payload":{"total":1}}`,
+		`{"type":"response_item","payload":{"type":"message","id":"plain1","role":"assistant","content":[{"type":"output_text","text":"plain codex line"}]}}`,
+	}, "\n")
+}
+
+func joinedText(records []agentlog.Record) string {
+	var builder strings.Builder
+	for _, record := range records {
+		for _, block := range record.Blocks {
+			builder.WriteString(block.Text)
+			builder.WriteString(block.Output)
+			builder.WriteString(block.Name)
+		}
+	}
+	return builder.String()
 }
 
 func TestPiIDAndAbsolutePathBothUseTheEncodedDirectory(t *testing.T) {

@@ -29,6 +29,7 @@ const (
 var transcriptRoots = map[string]string{
 	"claude": ".claude/projects",
 	"codex":  ".codex/sessions",
+	"traex":  ".trae/cli/sessions",
 	"dsh":    ".dsh/sessions",
 	"cursor": ".cursor/projects",
 	"gemini": ".gemini/tmp",
