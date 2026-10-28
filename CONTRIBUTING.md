@@ -4,7 +4,7 @@
 
 ## 本地开发
 
-使用 Go 1.27.1、Node.js 26.4.0 和 pnpm 11.25.0：
+使用 Go 1.27.2、Node.js 26.4.0 和 pnpm 11.25.0：
 
 ```bash
 pnpm --dir web install --frozen-lockfile
