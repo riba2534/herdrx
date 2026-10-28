@@ -15,15 +15,29 @@ import (
 
 func TestHomeSymlinkReadsLogsAndMatchesBothSpellings(t *testing.T) {
 	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	link := filepath.Join(base, "link")
-	if err := os.Mkdir(real, 0o700); err != nil {
+	physical := filepath.Join(base, "physical")
+	real := filepath.Join(physical, "home")
+	via := filepath.Join(base, "via")
+	if err := os.MkdirAll(real, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(real, link); err != nil {
+	// 祖先目录也是符号链接，和 macOS 临时目录的 /var -> /private/var 一样。
+	if err := os.Symlink(physical, via); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	realCwd := real + "/proj"
+	link := filepath.Join(via, "home-link")
+	// 链接目标故意经过 via。realpath 会把这一层和祖先都展开。
+	if err := os.Symlink(filepath.Join(via, "home"), link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == link || resolved == filepath.Join(via, "home") {
+		t.Fatalf("realpath left an ancestor symlink in %s", resolved)
+	}
+	realCwd := resolved + "/proj"
 	linkCwd := link + "/proj"
 	writeLines(t, claudeSessionPath(real, realCwd, "sess-real"), []string{claudeUser("u-real", realCwd, "真实家目录")})
 	writeLines(t, claudeSessionPath(real, linkCwd, "sess-link"), []string{claudeUser("u-link", linkCwd, "链接家目录")})
