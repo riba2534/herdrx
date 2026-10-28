@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/riba2534/herdrx/internal/store"
+	"github.com/riba2534/herdrx/internal/testpaths"
 )
 
 const capabilitySchemaFixture = `{"protocol":22,"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"session.snapshot"}}},{"properties":{"method":{"const":"pane.send_text"}}}]}}}`
@@ -118,7 +119,7 @@ func TestSSHCLIProbeClosesOversizedResponse(t *testing.T) {
 }
 
 func TestAPIErrorKeepsTypedRejection(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "herdr.sock")
+	path := filepath.Join(testpaths.ShortTempDir(t), "herdr.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)
