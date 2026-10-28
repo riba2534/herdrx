@@ -61,7 +61,7 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 
 ## 开发与验证
 
-工具链：Go `go.mod` 声明的版本（当前 1.27.2）、Node.js 26.4.0、pnpm 11.25.0。前端版本以 `web/package.json` 和锁文件为准。
+工具链：Go `go.mod` 声明的版本（当前 1.27.3）、Node.js 26.4.0、pnpm 11.25.0。前端版本以 `web/package.json` 和锁文件为准。
 
 ```bash
 pnpm --dir web install --frozen-lockfile
