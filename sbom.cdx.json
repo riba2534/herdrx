@@ -18,15 +18,15 @@
     "properties": [
       {
         "name": "herdrx:go.mod:sha256",
-        "value": "99afd9f4bff984a719842b578d0ff687dadd0d511445947226bd2aa007796601"
+        "value": "3b698a404f41db4701af5f4ed1a0ff74c2236d4da58d5cf5805b378e720ebc02"
       },
       {
         "name": "herdrx:go.sum:sha256",
-        "value": "609753e29134b89e4cbd646b657070343071185f5fa03dbea76802e020225392"
+        "value": "60b8813f29ca8cf90dc14c2287ded652bb3bbee734e168c1af969adb8fa06578"
       },
       {
         "name": "herdrx:web/pnpm-lock.yaml:sha256",
-        "value": "4dd8d5468241e2b6a24dff21f8e5fc857b33889cdf7a32808d298563b459de25"
+        "value": "7ca899ae84c0e46d86358324d6614b695c01bd0418f6699194443b7f77cf37df"
       },
       {
         "name": "herdrx:npm:platform-packages-excluded",
@@ -776,9 +776,9 @@
     {
       "type": "library",
       "name": "golang.org/x/crypto",
-      "version": "v0.56.0",
-      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.56.0",
-      "purl": "pkg:golang/golang.org/x/crypto@v0.56.0",
+      "version": "v0.57.0",
+      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.57.0",
+      "purl": "pkg:golang/golang.org/x/crypto@v0.57.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -812,9 +812,9 @@
     {
       "type": "library",
       "name": "golang.org/x/net",
-      "version": "v0.58.0",
-      "bom-ref": "pkg:golang/golang.org/x/net@v0.58.0",
-      "purl": "pkg:golang/golang.org/x/net@v0.58.0",
+      "version": "v0.60.0",
+      "bom-ref": "pkg:golang/golang.org/x/net@v0.60.0",
+      "purl": "pkg:golang/golang.org/x/net@v0.60.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -830,9 +830,9 @@
     {
       "type": "library",
       "name": "golang.org/x/sync",
-      "version": "v0.22.0",
-      "bom-ref": "pkg:golang/golang.org/x/sync@v0.22.0",
-      "purl": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "version": "v0.23.0",
+      "bom-ref": "pkg:golang/golang.org/x/sync@v0.23.0",
+      "purl": "pkg:golang/golang.org/x/sync@v0.23.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -848,9 +848,9 @@
     {
       "type": "library",
       "name": "golang.org/x/sys",
-      "version": "v0.47.0",
-      "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0",
-      "purl": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "version": "v0.48.0",
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.48.0",
+      "purl": "pkg:golang/golang.org/x/sys@v0.48.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -866,9 +866,9 @@
     {
       "type": "library",
       "name": "golang.org/x/term",
-      "version": "v0.45.0",
-      "bom-ref": "pkg:golang/golang.org/x/term@v0.45.0",
-      "purl": "pkg:golang/golang.org/x/term@v0.45.0",
+      "version": "v0.46.0",
+      "bom-ref": "pkg:golang/golang.org/x/term@v0.46.0",
+      "purl": "pkg:golang/golang.org/x/term@v0.46.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -884,9 +884,9 @@
     {
       "type": "library",
       "name": "golang.org/x/text",
-      "version": "v0.41.0",
-      "bom-ref": "pkg:golang/golang.org/x/text@v0.41.0",
-      "purl": "pkg:golang/golang.org/x/text@v0.41.0",
+      "version": "v0.42.0",
+      "bom-ref": "pkg:golang/golang.org/x/text@v0.42.0",
+      "purl": "pkg:golang/golang.org/x/text@v0.42.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -2666,9 +2666,9 @@
     {
       "type": "library",
       "name": "@vitest/expect",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/expect@4.1.12",
-      "purl": "pkg:npm/%40vitest/expect@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/expect@4.1.11",
+      "purl": "pkg:npm/%40vitest/expect@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2684,9 +2684,9 @@
     {
       "type": "library",
       "name": "@vitest/mocker",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/mocker@4.1.12",
-      "purl": "pkg:npm/%40vitest/mocker@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/mocker@4.1.11",
+      "purl": "pkg:npm/%40vitest/mocker@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2702,9 +2702,9 @@
     {
       "type": "library",
       "name": "@vitest/pretty-format",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/pretty-format@4.1.12",
-      "purl": "pkg:npm/%40vitest/pretty-format@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/pretty-format@4.1.11",
+      "purl": "pkg:npm/%40vitest/pretty-format@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2720,9 +2720,9 @@
     {
       "type": "library",
       "name": "@vitest/runner",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/runner@4.1.12",
-      "purl": "pkg:npm/%40vitest/runner@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/runner@4.1.11",
+      "purl": "pkg:npm/%40vitest/runner@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2738,9 +2738,9 @@
     {
       "type": "library",
       "name": "@vitest/snapshot",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/snapshot@4.1.12",
-      "purl": "pkg:npm/%40vitest/snapshot@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/snapshot@4.1.11",
+      "purl": "pkg:npm/%40vitest/snapshot@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2756,9 +2756,9 @@
     {
       "type": "library",
       "name": "@vitest/spy",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/spy@4.1.12",
-      "purl": "pkg:npm/%40vitest/spy@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/spy@4.1.11",
+      "purl": "pkg:npm/%40vitest/spy@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -2774,9 +2774,9 @@
     {
       "type": "library",
       "name": "@vitest/utils",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/%40vitest/utils@4.1.12",
-      "purl": "pkg:npm/%40vitest/utils@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/%40vitest/utils@4.1.11",
+      "purl": "pkg:npm/%40vitest/utils@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
@@ -5618,9 +5618,9 @@
     {
       "type": "library",
       "name": "source-map-js",
-      "version": "1.2.2",
-      "bom-ref": "pkg:npm/source-map-js@1.2.2",
-      "purl": "pkg:npm/source-map-js@1.2.2",
+      "version": "1.2.1",
+      "bom-ref": "pkg:npm/source-map-js@1.2.1",
+      "purl": "pkg:npm/source-map-js@1.2.1",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -6212,9 +6212,9 @@
     {
       "type": "library",
       "name": "vite",
-      "version": "7.3.7",
-      "bom-ref": "pkg:npm/vite@7.3.7",
-      "purl": "pkg:npm/vite@7.3.7",
+      "version": "7.3.6",
+      "bom-ref": "pkg:npm/vite@7.3.6",
+      "purl": "pkg:npm/vite@7.3.6",
       "licenses": [
         {
           "expression": "MIT"
@@ -6230,9 +6230,9 @@
     {
       "type": "library",
       "name": "vitest",
-      "version": "4.1.12",
-      "bom-ref": "pkg:npm/vitest@4.1.12",
-      "purl": "pkg:npm/vitest@4.1.12",
+      "version": "4.1.11",
+      "bom-ref": "pkg:npm/vitest@4.1.11",
+      "purl": "pkg:npm/vitest@4.1.11",
       "licenses": [
         {
           "expression": "MIT"
