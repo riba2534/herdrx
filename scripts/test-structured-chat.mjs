@@ -341,6 +341,8 @@ async function main() {
   assert.equal(await page.getByRole('switch', { name: '对话视图' }).count(), 2, 'expected exactly one switch per pane')
   assert.equal(await page.locator('.pane-view-toggle').first().getByRole('tab').count(), 0, 'the toggle must not be a segmented control')
   await page.locator('.xterm-rows').first().filter({ hasText: TERMINAL_MARKER }).waitFor()
+  // 每个 pane 都各自开一条终端流；两条都出画面后再取 spawn 基线，否则较慢的那条会被算到切视图头上。
+  await expect(page.locator('.xterm-rows').filter({ hasText: TERMINAL_MARKER })).toHaveCount(2)
 
   const spawnCount = async () => (await callLines(spawnFile)).filter((entry) => entry.kind === 'spawn').length
   // 整页重载会让**每个** pane 各自重开一次终端流，两次 spawn 之间有随机间隔。要断言
