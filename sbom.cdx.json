@@ -18,7 +18,7 @@
     "properties": [
       {
         "name": "herdrx:go.mod:sha256",
-        "value": "3b698a404f41db4701af5f4ed1a0ff74c2236d4da58d5cf5805b378e720ebc02"
+        "value": "f316fb3383ebc8fb4287f268028e90dc1a2a460556ab9d5974f4175f56f534c8"
       },
       {
         "name": "herdrx:go.sum:sha256",
