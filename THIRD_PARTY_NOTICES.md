@@ -928,13 +928,13 @@ THE SOFTWARE.
 
 - Go runtime / LICENSE
 - github.com/go4org/hashtriemap@v0.0.0-20260824042624-45fcf11fca0e/LICENSE
-- golang.org/x/crypto@v0.56.0/LICENSE
+- golang.org/x/crypto@v0.57.0/LICENSE
 - golang.org/x/exp@v0.0.0-20260410095643-746e56fc9e2f/LICENSE
-- golang.org/x/net@v0.58.0/LICENSE
-- golang.org/x/sync@v0.22.0/LICENSE
-- golang.org/x/sys@v0.47.0/LICENSE
-- golang.org/x/term@v0.45.0/LICENSE
-- golang.org/x/text@v0.41.0/LICENSE
+- golang.org/x/net@v0.60.0/LICENSE
+- golang.org/x/sync@v0.23.0/LICENSE
+- golang.org/x/sys@v0.48.0/LICENSE
+- golang.org/x/term@v0.46.0/LICENSE
+- golang.org/x/text@v0.42.0/LICENSE
 - golang.org/x/time@v0.15.0/LICENSE
 
 ````text

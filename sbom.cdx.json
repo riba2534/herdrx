@@ -18,15 +18,15 @@
     "properties": [
       {
         "name": "herdrx:go.mod:sha256",
-        "value": "b0c9c7165d03883f54b4e8d4017db338ab504bb3b1d046289f391883d55bd3dc"
+        "value": "3b698a404f41db4701af5f4ed1a0ff74c2236d4da58d5cf5805b378e720ebc02"
       },
       {
         "name": "herdrx:go.sum:sha256",
-        "value": "609753e29134b89e4cbd646b657070343071185f5fa03dbea76802e020225392"
+        "value": "60b8813f29ca8cf90dc14c2287ded652bb3bbee734e168c1af969adb8fa06578"
       },
       {
         "name": "herdrx:web/pnpm-lock.yaml:sha256",
-        "value": "e0d56c5ebe4ebbdba68085b0a95e0cad033bbdbbcafc94772031038b528504a9"
+        "value": "7ca899ae84c0e46d86358324d6614b695c01bd0418f6699194443b7f77cf37df"
       },
       {
         "name": "herdrx:npm:platform-packages-excluded",
@@ -776,9 +776,9 @@
     {
       "type": "library",
       "name": "golang.org/x/crypto",
-      "version": "v0.56.0",
-      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.56.0",
-      "purl": "pkg:golang/golang.org/x/crypto@v0.56.0",
+      "version": "v0.57.0",
+      "bom-ref": "pkg:golang/golang.org/x/crypto@v0.57.0",
+      "purl": "pkg:golang/golang.org/x/crypto@v0.57.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -812,9 +812,9 @@
     {
       "type": "library",
       "name": "golang.org/x/net",
-      "version": "v0.58.0",
-      "bom-ref": "pkg:golang/golang.org/x/net@v0.58.0",
-      "purl": "pkg:golang/golang.org/x/net@v0.58.0",
+      "version": "v0.60.0",
+      "bom-ref": "pkg:golang/golang.org/x/net@v0.60.0",
+      "purl": "pkg:golang/golang.org/x/net@v0.60.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -830,9 +830,9 @@
     {
       "type": "library",
       "name": "golang.org/x/sync",
-      "version": "v0.22.0",
-      "bom-ref": "pkg:golang/golang.org/x/sync@v0.22.0",
-      "purl": "pkg:golang/golang.org/x/sync@v0.22.0",
+      "version": "v0.23.0",
+      "bom-ref": "pkg:golang/golang.org/x/sync@v0.23.0",
+      "purl": "pkg:golang/golang.org/x/sync@v0.23.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -848,9 +848,9 @@
     {
       "type": "library",
       "name": "golang.org/x/sys",
-      "version": "v0.47.0",
-      "bom-ref": "pkg:golang/golang.org/x/sys@v0.47.0",
-      "purl": "pkg:golang/golang.org/x/sys@v0.47.0",
+      "version": "v0.48.0",
+      "bom-ref": "pkg:golang/golang.org/x/sys@v0.48.0",
+      "purl": "pkg:golang/golang.org/x/sys@v0.48.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -866,9 +866,9 @@
     {
       "type": "library",
       "name": "golang.org/x/term",
-      "version": "v0.45.0",
-      "bom-ref": "pkg:golang/golang.org/x/term@v0.45.0",
-      "purl": "pkg:golang/golang.org/x/term@v0.45.0",
+      "version": "v0.46.0",
+      "bom-ref": "pkg:golang/golang.org/x/term@v0.46.0",
+      "purl": "pkg:golang/golang.org/x/term@v0.46.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -884,9 +884,9 @@
     {
       "type": "library",
       "name": "golang.org/x/text",
-      "version": "v0.41.0",
-      "bom-ref": "pkg:golang/golang.org/x/text@v0.41.0",
-      "purl": "pkg:golang/golang.org/x/text@v0.41.0",
+      "version": "v0.42.0",
+      "bom-ref": "pkg:golang/golang.org/x/text@v0.42.0",
+      "purl": "pkg:golang/golang.org/x/text@v0.42.0",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
@@ -5618,9 +5618,9 @@
     {
       "type": "library",
       "name": "source-map-js",
-      "version": "1.2.2",
-      "bom-ref": "pkg:npm/source-map-js@1.2.2",
-      "purl": "pkg:npm/source-map-js@1.2.2",
+      "version": "1.2.1",
+      "bom-ref": "pkg:npm/source-map-js@1.2.1",
+      "purl": "pkg:npm/source-map-js@1.2.1",
       "licenses": [
         {
           "expression": "BSD-3-Clause"
