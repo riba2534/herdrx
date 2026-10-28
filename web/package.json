@@ -37,8 +37,8 @@
     "jsdom": "^26.1.0",
     "oxlint": "1.80.0",
     "typescript": "^5.9.2",
-    "vite": "^7.1.4",
-    "vitest": "^4.1.11"
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
   },
   "packageManager": "pnpm@11.25.0"
 }

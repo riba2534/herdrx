@@ -782,15 +782,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ````
 
-## @vitest/expect@4.1.11/LICENSE
+## @vitest/expect@4.1.12/LICENSE
 
-- @vitest/expect@4.1.11/LICENSE
-- @vitest/mocker@4.1.11/LICENSE
-- @vitest/pretty-format@4.1.11/LICENSE
-- @vitest/runner@4.1.11/LICENSE
-- @vitest/snapshot@4.1.11/LICENSE
-- @vitest/spy@4.1.11/LICENSE
-- @vitest/utils@4.1.11/LICENSE
+- @vitest/expect@4.1.12/LICENSE
+- @vitest/mocker@4.1.12/LICENSE
+- @vitest/pretty-format@4.1.12/LICENSE
+- @vitest/runner@4.1.12/LICENSE
+- @vitest/snapshot@4.1.12/LICENSE
+- @vitest/spy@4.1.12/LICENSE
+- @vitest/utils@4.1.12/LICENSE
 
 ````text
 MIT License
@@ -8286,9 +8286,9 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
-## vite@7.3.6/LICENSE.md
+## vite@7.3.7/LICENSE.md
 
-- vite@7.3.6/LICENSE.md
+- vite@7.3.7/LICENSE.md
 
 ````text
 # Vite core license
@@ -10413,9 +10413,9 @@ Repository: https://github.com/websockets/ws
 > CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ````
 
-## vitest@4.1.11/LICENSE.md
+## vitest@4.1.12/LICENSE.md
 
-- vitest@4.1.11/LICENSE.md
+- vitest@4.1.12/LICENSE.md
 
 ````text
 # Vitest core license
