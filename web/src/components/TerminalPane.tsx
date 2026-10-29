@@ -694,7 +694,11 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     writeSessionRef.current = { pending: 0, waiters: [], pumping: false, closed: false }
     fontMeasureRef.current = createFontMeasure(hostRef.current, terminal.options.fontFamily!)
     searchRef.current = search
-    const inputDisposable = terminal.onData((data) => requestInputRef.current(transformInputRef.current?.(data) ?? data))
+    const inputDisposable = terminal.onData((data) => {
+      // transformInput 可以把按键改走 Herdr 按键接口，此时返回空串，不再写字节。
+      const next = transformInputRef.current?.(data) ?? data
+      if (next) requestInputRef.current(next)
+    })
     const host = hostRef.current
     const revealCursor = () => revealCursorRef.current()
     // Scroll gestures use the outer viewport and the public terminal APIs.

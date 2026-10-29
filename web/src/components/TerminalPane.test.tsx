@@ -5,7 +5,7 @@ import { WorkbenchClient, type TerminalControlState } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], focuses: 0, searches: [] as Array<{ dir: string; query: string }>, last: null as { options: { disableStdin: boolean; macOptionIsMeta?: boolean; screenReaderMode?: boolean; minimumContrastRatio?: number }, cols: number, rows: number, focus: () => void } | null }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), dataHandler: null as null | ((data: string) => void), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], focuses: 0, searches: [] as Array<{ dir: string; query: string }>, last: null as { options: { disableStdin: boolean; macOptionIsMeta?: boolean; screenReaderMode?: boolean; minimumContrastRatio?: number }, cols: number, rows: number, focus: () => void } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
@@ -66,7 +66,8 @@ vi.mock('@xterm/xterm', () => {
       selectAll() { this.selection = 'all' }
       clearSelection() { this.selection = '' }
       attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { terminalHarness.keyHandler = handler }
-      onData() {
+      onData(handler: (data: string) => void) {
+        terminalHarness.dataHandler = handler
         return { dispose: () => {} }
       }
     },
@@ -227,6 +228,18 @@ describe('TerminalPane paste interception', () => {
     expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
+  })
+  it('passes typed input through transformInput and sends nothing when it returns an empty string', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    // 键栏粘滞修饰键的替身：a 变成 Ctrl+A，回车改走 Herdr 按键接口（返回空串）。
+    const transformInput = (data: string) => data === 'a' ? '\x01' : data === '\r' ? '' : data
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} transformInput={transformInput}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    act(() => { terminalHarness.dataHandler!('a'); terminalHarness.dataHandler!('\r'); terminalHarness.dataHandler!('b') })
+    expect(input.mock.calls).toEqual([[7, '\x01'], [7, 'b']])
   })
   it('keeps xterm stdin disabled in composer mode so local typing is not sent as keystrokes', async () => {
     const client = new WorkbenchClient('hst_test')
