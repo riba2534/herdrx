@@ -151,7 +151,24 @@ STUN 默认关闭，不影响 DERP 转发。希望帮助探测 UDP 直连时，�
 
 最后一个使用者离开后保留连接 2 分钟供重连复用；达到上限时优先回收最久未使用的连接。全部连接正在使用时，界面提示关闭暂不用的工作台或联系管理员调整上限。拨号默认 30 秒超时，网络故障按 2–30 秒退避；SSH 密钥未信任、身份变化或认证失败会停止自动拨号，核对并更新主机配置后重新连接。
 
-首次快照先按 `HERDRX_HOST_DIAL_TIMEOUT`（默认 30 秒）建立访问连接，再独立等待最多 10 秒读取快照，避免冷连接耗尽快照预算；快照失败会清理失效连接，后续请求重新建立。工作台每 2 秒读取真实 Herdr 快照，单次最长等待 10 秒。连续 3 次失败后断开该访问连接并重新建立，恢复快照后回到可用状态。这里反映的是 Herdr 应答，不推测 Tailcat 采用直连还是中继。通知采用独立的 4 个采集任务和 4 个发送任务，失败主机按 10–60 秒退避，删除的主机和 pane 状态会清理。网站断开访问、回收连接和重连都不会关闭远程 Herdr 会话或重放输入。
+首次快照先按 `HERDRX_HOST_DIAL_TIMEOUT`（默认 30 秒）建立访问连接，再独立等待最多 10 秒读取快照，避免冷连接耗尽快照预算；快照失败会清理失效连接，后续请求重新建立。工作台通过 Herdr 的 `events.subscribe` 订阅布局与 Agent 状态变化，收到事件后合并约 50 ms 再读一次快照；订阅正常时另有每 10 秒一次的兜底快照，Herdr 不支持订阅或订阅断开时退回每 2 秒读取，并按 1 秒到 1 分钟退避重新订阅。单次快照最长等待 10 秒。连续 3 次失败后断开该访问连接并重新建立，恢复快照后回到可用状态。终端输出在工作台按 30 ms 合帧：安静后的第一帧立即发送，30 ms 内的后续差分合并为一帧，遇到整帧时丢弃其前的差分；输入不经过合帧。这里反映的是 Herdr 应答，不推测 Tailcat 采用直连还是中继。通知采用独立的 4 个采集任务和 4 个发送任务，失败主机按 10–60 秒退避，删除的主机和 pane 状态会清理。网站断开访问、回收连接和重连都不会关闭远程 Herdr 会话或重放输入。
+
+连接失败时，错误详情会附上 SSH 或远程命令 stderr 的最后一行（去掉控制字符，最长 240 字），并按原因给出下一步：Herdr 未运行或会话名不一致、SSH 认证被拒、工作台 known_hosts 缺少指纹、主机地址无法解析、SSH 端口不可达。
+
+### 终端延迟测量
+
+`scripts/measure-terminal-latency.mjs` 测量“发出按键 → 含该字符的终端帧到达”的分布，用于比较网络与版本，不是 CI 门禁。脚本自己启动一个临时数据目录的网站，结束时只关闭它创建的 workspace 并删除临时目录：
+
+```bash
+go build -o /tmp/herdrx-server ./cmd/herdrx-server
+# 本机：脚本另起一个临时的隔离 Herdr 会话
+node scripts/measure-terminal-latency.mjs --server /tmp/herdrx-server --samples 60
+# SSH：先在远程主机启动一个专用的命名会话，例如 herdr --session herdrx-latency server
+node scripts/measure-terminal-latency.mjs --server /tmp/herdrx-server \
+  --ssh remote.example.test --ssh-user dev --remote-session herdrx-latency
+```
+
+SSH 模式使用工作台主机上的 system OpenSSH（`--ssh-bin`，默认 `ssh`），需要当前用户能免交互登录且 known_hosts 已有远程主机指纹；必须指定 `--remote-session`，避免在日常使用的会话里测量。输出 min / p50 / p90 / p99 / max（毫秒），`--json` 输出一行 JSON。
 
 ## CLI 发行与更新
 
