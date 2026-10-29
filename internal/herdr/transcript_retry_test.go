@@ -106,7 +106,7 @@ func TestTranscriptOversizedResponseClosesChannel(t *testing.T) {
 }
 
 func TestTranscriptPropagatesRetryableErrorsToHTTP(t *testing.T) {
-	e := &SSHEndpoint{client: &transcriptRetryTransport{sessions: []*transcriptRetrySession{{output: ""}, {output: `{"ok":true,"entries":[]}`}}}}
+	e := &SSHEndpoint{client: &transcriptRetryTransport{sessions: []*transcriptRetrySession{{output: ""}, {output: `{"ok":true}`}, {output: `{"ok":true,"entries":[]}`}}}}
 	_, err := e.Transcript(context.Background(), TranscriptScope{PaneID: "p1", Agent: "claude", CWD: "/example"}, TranscriptRequest{})
 	if err == nil {
 		t.Fatal("retryable failure converted to permanent unsupported response")

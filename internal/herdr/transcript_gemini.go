@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
@@ -69,11 +70,13 @@ func transcriptGeminiMessages(ctx context.Context, files transcriptFS, codec tra
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
 	}
-	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || !cwdMatch(files, document.CWD, cwd) {
+	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || !geminiOwned(files, document.ProjectHash, rel, cwd) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	sessionID = document.SessionID
-	identity := head.Identity + ":" + formatInt(head.Size)
+	// 游标是记录下标，身份只用会话自己的稳定字段：Gemini 每次写入都会重写整份文档，文件大小和
+	// inode 都可能变，用它们当身份会让每次增长都 reset。
+	identity := "doc:" + document.SessionID + ":" + document.StartTime
 	token := []string{document.SessionID, rel, identity}
 	reset := false
 	start := 0
@@ -205,7 +208,8 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 		}
 		sessionID = headDoc.SessionID
 	}
-	identity := head.Identity + ":" + formatInt(head.Size)
+	// 尾部窗口的游标是字节位置，必须仍是同一个文件；文件增长不改变身份。
+	identity := "tail:" + head.Identity + ":" + headDoc.StartTime
 	token := []string{sessionID, rel, identity}
 	end := head.Size
 	reset := false
@@ -256,12 +260,12 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 			alignedStart = end
 		}
 	}
-	document := agentlog.DecodeGemini(rel, aligned)
+	document := agentlog.DecodeGeminiAt(rel, aligned, alignedStart, sessionID)
 	if sessionID == "" {
 		sessionID = document.SessionID
 	}
-	proven := cwdMatch(files, headDoc.CWD, cwd) || cwdMatch(files, document.CWD, cwd)
-	if sessionID == "" || !proven {
+	// 归属只认文件头的 projectHash；窗口里的正文不参与判断。
+	if sessionID == "" || !geminiOwned(files, headDoc.ProjectHash, rel, cwd) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	pageRecords, first := tailGeminiRecords(document.Records)
@@ -290,6 +294,27 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 		page.PrevCursor = previous
 	}
 	return page
+}
+
+// geminiOwned 报告会话是否属于 pane cwd：会话头的 projectHash 必须等于它所在的 hash 目录，
+// 并且等于 pane cwd（或家目录的另一种写法）的 SHA-256。
+func geminiOwned(files transcriptFS, projectHash, rel, cwd string) bool {
+	if projectHash == "" || !strings.HasPrefix(rel, projectHash+"/") {
+		return false
+	}
+	for _, spelling := range cwdSpellings(files, cwd) {
+		if agentlog.GeminiProjectHash(spelling) == projectHash {
+			return true
+		}
+	}
+	return false
+}
+
+func geminiProject(cwd string) (string, bool) {
+	if !strings.HasPrefix(cwd, "/") {
+		return "", false
+	}
+	return agentlog.GeminiProjectHash(cwd), true
 }
 
 func geminiPrefix(ctx context.Context, files transcriptFS, rel string, size int64) (agentlog.GeminiDocument, error) {

@@ -15,7 +15,11 @@ import (
 const TranscriptCommand = "herdrx-transcript"
 
 // Bounds match the existing remote reader: 500 directory entries, 1 MiB per
-// read, depth at most 5, and at most 64 reads in one request.
+// read, depth at most 5, and at most 64 reads in one request. One response can
+// therefore exceed the workbench's 2 MiB LimitReader (64 reads of 1 MiB,
+// base64-encoded). The workbench never asks for that much: its pages stay
+// within a 256 KiB window and a 64 KiB head per file, and an oversized reply
+// is rejected as a retryable error there instead of being truncated.
 const (
 	transcriptEntryLimit = 500
 	transcriptMaxRead    = 1 << 20

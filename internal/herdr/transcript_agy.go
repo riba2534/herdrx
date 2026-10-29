@@ -59,7 +59,7 @@ func (f *localTranscriptFS) ReadAgy(ctx context.Context, query transcriptAgyQuer
 		return transcriptAgyBatch{}, errTranscriptDenied
 	}
 	path := filepath.Join(append([]string{f.resolvedHome()}, parts...)...)
-	rows, end, err := agentlog.QueryAgyDB(ctx, path, agentlog.AgyBounds{
+	rows, end, err := agentlog.QueryAgyDB(ctx, path, info, agentlog.AgyBounds{
 		HasAfter: query.HasAfter, After: query.After,
 		HasBefore: query.HasBefore, Before: query.Before,
 		Desc: query.Desc, Limit: query.Limit,
@@ -202,9 +202,11 @@ func transcriptAgyMessages(ctx context.Context, files transcriptFS, codec transc
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
 	page.NextCursor = next
-	if backward && collected.hasMore && len(records) > 0 {
-		oldest, err := strconv.ParseInt(records[0].ID, 10, 64)
-		if err != nil || oldest <= 0 {
+	// 反向页停在扫描到的最旧一步（含被跳过、没有正文的步）。一整轮扫描全是非消息步时
+	// records 为空，也要给出 prev 游标，否则用户再也加载不到更早的对话。
+	if backward && collected.hasMore && collected.scannedOldest {
+		oldest := collected.oldestIdx
+		if oldest <= 0 {
 			return page
 		}
 		previous, err := codec.seal(sessionID, rel, probe.Identity, strconv.FormatInt(oldest, 10))
@@ -223,6 +225,8 @@ type agyCollected struct {
 	tipIdx           int64
 	forwardIdx       int64
 	advanced         bool
+	oldestIdx        int64
+	scannedOldest    bool
 	identityMismatch bool
 }
 
@@ -267,7 +271,10 @@ func agyCollect(ctx context.Context, reader transcriptAgyReader, rel, identity s
 				budgetStop = true
 				break
 			}
-			if !desc {
+			if desc {
+				collected.oldestIdx = step.Idx
+				collected.scannedOldest = true
+			} else {
 				collected.forwardIdx = step.Idx
 				collected.advanced = true
 			}

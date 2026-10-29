@@ -6,17 +6,21 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 	"golang.org/x/sys/unix"
 )
 
 const (
-	dirFlags  = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_DIRECTORY | unix.O_CLOEXEC
+	dirFlags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_DIRECTORY | unix.O_CLOEXEC
+	// O_NONBLOCK：日志根里若有人放了 FIFO，阻塞式 open 会一直等写端，读取器就挂住了。
+	// 非阻塞打开后 Fstat 发现它不是普通文件，直接跳过。对普通文件这个标志不影响读取。
 	fileFlags = unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
 )
 
@@ -195,9 +199,18 @@ func transcriptNames(fd int) ([]transcriptName, error) {
 	}
 	file := os.NewFile(uintptr(dup), "transcript")
 	defer file.Close()
-	listed, err := file.ReadDir(-1)
-	if err != nil {
-		return nil, err
+	// 分批读目录项，凑够一次 list 的上限（500）就停：超大目录不必整个读进内存，工作台看到
+	// 满额的结果会如实报 read_limit_exceeded。只在这 500 项里按新旧排序。
+	var listed []os.DirEntry
+	for len(listed) < transcriptEntryLimit {
+		batch, err := file.ReadDir(min(128, transcriptEntryLimit-len(listed)))
+		listed = append(listed, batch...)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	names := make([]transcriptName, 0, len(listed))
 	for _, item := range listed {
@@ -299,17 +312,21 @@ func serveAgy(home, rootName string, rootFD int, request transcriptWireRequest) 
 	if err != nil {
 		return transcriptWireResponse{Error: classifyTranscript(err)}
 	}
-	var stat unix.Stat_t
-	statErr := unix.Fstat(fd, &stat)
-	unix.Close(fd)
-	if statErr != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG {
+	file := os.NewFile(uintptr(fd), request.Rel)
+	verified, statErr := file.Stat()
+	file.Close()
+	if statErr != nil || !verified.Mode().IsRegular() {
+		return transcriptWireResponse{Error: "denied"}
+	}
+	stat, _ := verified.Sys().(*syscall.Stat_t)
+	if stat == nil {
 		return transcriptWireResponse{Error: "denied"}
 	}
 	limit := request.AgyLimit
 	if limit <= 0 {
 		limit = 64
 	}
-	rows, end, err := agentlog.QueryAgyDB(nil, filepath.Join(home, filepath.FromSlash(rootName), request.Rel), agentlog.AgyBounds{
+	rows, end, err := agentlog.QueryAgyDB(nil, filepath.Join(home, filepath.FromSlash(rootName), request.Rel), verified, agentlog.AgyBounds{
 		HasAfter: request.AgyHasAfter, After: request.AgyAfter,
 		HasBefore: request.AgyHasBefore, Before: request.AgyBefore,
 		Desc: request.AgyDesc, Limit: limit,

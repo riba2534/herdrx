@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -148,6 +150,54 @@ func TestTailcatWhitelistedReaderReturnsStructuredPageWithoutCWD(t *testing.T) {
 		if command != transcriptTailcatCommand {
 			t.Fatalf("tailcat ran %q", command)
 		}
+	}
+}
+
+// $HOME 是符号链接、pane cwd 用链接写法、日志按真实写法落盘：同一条连接的第一次读取就要匹配上。
+func TestTailcatFirstReadMatchesTheOtherHomeSpelling(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real-home")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "home-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", link)
+	realCwd := resolved + "/proj"
+	writeLines(t, claudeSessionPath(real, realCwd, "sess-real"), []string{claudeUser("u-1", realCwd, "真实写法")})
+	endpoint := &SSHEndpoint{host: store.Host{Transport: "tailcat"}, client: &tailcatLiveTransport{}}
+	page, err := endpoint.Transcript(context.Background(), claudeScope(link+"/proj"), TranscriptRequest{})
+	if err != nil || len(page.Candidates) != 1 || page.Candidates[0].SessionID != "sess-real" {
+		t.Fatalf("first read: %+v %v", page, err)
+	}
+}
+
+// 远端 python3 缺 sqlite3：agy 诚实降级为不支持，但不缓存成整台主机不支持。
+func TestSSHAgyWithoutSQLiteDegradesOnlyAgy(t *testing.T) {
+	const uuid = "12345678-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	endpoint := &SSHEndpoint{client: &transcriptRetryTransport{sessions: []*transcriptRetrySession{
+		{output: `{"ok":true,"home":"/home/example","home_real":"/home/example"}`},
+		{output: `{"ok":false,"error":"agy_unsupported"}`},
+		{output: `{"ok":true,"entries":[]}`},
+	}}}
+	scope := TranscriptScope{PaneID: "p", Agent: agentlog.AgentAgy, CWD: "/srv/app",
+		Evidence: &AgentSession{Source: "herdr:antigravity_cli", Agent: agentlog.AgentAgy, Kind: "id", Value: uuid}}
+	page, err := endpoint.Transcript(context.Background(), scope, TranscriptRequest{})
+	if err != nil || page.Supported || page.Reason != ChatReasonUnsupportedTransport {
+		t.Fatalf("agy without sqlite3 = %+v %v", page, err)
+	}
+	if endpoint.transcriptUnavailable() {
+		t.Fatal("a missing sqlite3 module disabled every reader on the host")
+	}
+	claude, err := endpoint.Transcript(context.Background(), claudeScope("/srv/app"), TranscriptRequest{})
+	if err != nil || !claude.Supported {
+		t.Fatalf("claude after agy degrade = %+v %v", claude, err)
 	}
 }
 

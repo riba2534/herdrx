@@ -36,6 +36,13 @@ func (e *SSHEndpoint) Transcript(ctx context.Context, scope TranscriptScope, req
 		return transcriptDegrade(ChatReasonUnsupportedTransport, ""), nil
 	}
 	files := &sshTranscriptFS{endpoint: e}
+	e.learnTranscriptHome(ctx, files)
+	if files.transientErr != nil {
+		return TranscriptPage{}, files.transientErr
+	}
+	if e.transcriptUnavailable() {
+		return transcriptDegrade(ChatReasonUnsupportedTransport, ""), nil
+	}
 	page := readTranscript(ctx, files, codec, scope, request)
 	if files.transientErr != nil {
 		return TranscriptPage{}, files.transientErr
@@ -54,6 +61,28 @@ func (e *SSHEndpoint) transcriptUnavailable() bool {
 	e.transcriptMu.Lock()
 	defer e.transcriptMu.Unlock()
 	return e.transcriptUnsupported
+}
+
+// learnTranscriptHome 在这条连接第一次读会话前先探测一次远端家目录的两种写法。
+// 候选匹配（cwdSpellings）在第一次 list 之前就要用到它们；否则 $HOME 是符号链接时，
+// 首次打开 Chat 会因为只认 pane cwd 原文而漏掉另一种写法的会话。日志根不存在等确定性
+// 失败不影响后续读取；超时、空输出这类可重试失败照常交给调用方。
+func (e *SSHEndpoint) learnTranscriptHome(ctx context.Context, files *sshTranscriptFS) {
+	e.transcriptMu.Lock()
+	probed := e.transcriptHomeProbed
+	e.transcriptMu.Unlock()
+	if probed {
+		return
+	}
+	// probe 只打开固定日志根，不读文件；根不存在时应答里同样带着家目录。
+	_, err := e.execTranscriptReader(ctx, transcriptRemoteRequest{Op: "probe", Agent: string(transcriptRootClaude)})
+	files.rememberReadError(err)
+	if files.transientErr == nil {
+		// 远端给出了确定的回答（旧版读取器可能不带家目录）：之后不再探测。
+		e.transcriptMu.Lock()
+		e.transcriptHomeProbed = true
+		e.transcriptMu.Unlock()
+	}
 }
 
 func (e *SSHEndpoint) rememberTranscriptHome(response transcriptRemoteResponse) {
@@ -310,6 +339,9 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 			return transcriptRemoteResponse{}, errTranscriptNotFound
 		case "unrecognized":
 			return transcriptRemoteResponse{}, errTranscriptUnrecognized
+		case "agy_unsupported":
+			// 远端 python3 缺 sqlite3：只有这一类读取不可用，不缓存成整台主机不支持。
+			return transcriptRemoteResponse{}, fmt.Errorf("%w: 远程主机的 python3 缺少 sqlite3 模块，无法读取 Antigravity 会话", errTranscriptTransport)
 		case "denied", "bad_request", "unknown_agent", "unknown_op":
 			return transcriptRemoteResponse{}, errTranscriptDenied
 		}

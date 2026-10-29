@@ -186,6 +186,25 @@ func TestTranscriptReaderCapsDepthAndEntryCount(t *testing.T) {
 	}
 }
 
+// 目录项分批读取，凑够 500 项就停，超大目录不会整个读进内存。
+func TestTranscriptNamesStopAtTheEntryLimit(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < transcriptEntryLimit+200; i++ {
+		if err := os.WriteFile(filepath.Join(dir, "f-"+itoa(i)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fd, err := unix.Open(dir, dirFlags, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(fd)
+	names, err := transcriptNames(fd)
+	if err != nil || len(names) != transcriptEntryLimit {
+		t.Fatalf("names = %d %v", len(names), err)
+	}
+}
+
 func TestTranscriptReaderRejectsSymlinkedRootAndMissingRoot(t *testing.T) {
 	home := t.TempDir()
 	outside := t.TempDir()

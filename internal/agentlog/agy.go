@@ -261,7 +261,7 @@ func WriteAgyDebug(w io.Writer, path string) error {
 	var after int64
 	hasAfter := false
 	for {
-		rows, end, err := QueryAgyDB(nil, path, AgyBounds{
+		rows, end, err := QueryAgyDB(nil, path, nil, AgyBounds{
 			HasAfter:      hasAfter,
 			After:         after,
 			Limit:         64,

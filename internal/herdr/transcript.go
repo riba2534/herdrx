@@ -53,8 +53,6 @@ const (
 	transcriptMaxListEntries = 500
 	// Codex 会话目录的最大递归深度（`sessions/YYYY/MM/DD/rollout-*.jsonl`）。
 	transcriptMaxCodexDepth = 4
-	// Gemini：`<hash>/chats/session-*.json[l]`。
-	transcriptMaxGeminiDepth = 3
 	// 规范消息路径探测的总预算；未找到 response_item 时须扫完文件才能认定 event_msg。
 	transcriptCodexProbeMaxBytes = 8 << 20
 )
@@ -332,7 +330,7 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	case agentlog.AgentCursor:
 		return agentlog.CursorTranscriptRel(rel) && agentlog.CursorSessionID(rel) == sessionID
 	case agentlog.AgentGemini:
-		return agentlog.GeminiSessionRel(rel)
+		return agentlog.GeminiSessionRel(rel) && parts[0] == agentlog.GeminiProjectHash(cwd)
 	case agentlog.AgentAgy:
 		return agentlog.AgyDBRel(rel) && agentlog.AgySessionID(rel) == sessionID
 	case agentlog.AgentPi:
@@ -366,7 +364,10 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return relabelTranscript(transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence), reported, agent)
 	}
 	parts, ok := codec.open(request.Session, 3)
-	if !ok || parts[0] != agent || !transcriptRelAllowedAny(files, agent, cwd, parts[1], parts[2]) {
+	// agy 没有 cwd，令牌本身证明不了它属于这个 pane：续读同样要求当前 pane 的 Herdr 证据仍指向
+	// 令牌里的会话，否则别的 pane 的令牌也能读。
+	agyForeign := ok && agent == agentlog.AgentAgy && !transcriptAgyEvidenceOwns(scope.Evidence, parts[1])
+	if !ok || parts[0] != agent || agyForeign || !transcriptRelAllowedAny(files, agent, cwd, parts[1], parts[2]) {
 		return relabelTranscript(transcriptSessionLost(ctx, files, codec, agent, cwd), reported, agent)
 	}
 	return relabelTranscript(transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request), reported, agent)
@@ -465,6 +466,11 @@ func transcriptVerifiedOrCandidates(ctx context.Context, files transcriptFS, cod
 		}
 	}
 	if !ok {
+		// agy 没有候选列表可退：读取本身不受支持（例如远端缺 sqlite3）时如实报告，
+		// 而不是说「没有会话」。
+		if agent == agentlog.AgentAgy && !bound.Supported && bound.Reason == ChatReasonUnsupportedTransport {
+			return bound
+		}
 		return page
 	}
 	bound.Candidates = page.Candidates
@@ -481,7 +487,8 @@ func transcriptBindEvidence(ctx context.Context, files transcriptFS, codec trans
 		bound := transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], TranscriptRequest{Session: candidate.ID})
 		if bound.Binding == "" {
 			// 文件在列候选与读取之间消失或变得不可读：退回候选列表，不冒充绑定。
-			return TranscriptPage{}, false
+			// 返回失败页，调用方据此判断是否该如实报告降级原因。
+			return bound, false
 		}
 		bound.Binding = ChatBindingVerified
 		bound.Session = candidate.ID
@@ -531,6 +538,11 @@ func transcriptEvidenceMatches(agent string, evidence *AgentSession, sessionID, 
 		return parts != nil && strings.HasSuffix(value, "/"+strings.Join(parts, "/")+"/"+rel)
 	}
 	return false
+}
+
+// transcriptAgyEvidenceOwns 报告 pane 的证据是否指向这个 agy 会话。
+func transcriptAgyEvidenceOwns(evidence *AgentSession, sessionID string) bool {
+	return evidence != nil && evidence.Kind == "id" && evidence.Value == sessionID && transcriptEvidenceFromHerdr(agentlog.AgentAgy, evidence)
 }
 
 // transcriptAgyEvidenceCandidate 把 agy 的 kind=id 证据变成唯一候选。
@@ -639,7 +651,11 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 			return nil, false, nil
 		}
 	case agentlog.AgentGemini:
-		entries, err = files.List(ctx, root, "", transcriptMaxGeminiDepth)
+		// 只列 pane cwd 的 projectHash 目录（`<hash>/chats/...` 两层），不扫整个 ~/.gemini/tmp。
+		entries, err = listCWDProjects(ctx, files, root, cwd, geminiProject, 2)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
 	default:
 		entries, err = files.List(ctx, root, "", transcriptMaxCodexDepth)
 	}
@@ -729,14 +745,12 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 				shape.SessionID = agentlog.GrokSessionID(entry.Rel)
 			}
 			if agent == agentlog.AgentGemini {
+				// 单个文件读不了（过大、正在被替换）只跳过它，不中止整次扫描。
 				document, err := readGeminiDocument(ctx, files, entry.Rel, result.Size)
-				if errors.Is(err, errTranscriptLimit) {
+				if err != nil || !geminiOwned(files, document.ProjectHash, entry.Rel, cwd) {
 					continue
 				}
-				if err != nil {
-					return nil, false, err
-				}
-				shape.CWD = document.CWD
+				shape.CWD = cwd
 				shape.SessionID = document.SessionID
 			}
 			// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
@@ -1127,17 +1141,17 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			last++
 		}
 	}
-	first, last = includeWholeLines(records, first, last)
+	first, last, keep := wholeLinePage(records, sizes, first, last, backward)
 
 	pageStart := trueStart
 	page := TranscriptPage{
 		Supported: true,
 		Agent:     agent,
 		SessionID: sessionID,
-		Messages:  agentlog.UpsertEntries(records[first:last]),
+		Messages:  agentlog.UpsertEntries(records[first:keep]),
 		Binding:   ChatBindingSelected,
 		Reset:     reset,
-		Skipped:   decoded.Skipped,
+		Skipped:   decoded.Skipped + last - keep,
 	}
 	consumed := decoded.Consumed
 	if last > first {
@@ -1182,18 +1196,42 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	return page
 }
 
-// includeWholeLines 不把同一行里的多条记录拆到两页。traex 的 append 把多个 item 写在一行。
-func includeWholeLines(records []agentlog.RangeEntry, first, last int) (int, int) {
-	if first >= last || len(records) == 0 {
-		return first, last
+// wholeLinePage 不把同一行里的多条记录拆到两页：游标是字节位置，拆开的行会在下一页重复或丢失。
+// traex 的 append 把多个 item 写在一行。页边界先向内收到整行；收完为空（单独一行就超过
+// 记录数或字节上限）时整行算作已读，只返回上限之内的前几条，其余记入 skipped。
+// 返回的 records[first:keep] 是本页消息，records[first:last] 是本页消费掉的行。
+func wholeLinePage(records []agentlog.RangeEntry, sizes []int, first, last int, backward bool) (int, int, int) {
+	if first >= last {
+		return first, last, last
 	}
-	for first > 0 && records[first].Start == records[first-1].Start {
-		first--
+	head, tail := first, last
+	for head > 0 && head < tail && records[head].Start == records[head-1].Start {
+		head++
 	}
-	for last < len(records) && records[last-1].Start == records[last].Start {
-		last++
+	for tail < len(records) && tail > head && records[tail-1].Start == records[tail].Start {
+		tail--
 	}
-	return first, last
+	if head < tail {
+		return head, tail, tail
+	}
+	anchor := first
+	if backward {
+		anchor = last - 1
+	}
+	head, tail = anchor, anchor+1
+	for head > 0 && records[head-1].Start == records[anchor].Start {
+		head--
+	}
+	for tail < len(records) && records[tail].Start == records[anchor].Start {
+		tail++
+	}
+	keep := head
+	remaining := transcriptMaxResponseBytes
+	for keep < tail && keep-head < transcriptPageRecords && (sizes[keep] <= remaining || keep == head) {
+		remaining -= sizes[keep]
+		keep++
+	}
+	return head, tail, keep
 }
 
 // transcriptCursorOffset 解开游标并校验它绑定的正是这个会话与这个文件身份。

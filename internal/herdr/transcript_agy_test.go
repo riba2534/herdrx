@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -168,6 +169,91 @@ func TestAgyPagesByIdxAndKeepsTheTail(t *testing.T) {
 	}
 }
 
+// agy 令牌不能拿到别的 pane 用：续读要求当前 pane 的证据仍指向令牌里的会话。
+func TestAgySessionTokenNeedsThisPanesEvidence(t *testing.T) {
+	home := t.TempDir()
+	const mine = "abababab-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	const theirs = "cdcdcdcd-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{mine, theirs} {
+		writeAgySteps(t, filepath.Join(dir, id+".db"), []struct {
+			idx  int64
+			kind int
+			body []byte
+		}{{1, 14, pbMsg(19, pbMsg(1, "AGY_TEXT_"+id))}})
+	}
+	files := &localTranscriptFS{home: home}
+	codec := newTranscriptCodecForTest(t)
+	paneA := TranscriptScope{PaneID: "a", Agent: agentlog.AgentAgy, CWD: "/srv/a",
+		Evidence: &AgentSession{Source: "herdr:antigravity_cli", Agent: agentlog.AgentAgy, Kind: "id", Value: theirs}}
+	first := readTranscript(context.Background(), files, codec, paneA, TranscriptRequest{})
+	if first.Binding != ChatBindingVerified || first.Session == "" {
+		t.Fatalf("pane a = %+v", first)
+	}
+	own := readTranscript(context.Background(), files, codec, paneA, TranscriptRequest{Session: first.Session, Cursor: first.NextCursor})
+	if own.Reason != "" || own.SessionID != theirs {
+		t.Fatalf("own continuation = %+v", own)
+	}
+	for name, evidence := range map[string]*AgentSession{
+		"no evidence":    nil,
+		"other session":  {Source: "herdr:antigravity_cli", Agent: agentlog.AgentAgy, Kind: "id", Value: mine},
+		"foreign source": {Source: "custom:agy", Agent: agentlog.AgentAgy, Kind: "id", Value: theirs},
+	} {
+		paneB := TranscriptScope{PaneID: "b", Agent: agentlog.AgentAgy, CWD: "/srv/b", Evidence: evidence}
+		page := readTranscript(context.Background(), files, codec, paneB, TranscriptRequest{Session: first.Session})
+		encoded, _ := json.Marshal(page)
+		if page.Reason != ChatReasonSessionUnavailable || len(page.Messages) != 0 || strings.Contains(string(encoded), "AGY_TEXT_"+theirs) {
+			t.Fatalf("%s: reused token = %+v", name, page)
+		}
+	}
+}
+
+// 尾部一整轮扫描全是非消息步时，页面没有记录也要给 prev 游标，能继续加载到更早的对话。
+func TestAgyEmptyScanStillOffersEarlierPages(t *testing.T) {
+	home := t.TempDir()
+	const uuid = "efefefef-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	steps := []struct {
+		idx  int64
+		kind int
+		body []byte
+	}{{1, 14, pbMsg(19, pbMsg(1, "最早的问题"))}}
+	for idx := int64(2); idx <= 16*64+20; idx++ {
+		steps = append(steps, struct {
+			idx  int64
+			kind int
+			body []byte
+		}{idx, 99, pbMsg(2, "noise")})
+	}
+	writeAgySteps(t, filepath.Join(dir, uuid+".db"), steps)
+	files := &localTranscriptFS{home: home}
+	codec := newTranscriptCodecForTest(t)
+	scope := TranscriptScope{PaneID: "p", Agent: agentlog.AgentAgy, CWD: "/srv/proj",
+		Evidence: &AgentSession{Source: "herdr:antigravity_cli", Agent: agentlog.AgentAgy, Kind: "id", Value: uuid}}
+	page := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{})
+	if page.Binding != ChatBindingVerified || len(page.Messages) != 0 || !page.HasMore || page.PrevCursor == "" {
+		t.Fatalf("empty tail = messages %d has_more %v prev %q", len(page.Messages), page.HasMore, page.PrevCursor)
+	}
+	before := page.PrevCursor
+	for round := 0; round < 4 && before != ""; round++ {
+		earlier := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{Session: page.Session, Before: before})
+		if len(earlier.Messages) > 0 {
+			if earlier.Messages[0].Blocks[0].Text != "最早的问题" {
+				t.Fatalf("earliest = %+v", earlier.Messages)
+			}
+			return
+		}
+		before = earlier.PrevCursor
+	}
+	t.Fatal("never reached the earliest step")
+}
+
 func TestAgySymlinkIsNotVerified(t *testing.T) {
 	home := t.TempDir()
 	const uuid = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -205,7 +291,8 @@ func TestAgyPythonReaderReturnsPayloads(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")
 	}
-	home := t.TempDir()
+	// 家目录里带 URI 特殊字符：sqlite 的 file: URI 必须百分号转义，否则 `?`/`#` 会截断路径。
+	home := filepath.Join(t.TempDir(), "h?#%41 x")
 	const uuid = "cccccccc-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -245,6 +332,88 @@ func TestAgyPythonReaderReturnsPayloads(t *testing.T) {
 	}
 	if response.OK || response.Error != "denied" {
 		t.Fatalf("python path = %+v", response)
+	}
+}
+
+// 远端 python3 缺 _sqlite3 时，只有 agy 降级为不支持；claude 等读取器照常工作。
+func TestPythonReaderWithoutSQLiteOnlyDegradesAgy(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	home := t.TempDir()
+	cwd := "/srv/proj"
+	writeLines(t, claudeSessionPath(home, cwd, "sess-1"), []string{claudeUser("u-1", cwd, "无 sqlite 也能读")})
+	const uuid = "dddddddd-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeAgySteps(t, filepath.Join(dir, uuid+".db"), []struct {
+		idx  int64
+		kind int
+		body []byte
+	}{{1, 14, pbMsg(19, pbMsg(1, "x"))}})
+	run := func(request transcriptRemoteRequest) transcriptRemoteResponse {
+		t.Helper()
+		payload, _ := json.Marshal(request)
+		cmd := exec.Command("python3", "-c", "import sys\nsys.modules['sqlite3'] = None\n"+transcriptReaderSource)
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Stdin = strings.NewReader(string(payload))
+		output, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response transcriptRemoteResponse
+		if err := json.Unmarshal(output, &response); err != nil {
+			t.Fatalf("%s: %v", output, err)
+		}
+		return response
+	}
+	listed := run(transcriptRemoteRequest{Op: "list", Agent: "claude", Rel: agentlog.ClaudeProjectDir(cwd), Depth: 1})
+	if !listed.OK || len(listed.Entries) != 1 {
+		t.Fatalf("claude list without sqlite3 = %+v", listed)
+	}
+	agy := run(transcriptRemoteRequest{Op: "agy", Agent: "agy", Rel: uuid + ".db", AgyLimit: 10})
+	if agy.OK || agy.Error != "agy_unsupported" {
+		t.Fatalf("agy without sqlite3 = %+v", agy)
+	}
+}
+
+// sqlite 按路径名重开时若落到另一个 inode（核对后中间目录被换掉），远端读取器丢弃结果。
+// 这里把 sqlite3.connect 换成打开另一份库来模拟那次换路径。
+func TestPythonAgyRejectsAnotherInodeAfterOpen(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	home := t.TempDir()
+	const uuid = "eeeeeeee-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	dir := filepath.Join(home, ".gemini", "antigravity-cli", "conversations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	step := []struct {
+		idx  int64
+		kind int
+		body []byte
+	}{{1, 14, pbMsg(19, pbMsg(1, "SWAPPED_SECRET"))}}
+	writeAgySteps(t, filepath.Join(dir, uuid+".db"), step)
+	other := filepath.Join(t.TempDir(), "other.db")
+	writeAgySteps(t, other, step)
+	prelude := "import os, sqlite3\n_connect = sqlite3.connect\nsqlite3.connect = lambda target, **kw: _connect('file:' + os.environ['OTHER_DB'] + '?mode=ro', uri=True)\n"
+	payload, _ := json.Marshal(transcriptRemoteRequest{Op: "agy", Agent: "agy", Rel: uuid + ".db", AgyLimit: 10})
+	cmd := exec.Command("python3", "-c", prelude+transcriptReaderSource)
+	cmd.Env = append(os.Environ(), "HOME="+home, "OTHER_DB="+other)
+	cmd.Stdin = strings.NewReader(string(payload))
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response transcriptRemoteResponse
+	if err := json.Unmarshal(output, &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || response.Error != "denied" || len(response.Steps) != 0 {
+		t.Fatalf("swapped open = %+v", response)
 	}
 }
 
@@ -312,7 +481,7 @@ func appendAgyStep(t *testing.T, path string, idx int64, kind int, body []byte) 
 
 func openAgyDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String())
 	if err != nil {
 		t.Fatal(err)
 	}

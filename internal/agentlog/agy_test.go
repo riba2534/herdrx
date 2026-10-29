@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -194,7 +196,11 @@ func TestQueryAgyDBSeesWAL(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO steps (idx, step_type, status, step_format, step_payload) VALUES (1, 14, 3, 0, ?)`, payload); err != nil {
 		t.Fatal(err)
 	}
-	rows, end, err := QueryAgyDB(context.Background(), path, AgyBounds{Limit: 10})
+	verified, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, end, err := QueryAgyDB(context.Background(), path, verified, AgyBounds{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,6 +210,83 @@ func TestQueryAgyDBSeesWAL(t *testing.T) {
 	record, _ := DecodeAgyStep(rows[0].Idx, rows[0].StepType, rows[0].Status, rows[0].StepFormat, rows[0].Payload)
 	if record == nil || record.Blocks[0].Text != "from wal" {
 		t.Fatalf("wal record = %+v", record)
+	}
+}
+
+// 按路径名打开的库不是调用方按 fd 核对过的那个 inode（中间被换掉）时拒绝，不返回任何行。
+func TestQueryAgyDBRejectsAnotherInode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conv.db")
+	writeAgyDB(t, path, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "SWAPPED_SECRET"))}})
+	other := filepath.Join(dir, "other.db")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verified, err := os.Stat(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := QueryAgyDB(context.Background(), path, verified, AgyBounds{Limit: 10})
+	if !errors.Is(err, ErrAgyDenied) || len(rows) != 0 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+}
+
+// 核对通过之后、sqlite 按路径名打开之前文件被换掉：打开的不是核对过的 inode，结果丢弃。
+func TestQueryAgyDBRejectsASwapBeforeOpen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conv.db")
+	writeAgyDB(t, path, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "ORIGINAL"))}})
+	swap := filepath.Join(dir, "swap.db")
+	writeAgyDB(t, swap, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "SWAPPED_SECRET"))}})
+	verified, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agyBeforeOpen = func(target string) {
+		if err := os.Rename(swap, target); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { agyBeforeOpen = func(string) {} }()
+	rows, _, err := QueryAgyDB(context.Background(), path, verified, AgyBounds{Limit: 10})
+	if !errors.Is(err, ErrAgyDenied) || len(rows) != 0 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+}
+
+// 核对过的 inode 恰好仍被本进程打开着，也不能替代「路径名指向同一个 inode」的检查。
+func TestQueryAgyDBRejectsAPathToAnotherOpenInode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conv.db")
+	writeAgyDB(t, path, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "OTHER"))}})
+	held, err := os.Create(filepath.Join(dir, "held"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	verified, _ := held.Stat()
+	rows, _, err := QueryAgyDB(context.Background(), path, verified, AgyBounds{Limit: 10})
+	if !errors.Is(err, ErrAgyDenied) || len(rows) != 0 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
+	}
+}
+
+func TestAgyOpenedInodeSeesOnlyOpenFiles(t *testing.T) {
+	dir := t.TempDir()
+	open, err := os.Create(filepath.Join(dir, "open"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer open.Close()
+	openInfo, _ := open.Stat()
+	closed := filepath.Join(dir, "closed")
+	if err := os.WriteFile(closed, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	closedInfo, _ := os.Stat(closed)
+	if !agyOpenedInode(openInfo) || agyOpenedInode(closedInfo) {
+		t.Fatal("fd scan did not tell an open inode from a closed one")
 	}
 }
 

@@ -107,7 +107,8 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 - agy 是唯一例外：Antigravity 的会话库没有 cwd 字段，无法按 cwd 列候选，没有证据时也不扫描
   conversations 目录。证据是 `kind: id` 且 `value` 是严格的 uuid 时，唯一的候选是固定根下的
   `<uuid>.db`；读取时仍校验文件名形状并逐段拒绝符号链接。归属完全依赖 Herdr 为这个 pane 上报的
-  集成证据，不比较 cwd。
+  集成证据，不比较 cwd。所以 agy 的续读和带 `session` 的请求同样要求当前 pane 的证据 uuid 等于
+  令牌里的会话 id，否则按 `session_unavailable` 处理，别的 pane 的令牌拿过来也读不到。
 - 未安装 Herdr 的 Agent 集成、或集成未上报（Herdr 为大多数 Agent 记录 `kind: id`，pi / omp 记录 `kind: path`）时
   没有证据，回退手选。
 - 用户显式选择的 `session` 永远是 `selected`，即使证据恰好指向同一份文件；带 `session` 的续读页
@@ -292,7 +293,8 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    `.gemini/antigravity-cli/conversations/`、Pi 的 `.pi/agent/sessions/`、Grok 的 `.grok/sessions/`。
    `$HOME` 自身是符号链接时只解析这一层，其下每一段仍拒绝符号链接；pane cwd 与记录 cwd
    允许家目录前缀的两种写法互认，不替换其它路径段。
-   `$HOME` 用受限命令取回，并要求以 `/` 开头且非空；不接受浏览器指定根目录。
+   `$HOME` 用受限命令取回（同一条连接第一次读取前先探测一次，首次打开就能匹配两种写法），
+   并要求以 `/` 开头且非空；不接受浏览器指定根目录。
    DSH 自定义 `DSH_HOME` / root 暂不自动发现。
    不使用通配（如 `~/.claude/projects/*`）跨目录收集。
 3. **路径逃逸拒绝**：拼接后 `Clean`，必须是白名单根的严格子路径；拒绝任何含 `..` 的段；
@@ -301,11 +303,21 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    Codex 只收 `sessions` 下的 `rollout-*.jsonl`。DSH 只收
    `<projectKey>/<encodedSessionID>/session.v3.jsonl[.zstd]`；header 的版本、id、绝对 cwd
    必须匹配。目录名只用于缩小搜索范围，不做递归通配。
+   Gemini 只看 `~/.gemini/tmp/<sha256(pane cwd)>/chats/session-*.json[l]` 这一个目录，并要求
+   会话头的 `projectHash` 等于目录名（家目录两种写法各算一次）；不从正文推断工作目录。
+   单个文件读不了只跳过该文件。agy 的库由 sqlite 按路径名打开：调用方先按 fd 逐段核对出
+   inode，打开前 `lstat` 比对同一 inode，查询结束、连接还开着时再确认本进程有 fd 指向这个
+   inode（`/proc/self/fd`，macOS 用 `/dev/fd`），否则丢弃结果。sqlite 用 `mode=ro` +
+   `query_only`，看得到 Agent 还没 checkpoint 的 `-wal`；库为 WAL 模式而 `-shm` 不存在时，
+   sqlite 会在同目录建一个 `-shm` 索引文件（与 Agent 自己打开时相同），库和 `-wal` 内容不被
+   改写。不用 `immutable=1`：它会漏掉 `-wal` 里的最新写入，Agent 正在写时还可能读到半页。
+   远端 python3 缺 `sqlite3` 模块时只有 agy 返回 `unsupported_transport`，其它读取器照常。
    DSH zstd 由工作台 Go 解压，远端不安装解压工具；验证帧边界和校验，未写完的尾帧等待续读。
    单次压缩输入预算 8 MiB、解压总预算 32 MiB，响应仍受原记录数和字节预算约束；超限明确返回
    `read_limit_exceeded`。候选发现只读取首帧 header，不读取会话正文。
 5. **读取上限**：单次响应 ≤ 256 KiB，单块 ≤ 64 KiB，游标必须落在 `0 ≤ cursor ≤ fileSize`
-   且行对齐。远端命令等价于 `tail -c +<N> | head -c <cap>`。
+   且行对齐。一行写了多条记录（traex 的 `history_mutation`）时不拆到两页；单独一行就超过记录数或
+   字节上限时整行算已读，只返回上限内的部分，其余计入 `skipped`。远端命令等价于 `tail -c +<N> | head -c <cap>`。
 6. **owner 校验**：沿用 `ownedHost`；非 owner 返回 404，不泄露 host 是否存在。
 7. **审计**：每次打开会话写一条 `transcript.opened`（含 pane_id / agent / session_id），
    越界拒绝写一条 `transcript.denied`。
@@ -383,7 +395,11 @@ pane 处于 working / blocked 时最新一轮不折叠。打开会话仍然滚�
    **未强制**。不得声称该不变式已完整验证。
 10. **Cursor Composer 的 `state.vscdb` 与其它未落地 connector**——Cursor 只读取
    `agent-transcripts/<sid>/<sid>.jsonl`，工作区只认 `.workspace-trusted` 的
-   `workspacePath`。Gemini 只读取 `session-*.json[l]`，工作区只认测试钉住的路径标记。
+   `workspacePath`。Gemini 只读取 `session-*.json[l]`，归属见 §8.4：projectHash 规则
+   （`sha256(项目根绝对路径)` 十六进制）取自 Gemini CLI `getProjectHash`，本轮无法联网复核源码，
+   也没有真实样本；新版 CLI 若改用别的目录名（例如短 id），这些会话会显示为没有候选，不会误认。
+   没有 id 的消息按行的绝对字节位置命名，工具结果按在消息里的位置命名，`thought: true` 的
+   part 丢弃；整份文档的游标身份是会话 id + `startTime`，文件增长或被重写都不会 reset。
    Antigravity CLI（`agy`）读取 `conversations/<uuid>.db` 的 `steps.step_payload`
    （未加密 protobuf）。角色按 CortexStepType 的名字落地：14 user、15 assistant、
    132 tool、101/17/23 system。23 是检查点而不是 planner 回复。思考字段不输出。

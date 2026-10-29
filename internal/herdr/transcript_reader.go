@@ -8,7 +8,7 @@ package herdr
 // 被 ELOOP 拒绝，最终必须是普通文件；请求经 stdin 以 JSON 传入，从不进入命令行。
 //
 // 远端没有 python3 时**明确返回不支持**，绝不退回不安全的读法。
-const transcriptReaderSource = `import base64, errno, json, os, re, sqlite3, stat, sys
+const transcriptReaderSource = `import base64, errno, json, os, re, stat, sys
 
 ROOTS = {"claude": ".claude/projects", "codex": ".codex/sessions", "traex": ".trae/cli/sessions", "dsh": ".dsh/sessions", "cursor": ".cursor/projects", "gemini": ".gemini/tmp", "agy": ".gemini/antigravity-cli/conversations", "pi": ".pi/agent/sessions", "grok": ".grok/sessions"}
 AGY_DB = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.db$")
@@ -187,6 +187,23 @@ def op_read(root_fd, request):
     return {"ok": True, "reads": results}
 
 
+def opened_inode(verified):
+    for base in ("/proc/self/fd", "/dev/fd"):
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for name in names:
+            try:
+                info = os.stat(base + "/" + name)
+            except OSError:
+                continue
+            if (info.st_dev, info.st_ino) == verified:
+                return True
+        return False
+    return False
+
+
 def op_agy(home, root_fd, request):
     rel = request.get("rel")
     if not isinstance(rel, str) or AGY_DB.fullmatch(rel) is None:
@@ -200,6 +217,7 @@ def op_agy(home, root_fd, request):
         if not stat.S_ISREG(info.st_mode):
             return {"ok": False, "error": "denied"}
         identity = "%x:%x" % (info.st_dev, info.st_ino)
+        verified = (info.st_dev, info.st_ino)
     finally:
         os.close(fd)
     limit = request.get("agy_limit") or 64
@@ -216,9 +234,22 @@ def op_agy(home, root_fd, request):
     has_after = 1 if request.get("agy_has_after") is True else 0
     has_before = 1 if request.get("agy_has_before") is True else 0
     order = "DESC" if request.get("agy_desc") is True else "ASC"
-    path = os.path.join(home, ROOTS["agy"], rel)
+    # sqlite3 只有 agy 用到。远端 python3 缺 _sqlite3 时只让 agy 降级，其他读取器照常。
     try:
-        conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
+        import sqlite3
+    except ImportError:
+        return {"ok": False, "error": "agy_unsupported"}
+    from urllib.parse import quote
+    path = os.path.join(home, ROOTS["agy"], rel)
+    # 打开前再按路径名核对一次：必须仍是同一个 inode 的普通文件。
+    try:
+        named = os.lstat(path)
+    except OSError as exc:
+        return {"ok": False, "error": classify(exc)}
+    if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != verified:
+        return {"ok": False, "error": "denied"}
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % quote(path, safe="/"), uri=True)
     except sqlite3.Error:
         return {"ok": False, "error": "unrecognized"}
     try:
@@ -233,6 +264,10 @@ def op_agy(home, root_fd, request):
             ).fetchall()
         except sqlite3.Error:
             return {"ok": False, "error": "unrecognized"}
+        # sqlite 按路径名重新打开。中间目录可能在核对之后被换成符号链接，所以查询完、连接还开着时
+        # 确认本进程确实有一个 fd 指向刚才逐段核对过的那个 inode，否则丢弃结果。
+        if not opened_inode(verified):
+            return {"ok": False, "error": "denied"}
     finally:
         conn.close()
     steps = []

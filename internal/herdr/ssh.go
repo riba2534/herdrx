@@ -79,6 +79,7 @@ type SSHEndpoint struct {
 	transcriptReason      string
 	transcriptHome        string
 	transcriptHomeReal    string
+	transcriptHomeProbed  bool
 }
 
 func DialSSHEndpoint(ctx context.Context, options SSHOptions) (*SSHEndpoint, error) {

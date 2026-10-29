@@ -2,23 +2,33 @@ package agentlog
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 	"strings"
 )
 
-// Gemini CLI 的会话文件是 `~/.gemini/tmp/<hash>/chats/session-*.json`（整份文档）
+// Gemini CLI 的会话文件是 `~/.gemini/tmp/<projectHash>/chats/session-*.json`（整份文档）
 // 或 `session-*.jsonl`（事件回放）。消息字段来自 connector_gemini.rs 与 gemini.rs：
 // `type` 为 user / model / gemini，`content` 是字符串或 `{text}` 数组。
 //
-// 目录哈希不是 cwd。工作区只认测试钉住的两段明确标记，以及 `/data/projects/<name>`
-// 这一条同样被测试钉住的回退；没有这些标记就不认领。
+// 归属只认 projectHash：Gemini CLI 的 `getProjectHash(projectRoot)` 是项目根绝对路径的
+// SHA-256 十六进制，会话头里同样记着它。工作台只看 pane cwd 对应的那一个 hash 目录，
+// 并要求会话头的 projectHash 与它相等；不从正文里猜工作目录。
+
+// GeminiProjectHash 是 Gemini CLI 对项目根绝对路径算的目录名。
+func GeminiProjectHash(cwd string) string {
+	sum := sha256.Sum256([]byte(cwd))
+	return hex.EncodeToString(sum[:])
+}
 
 // GeminiDocument 是一份已经回放完的 Gemini 会话。
 type GeminiDocument struct {
-	SessionID string
-	CWD       string
-	Records   []Record
+	SessionID   string
+	ProjectHash string
+	StartTime   string
+	Records     []Record
 }
 
 // GeminiSessionRel 报告相对路径是不是 `<hash>/chats/session-*.json[l]`。
@@ -41,16 +51,29 @@ func GeminiSessionFile(name string) bool {
 
 // DecodeGemini 把一份会话文件解成记录。截断的半行不参与回放。
 func DecodeGemini(rel string, data []byte) GeminiDocument {
-	sessionID := geminiFileStem(rel)
-	messages, headerID := geminiMessages(data)
-	if headerID != "" {
-		sessionID = headerID
+	return DecodeGeminiAt(rel, data, 0, "")
+}
+
+// DecodeGeminiAt 同 DecodeGemini，data 是文件里从 base 开始的一段，sessionID 是从文件头
+// 已知的会话 id（窗口里通常没有头）。没有 id 的事件行按它在文件里的绝对字节位置命名，
+// 换一个读取窗口 id 也不变、不撞号。
+func DecodeGeminiAt(rel string, data []byte, base int64, sessionID string) GeminiDocument {
+	parsed := geminiMessages(data, base)
+	if parsed.SessionID == "" {
+		parsed.SessionID = sessionID
 	}
-	records := make([]Record, 0, len(messages))
-	for index, message := range messages {
-		records = append(records, geminiRecords(sessionID, index, message)...)
+	if parsed.SessionID == "" {
+		parsed.SessionID = geminiFileStem(rel)
 	}
-	return GeminiDocument{SessionID: sessionID, CWD: geminiWorkspace(records), Records: records}
+	records := make([]Record, 0, len(parsed.messages))
+	for _, message := range parsed.messages {
+		id := extractString(message.fields["id"])
+		if id == "" {
+			id = parsed.SessionID + ":" + message.anon
+		}
+		records = append(records, geminiRecords(id, message.fields)...)
+	}
+	return GeminiDocument{SessionID: parsed.SessionID, ProjectHash: parsed.ProjectHash, StartTime: parsed.StartTime, Records: records}
 }
 
 func geminiFileStem(rel string) string {
@@ -69,19 +92,51 @@ func geminiFileStem(rel string) string {
 	}
 }
 
-func geminiMessages(data []byte) ([]map[string]any, string) {
+type geminiMessage struct {
+	// anon 只在消息自身没有 id 时使用，见 DecodeGeminiAt。
+	anon   string
+	fields map[string]any
+}
+
+type geminiParsed struct {
+	SessionID   string
+	ProjectHash string
+	StartTime   string
+	messages    []geminiMessage
+}
+
+// header 记下会话头字段，先出现的为准。
+func (p *geminiParsed) header(record map[string]any) {
+	if value := extractString(record["sessionId"]); value != "" && p.SessionID == "" {
+		p.SessionID = value
+	}
+	if value := extractString(record["projectHash"]); value != "" && p.ProjectHash == "" {
+		p.ProjectHash = value
+	}
+	if value := extractString(record["startTime"]); value != "" && p.StartTime == "" {
+		p.StartTime = value
+	}
+}
+
+func geminiMessages(data []byte, base int64) geminiParsed {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '{' && json.Valid(trimmed) {
 		var document map[string]any
 		if json.Unmarshal(trimmed, &document) == nil {
 			if _, ok := document["messages"]; ok || document["$set"] == nil && document["$patch"] == nil && document["$rewindTo"] == nil {
 				if messages, ok := document["messages"].([]any); ok || document["sessionId"] != nil || document["projectHash"] != nil {
-					return geminiMessageMaps(messages), extractString(document["sessionId"])
+					var parsed geminiParsed
+					parsed.header(document)
+					// 整份文档总是完整读入，下标在同一份文档里稳定。
+					for index, message := range geminiMessageMaps(messages) {
+						parsed.messages = append(parsed.messages, geminiMessage{anon: "#" + strconv.Itoa(index), fields: message})
+					}
+					return parsed
 				}
 			}
 		}
 	}
-	return replayGemini(data)
+	return replayGemini(data, base)
 }
 
 func geminiMessageMaps(values []any) []map[string]any {
@@ -97,62 +152,64 @@ func geminiMessageMaps(values []any) []map[string]any {
 type geminiReplay struct {
 	order []string
 	byID  map[string]map[string]any
-	next  int
+	// line 是当前行在文件里的绝对字节位置，给没有 id 的消息命名。
+	line string
 }
 
-func replayGemini(data []byte) ([]map[string]any, string) {
+func replayGemini(data []byte, base int64) geminiParsed {
 	replay := geminiReplay{byID: map[string]map[string]any{}}
-	var sessionID string
-	for _, line := range completeLines(data) {
-		record := parseJSONObject(line)
+	var parsed geminiParsed
+	offset := base
+	for {
+		end := bytes.IndexByte(data, '\n')
+		if end < 0 {
+			break
+		}
+		replay.line = "@" + strconv.FormatInt(offset, 10)
+		record := parseJSONObject(string(data[:end]))
+		offset += int64(end) + 1
+		data = data[end+1:]
 		if record == nil {
 			continue
 		}
-		if id := extractString(record["sessionId"]); id != "" {
-			sessionID = id
-		}
+		parsed.header(record)
 		switch {
 		case extractString(record["$rewindTo"]) != "":
 			replay.rewind(extractString(record["$rewindTo"]))
 		case asRecord(record["$patch"]) != nil:
 			replay.applyPatch(asRecord(record["$patch"]))
 		case extractString(record["id"]) != "":
-			replay.upsert(record)
+			replay.upsert(record, "")
 		case asRecord(record["$set"]) != nil:
 			replay.applyFields(asRecord(record["$set"]), true)
 		case extractString(record["kind"]) == "main" || (extractString(record["sessionId"]) != "" && extractString(record["projectHash"]) != ""):
 			replay.applyFields(record, false)
 		case extractString(record["type"]) != "":
-			replay.upsert(record)
+			replay.upsert(record, "")
 		}
 	}
-	messages := make([]map[string]any, 0, len(replay.order))
 	for _, id := range replay.order {
 		if message := replay.byID[id]; message != nil {
-			messages = append(messages, message)
+			parsed.messages = append(parsed.messages, geminiMessage{anon: id, fields: message})
 		}
 	}
-	return messages, sessionID
+	return parsed
 }
 
-func (r *geminiReplay) upsert(message map[string]any) {
+// upsert 按 id 合并消息。没有 id 的消息用「行位置 + 行内序号」作 key：同一行里的多条
+// 消息（`$set.messages`）不会互相覆盖，不同窗口读到的同一行得到同一个 key。
+func (r *geminiReplay) upsert(message map[string]any, suffix string) {
 	if asRecord(message["$patch"]) != nil {
 		return
 	}
-	if id := extractString(message["id"]); id != "" {
-		if _, ok := r.byID[id]; ok {
-			r.byID[id] = message
-			return
-		}
-		r.byID[id] = message
-		r.order = append(r.order, id)
-		r.next++
-		return
+	id := extractString(message["id"])
+	if id == "" {
+		id = r.line + suffix
 	}
-	id := "#anon-" + strconv.Itoa(r.next)
-	r.next++
+	if _, ok := r.byID[id]; !ok {
+		r.order = append(r.order, id)
+	}
 	r.byID[id] = message
-	r.order = append(r.order, id)
 }
 
 func (r *geminiReplay) rewind(id string) {
@@ -183,8 +240,8 @@ func (r *geminiReplay) applyFields(fields map[string]any, replace bool) {
 			r.order = nil
 			r.byID = map[string]map[string]any{}
 		}
-		for _, message := range geminiMessageMaps(messages) {
-			r.upsert(message)
+		for index, message := range geminiMessageMaps(messages) {
+			r.upsert(message, "#"+strconv.Itoa(index))
 		}
 	}
 }
@@ -200,7 +257,7 @@ func (r *geminiReplay) applyPatch(patch map[string]any) {
 	}
 }
 
-func geminiRecords(sessionID string, index int, message map[string]any) []Record {
+func geminiRecords(id string, message map[string]any) []Record {
 	role := geminiRole(extractString(message["type"]))
 	if role == "" {
 		return nil
@@ -208,10 +265,6 @@ func geminiRecords(sessionID string, index int, message map[string]any) []Record
 	blocks := geminiBlocks(message, role)
 	if len(blocks) == 0 {
 		return nil
-	}
-	id := extractString(message["id"])
-	if id == "" {
-		id = sessionID + ":" + strconv.Itoa(index)
 	}
 	at := parseTimestamp(message["timestamp"])
 	visible := make([]Block, 0, len(blocks))
@@ -227,9 +280,10 @@ func geminiRecords(sessionID string, index int, message map[string]any) []Record
 	if len(visible) > 0 {
 		records = append(records, Record{ID: id, Role: role, At: at, Blocks: visible})
 	}
-	for _, block := range results {
+	// 工具结果按它在消息里的位置命名：CallID 可能为空或重复，不能当 id 用。
+	for position, block := range results {
 		records = append(records, Record{
-			ID: id + ":tool:" + block.CallID, Role: RoleTool, At: at, Blocks: []Block{block},
+			ID: id + ":tool:" + strconv.Itoa(position), Role: RoleTool, At: at, Blocks: []Block{block},
 		})
 	}
 	return records
@@ -303,7 +357,8 @@ func geminiContentBlocks(content any) []Block {
 				continue
 			}
 			record := asRecord(item)
-			if record == nil {
+			// `thought: true` 的 part 是模型的思考过程；契约没有 reasoning，不下发。
+			if record == nil || record["thought"] == true {
 				continue
 			}
 			if text := rawString(record["text"]); strings.TrimSpace(text) != "" && (extractString(record["type"]) == "" || extractString(record["type"]) == "text") {
@@ -337,80 +392,4 @@ func geminiToolOutput(result any) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-func geminiWorkspace(records []Record) string {
-	texts := make([]string, 0, len(records))
-	for _, record := range records {
-		var builder strings.Builder
-		for _, block := range record.Blocks {
-			if block.Type == BlockText {
-				if builder.Len() > 0 {
-					builder.WriteByte('\n')
-				}
-				builder.WriteString(block.Text)
-			}
-		}
-		texts = append(texts, builder.String())
-	}
-	limit := len(texts)
-	if limit > 50 {
-		limit = 50
-	}
-	for _, text := range texts[:limit] {
-		if path := geminiMarkedPath(text, "AGENTS.md instructions for "); path != "" {
-			return path
-		}
-	}
-	for _, text := range texts[:limit] {
-		if path := geminiMarkedPath(text, "Working directory:"); path != "" {
-			return path
-		}
-	}
-	fallback := len(texts)
-	if fallback > 5 {
-		fallback = 5
-	}
-	for _, text := range texts[:fallback] {
-		if index := strings.Index(text, "/data/projects/"); index >= 0 {
-			if path := geminiPathAt(text[index:]); strings.HasPrefix(path, "/data/projects/") {
-				return geminiProjectPath(path)
-			}
-		}
-	}
-	return ""
-}
-
-func geminiMarkedPath(text, marker string) string {
-	index := strings.Index(text, marker)
-	if index < 0 {
-		return ""
-	}
-	return geminiPathAt(text[index+len(marker):])
-}
-
-func geminiPathAt(text string) string {
-	text = strings.TrimLeft(text, " \t")
-	if strings.HasPrefix(text, `"`) || strings.HasPrefix(text, `'`) {
-		quote := text[0]
-		text = text[1:]
-		if end := strings.IndexByte(text, quote); end >= 0 {
-			text = text[:end]
-		}
-	} else if end := strings.IndexAny(text, " \t\r\n>\"')],"); end >= 0 {
-		text = text[:end]
-	}
-	text = strings.TrimRight(text, "/:")
-	if !strings.HasPrefix(text, "/") || len(text) <= 3 {
-		return ""
-	}
-	return text
-}
-
-func geminiProjectPath(path string) string {
-	parts := strings.Split(path, "/")
-	if len(parts) >= 5 && parts[1] == "data" && parts[2] == "projects" && parts[3] != "" {
-		return "/data/projects/" + parts[3]
-	}
-	return path
 }
