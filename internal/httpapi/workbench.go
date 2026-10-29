@@ -387,9 +387,10 @@ func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 		e.mu.Lock()
 		e.panes, e.resub = panes, cancel
 		e.mu.Unlock()
-		started := time.Now()
+		streamed := false
 		err := endpoint.SubscribeEvents(ctx, snapshotSubscriptions(panes), func(herdr.Event) {
 			// The first event is subscription_started: a snapshot covers the gap before it.
+			streamed = true
 			e.live.Store(true)
 			e.poke()
 		})
@@ -408,7 +409,9 @@ func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 		if resubscribe {
 			continue
 		}
-		if time.Since(started) > time.Minute {
+		if streamed {
+			// Herdr accepted this subscription: earlier failures are over. A
+			// stream that keeps ending still waits at least the first backoff.
 			backoff, quickRetries = time.Second, 0
 		}
 		var apiError *herdr.APIError
