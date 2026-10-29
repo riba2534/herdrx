@@ -255,6 +255,9 @@ describe('TerminalPane paste interception', () => {
     act(() => sendKey!('shift+enter'))
     expect(call).not.toHaveBeenCalled()
     expect(screen.getByRole('alert')).toHaveTextContent('Shift+Enter 未发送')
+    // 其他按键的提示按实际按键描述。
+    act(() => sendKey!('ctrl+c'))
+    expect(screen.getByRole('alert')).toHaveTextContent('Ctrl+C 未发送')
     await act(async () => { resolveOpen(7) })
     await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
     act(() => sendKey!('shift+enter'))

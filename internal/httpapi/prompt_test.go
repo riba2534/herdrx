@@ -555,3 +555,30 @@ func TestPromptRefusesScreensThatLookLikeADialog(t *testing.T) {
 		})
 	}
 }
+
+// 输入框里以 `1. …` 开头的真草稿：按草稿询问（force 可发），绝不当成对话框。
+func TestPromptTreatsANumberedInputDraftAsADraft(t *testing.T) {
+	for name, screen := range map[string]string{
+		"rules": promptScreen("● Done.", "", promptRule, "❯ 1. first step", "  2. second step", promptRule, "  ? for shortcuts"),
+		"box":   promptScreen("● Done.", "╭──────────────────────────────╮", "│ ❯ 1. first step              │", "╰──────────────────────────────╯"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPromptFixture(t, screen)
+			if name == "rules" {
+				if result := f.prompt(t, map[string]any{"text": "next", "submit": true, "client_msg_id": "m1"}, 409); result["code"] != "pane_draft" {
+					t.Fatalf("result=%v", result)
+				}
+			}
+			f.prompt(t, map[string]any{"text": "next", "submit": true, "client_msg_id": "m1", "force": true}, 200)
+		})
+	}
+}
+
+// Ctrl+C 退出 Claude 后残留的旧对话框：Shell 里照常发送。
+func TestPromptSendsIntoAShellBelowALeftoverDialog(t *testing.T) {
+	f := newPromptFixture(t, promptScreen(promptRule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel", "user@host:~$ "))
+	f.prompt(t, map[string]any{"text": "ls", "submit": true, "client_msg_id": "m1"}, 200)
+	if got := sentTexts(f.endpoint); strings.Join(got, ",") != `ls|[],|["Enter"]` {
+		t.Fatalf("sends=%q", got)
+	}
+}

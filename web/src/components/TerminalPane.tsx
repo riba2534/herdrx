@@ -384,14 +384,16 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
   // 断流或尚未连上时不发，否则会排到还在等待的正文之前；只提示，不排队重放。
   const sendKeyRef = useRef<(key: string) => void>(() => {})
   sendKeyRef.current = (key: string) => {
+    // 按实际按键描述（`shift+enter` → `Shift+Enter`），键栏也会经这里发其他组合键。
+    const label = key.split('+').map((part) => part.length <= 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)).join('+')
     if (inputBlockedRef.current || streamRef.current == null) {
-      setHistoryError('终端未连接，Shift+Enter 未发送，请重连后重试')
+      setHistoryError(`终端未连接，${label} 未发送，请重连后重试`)
       return
     }
     if (historyRef.current.active) returnToLiveRef.current()
     revealCursorRef.current()
     void client.call('pane.send_keys', { pane_id: pane.pane_id, keys: [key] }).catch((error) => {
-      if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : '无法发送 Shift+Enter，请检查连接后重试')
+      if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : `无法发送 ${label}，请检查连接后重试`)
     })
   }
 
