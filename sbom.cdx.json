@@ -26,7 +26,7 @@
       },
       {
         "name": "herdrx:web/pnpm-lock.yaml:sha256",
-        "value": "e0d56c5ebe4ebbdba68085b0a95e0cad033bbdbbcafc94772031038b528504a9"
+        "value": "4dd8d5468241e2b6a24dff21f8e5fc857b33889cdf7a32808d298563b459de25"
       },
       {
         "name": "herdrx:npm:platform-packages-excluded",
@@ -2666,9 +2666,9 @@
     {
       "type": "library",
       "name": "@vitest/expect",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/expect@4.1.11",
-      "purl": "pkg:npm/%40vitest/expect@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/expect@4.1.12",
+      "purl": "pkg:npm/%40vitest/expect@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2684,9 +2684,9 @@
     {
       "type": "library",
       "name": "@vitest/mocker",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/mocker@4.1.11",
-      "purl": "pkg:npm/%40vitest/mocker@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/mocker@4.1.12",
+      "purl": "pkg:npm/%40vitest/mocker@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2702,9 +2702,9 @@
     {
       "type": "library",
       "name": "@vitest/pretty-format",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/pretty-format@4.1.11",
-      "purl": "pkg:npm/%40vitest/pretty-format@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/pretty-format@4.1.12",
+      "purl": "pkg:npm/%40vitest/pretty-format@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2720,9 +2720,9 @@
     {
       "type": "library",
       "name": "@vitest/runner",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/runner@4.1.11",
-      "purl": "pkg:npm/%40vitest/runner@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/runner@4.1.12",
+      "purl": "pkg:npm/%40vitest/runner@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2738,9 +2738,9 @@
     {
       "type": "library",
       "name": "@vitest/snapshot",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/snapshot@4.1.11",
-      "purl": "pkg:npm/%40vitest/snapshot@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/snapshot@4.1.12",
+      "purl": "pkg:npm/%40vitest/snapshot@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2756,9 +2756,9 @@
     {
       "type": "library",
       "name": "@vitest/spy",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/spy@4.1.11",
-      "purl": "pkg:npm/%40vitest/spy@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/spy@4.1.12",
+      "purl": "pkg:npm/%40vitest/spy@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -2774,9 +2774,9 @@
     {
       "type": "library",
       "name": "@vitest/utils",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/%40vitest/utils@4.1.11",
-      "purl": "pkg:npm/%40vitest/utils@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/%40vitest/utils@4.1.12",
+      "purl": "pkg:npm/%40vitest/utils@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
@@ -6212,9 +6212,9 @@
     {
       "type": "library",
       "name": "vite",
-      "version": "7.3.6",
-      "bom-ref": "pkg:npm/vite@7.3.6",
-      "purl": "pkg:npm/vite@7.3.6",
+      "version": "7.3.7",
+      "bom-ref": "pkg:npm/vite@7.3.7",
+      "purl": "pkg:npm/vite@7.3.7",
       "licenses": [
         {
           "expression": "MIT"
@@ -6230,9 +6230,9 @@
     {
       "type": "library",
       "name": "vitest",
-      "version": "4.1.11",
-      "bom-ref": "pkg:npm/vitest@4.1.11",
-      "purl": "pkg:npm/vitest@4.1.11",
+      "version": "4.1.12",
+      "bom-ref": "pkg:npm/vitest@4.1.12",
+      "purl": "pkg:npm/vitest@4.1.12",
       "licenses": [
         {
           "expression": "MIT"
