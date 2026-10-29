@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestAgentSeenIsOwnerScopedAndMonotonic(t *testing.T) {
+func TestAgentSeenIsOwnerScopedAndFollowsHerdrRestarts(t *testing.T) {
 	dataStore, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -30,12 +30,12 @@ func TestAgentSeenIsOwnerScopedAndMonotonic(t *testing.T) {
 	if err := dataStore.MarkAgentSeen(ctx, "usr_a", "hst_a", "w1:p1", 5); err != nil {
 		t.Fatal(err)
 	}
-	// An older page must not move the marker back.
+	// After a Herdr restart the counter starts again below the old marker.
 	if err := dataStore.MarkAgentSeen(ctx, "usr_a", "hst_a", "w1:p1", 3); err != nil {
 		t.Fatal(err)
 	}
 	seen, err := dataStore.AgentSeenForUser(ctx, "usr_a")
-	if err != nil || seen[AgentSeenKey("hst_a", "w1:p1")].StateChangeSeq != 5 {
+	if err != nil || seen[AgentSeenKey("hst_a", "w1:p1")].StateChangeSeq != 3 {
 		t.Fatalf("seen = %#v, %v", seen, err)
 	}
 	if other, err := dataStore.AgentSeenForUser(ctx, "usr_b"); err != nil || len(other) != 0 {

@@ -14,6 +14,8 @@ func TestClassify(t *testing.T) {
 		{"done", 4, 3, UnseenDone},
 		{"done", 4, 4, Seen},
 		{"done", 0, 0, Seen},
+		// Herdr restarted: the counter began again below the old marker.
+		{"done", 4, 9, UnseenDone},
 		{"idle", 4, -1, Seen},
 		{"", 0, -1, Unknown},
 	} {

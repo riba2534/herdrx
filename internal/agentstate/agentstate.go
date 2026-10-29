@@ -3,8 +3,11 @@
 //
 // Herdr owns the agent lifecycle. "done" in Herdr already means "finished and
 // not yet looked at in Herdr"; the Web marker additionally hides a round the
-// user has opened in the Web client. A new round raises Herdr's
-// state_change_seq above the marker, so it becomes unseen again.
+// user has opened in the Web client. Every state change takes a new value from
+// Herdr's instance-wide state_change_seq, so a round is seen only when the
+// marker equals the pane's current value. The counter restarts at 0 when
+// Herdr restarts and pane IDs repeat, so a marker above the current value is a
+// previous Herdr run, not a newer round.
 package agentstate
 
 // Attention states, ordered by Rank.
@@ -25,7 +28,7 @@ func Classify(status string, stateChangeSeq, seenSeq int64) string {
 	case "working":
 		return Working
 	case "done":
-		if seenSeq >= 0 && seenSeq >= stateChangeSeq {
+		if seenSeq == stateChangeSeq {
 			return Seen
 		}
 		return UnseenDone

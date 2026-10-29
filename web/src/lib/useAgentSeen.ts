@@ -33,7 +33,8 @@ export function useAgentSeen(hostID: string, visiblePaneIDs: readonly string[] |
     const timer = window.setTimeout(() => {
       for (const { paneID, seq } of latest.current) {
         const sentKey = `${hostID}\u0000${paneID}`
-        if ((sent.current.get(sentKey) ?? -1) >= seq) continue
+        // Exact match: Herdr restarts its counter at 0, so a lower value is a new run.
+        if (sent.current.get(sentKey) === seq) continue
         sent.current.set(sentKey, seq)
         // Best effort: a failed mark is retried the next time the pane is seen.
         void (async () => {

@@ -305,13 +305,16 @@ func TestAgentSeenValidationAndPruning(t *testing.T) {
 	// 写操作需要 CSRF。
 	requestJSON(t, f.client, "POST", url, "", map[string]any{"host_id": "host-a", "pane_id": "w1:p1", "state_change_seq": 1}, 403)
 	requestJSON(t, f.client, "POST", url, f.csrf, map[string]any{"host_id": "host-a", "pane_id": "w1:gone", "state_change_seq": 3}, 200)
-	requestJSON(t, f.client, "POST", url, f.csrf, map[string]any{"host_id": "host-a", "pane_id": "w1:p1", "state_change_seq": 3}, 200)
-	// 标记只前进：较旧的请求不会把当前一轮重新变成未看。
-	requestJSON(t, f.client, "POST", url, f.csrf, map[string]any{"host_id": "host-a", "pane_id": "w1:p1", "state_change_seq": 1}, 200)
+	requestJSON(t, f.client, "POST", url, f.csrf, map[string]any{"host_id": "host-a", "pane_id": "w1:p1", "state_change_seq": 9}, 200)
 
+	// Herdr 重启后计数从 0 开始、pane id 复用：旧标记大于当前序号不能让这一轮显示为已看。
 	f.pool.endpoints["host-a"] = agentsTestEndpoint{snapshot: agentSnapshot(herdr.Agent{Agent: "claude", AgentStatus: "done", PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1", StateChangeSeq: 3})}
+	if got := f.overview(t, f.client); got.Agents[0].Attention != "unseen_done" {
+		t.Fatalf("marker from a previous Herdr run hid the round: %+v", got.Agents[0])
+	}
+	requestJSON(t, f.client, "POST", url, f.csrf, map[string]any{"host_id": "host-a", "pane_id": "w1:p1", "state_change_seq": 3}, 200)
 	if got := f.overview(t, f.client); got.Agents[0].Attention != "seen" {
-		t.Fatalf("older mark regressed the marker: %+v", got.Agents[0])
+		t.Fatalf("lower mark after a restart did not apply: %+v", got.Agents[0])
 	}
 	seen, err := f.db.AgentSeenForUser(context.Background(), f.owner)
 	if err != nil {

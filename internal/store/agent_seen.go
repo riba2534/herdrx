@@ -17,9 +17,11 @@ type AgentSeen struct {
 	SeenAt         time.Time `json:"seen_at"`
 }
 
-// MarkAgentSeen raises the user's read marker for a pane. Markers only move
-// forward, so a delayed request from an older page cannot mark a newer round
-// unread again. The host must belong to the user.
+// MarkAgentSeen records the state_change_seq the user has looked at for a pane.
+// It overwrites in both directions: Herdr restarts its counter at 0 and reuses
+// pane IDs, so a lower value is the current run, not a stale one. A delayed
+// request from an older page can at worst show a round as unseen again.
+// The host must belong to the user.
 func (s *Store) MarkAgentSeen(ctx context.Context, userID, hostID, paneID string, stateChangeSeq int64) error {
 	if stateChangeSeq < 0 {
 		return errors.New("negative state_change_seq")
@@ -37,8 +39,7 @@ func (s *Store) MarkAgentSeen(ctx context.Context, userID, hostID, paneID string
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_seen(user_id,host_id,pane_id,state_change_seq,seen_at) VALUES(?,?,?,?,?)
-ON CONFLICT(user_id,host_id,pane_id) DO UPDATE SET state_change_seq=excluded.state_change_seq,seen_at=excluded.seen_at
-WHERE excluded.state_change_seq>agent_seen.state_change_seq`, userID, hostID, paneID, stateChangeSeq, now()); err != nil {
+ON CONFLICT(user_id,host_id,pane_id) DO UPDATE SET state_change_seq=excluded.state_change_seq,seen_at=excluded.seen_at`, userID, hostID, paneID, stateChangeSeq, now()); err != nil {
 		return err
 	}
 	return tx.Commit()
