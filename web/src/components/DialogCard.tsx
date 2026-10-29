@@ -7,6 +7,8 @@ import './DialogCard.css'
 
 /** 卡片可见时的轮询间隔。 */
 export const DIALOG_POLL_MS = 2000
+/** 回答后同一对话框最多隐藏这么久，等终端重绘。 */
+export const ANSWERED_HIDE_MS = 3000
 
 // 工作台挂着的“主卡片”（pane 处于 blocked 时显示）。Composer 被拒绝后只在没有主卡片时
 // 才自己弹一张，免得同一个对话框出现两张卡。
@@ -52,7 +54,11 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
   onClose?: () => void
 }) {
   const [dialog, setDialog] = useState<PaneDialog | null>(initial || null)
+  // dismissed：用户点“收起”，出现别的对话框才再显示。answered：刚回答过的对话框，只在终端重绘前
+  // 短暂隐藏（读到“没有对话框”或超过 ANSWERED_HIDE_MS 就解除），同一命令再次请求时照常显示。
   const [dismissed, setDismissed] = useState('')
+  const [answered, setAnswered] = useState('')
+  const answeredTimerRef = useRef(0)
   const [answering, setAnswering] = useState<number | null>(null)
   const [toast, setToast] = useState('')
   const titleID = useId()
@@ -81,7 +87,10 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
       const result = await api.paneDialog(hostID, paneID, { signal: controller.signal })
       if (controller.signal.aborted || answeringRef.current) return
       setDialog(result.dialog)
-      if (!result.dialog) onCloseRef.current?.()
+      if (!result.dialog) {
+        setAnswered('')
+        onCloseRef.current?.()
+      }
     } catch {
       // 读屏暂时失败：保留上一次的卡片，下一轮再试。
     }
@@ -101,6 +110,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
     return () => {
       window.clearTimeout(timer)
       window.clearTimeout(followUpRef.current)
+      window.clearTimeout(answeredTimerRef.current)
       document.removeEventListener('visibilitychange', onVisible)
       controllerRef.current?.abort()
     }
@@ -116,8 +126,10 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
     try {
       await api.answerPaneDialog(hostID, paneID, dialog.fingerprint, index)
       setToast(`已选择：${label}`)
-      // 终端重绘前再读到的还是这个对话框：按指纹收起，出现新的对话框时才再显示。
-      setDismissed(dialog.fingerprint)
+      // 终端重绘前再读到的还是这个对话框：短暂按指纹隐藏。
+      setAnswered(dialog.fingerprint)
+      window.clearTimeout(answeredTimerRef.current)
+      answeredTimerRef.current = window.setTimeout(() => setAnswered(''), ANSWERED_HIDE_MS)
       reread = true
     } catch (error) {
       const code = error instanceof APIError ? error.code : ''
@@ -149,7 +161,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
   }
 
   const toastNode = <Toast message={toast} onClear={() => setToast('')}/>
-  if (!dialog || dialog.fingerprint === dismissed) return toastNode
+  if (!dialog || dialog.fingerprint === dismissed || dialog.fingerprint === answered) return toastNode
   return <>
     <section className="dialog-card" role="group" aria-labelledby={titleID}>
       <header className="dialog-card-head">

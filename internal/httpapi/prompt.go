@@ -200,6 +200,10 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 		}
 		writeJSON(writer, http.StatusConflict, payload)
 		return
+	} else if dialog == nil && screenparse.LooksLikeDialog(text) {
+		// 认不出、但底部有对话框页脚或带光标的编号选项：宁可不发，免得正文里的数字或 y/n 加回车直接确认光标项。
+		writeJSON(writer, http.StatusConflict, map[string]any{"code": "pane_dialog", "error": "终端底部像是有一个对话框，请在终端里回答后再发送", "dialog": nil})
+		return
 	}
 	if !input.Force && screenparse.HasDraft(text) {
 		writeError(writer, http.StatusConflict, "pane_draft", "电脑上的输入框里有未发送的内容，这段文字没有发出去，免得两段拼在一起")

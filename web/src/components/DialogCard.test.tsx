@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { APIError, api } from '../lib/api'
 import type { PaneDialog } from '../types'
-import { DIALOG_POLL_MS, DialogCard, usePrimaryDialogCard } from './DialogCard'
+import { ANSWERED_HIDE_MS, DIALOG_POLL_MS, DialogCard, usePrimaryDialogCard } from './DialogCard'
 
 const dialog: PaneDialog = {
   fingerprint: '0123456789abcdef',
@@ -36,8 +36,8 @@ describe('DialogCard', () => {
     const options = screen.getAllByRole('listitem')
     expect(options).toHaveLength(3)
     const long = screen.getByRole('button', { name: /don't ask again/ })
-    // 单行显示，完整文字放在 title 里。
-    expect(long).toHaveAttribute('title', dialog.options[1].label)
+    // 单行显示，完整文字放在自绘提示里。
+    expect(long).toHaveAttribute('data-tooltip', dialog.options[1].label)
     expect(screen.getByRole('button', { name: 'Yes' })).toHaveAccessibleDescription('终端光标当前所在')
     fireEvent.click(screen.getByRole('button', { name: /No, and tell Claude/ }))
     await waitFor(() => expect(answer).toHaveBeenCalledWith('host', 'w1:p1', dialog.fingerprint, 3))
@@ -149,6 +149,33 @@ describe('DialogCard', () => {
     await act(async () => finishPoll({ dialog }))
     await act(async () => { vi.advanceTimersByTime(1000) })
     expect(screen.queryByRole('group')).not.toBeInTheDocument()
+  })
+
+  it('shows the same dialog again once the screen cleared or the short hide expired', async () => {
+    vi.useFakeTimers()
+    setVisibility('visible')
+    // 同一命令再次请求权限：回答后先读到“没有对话框”，再出现同指纹的对话框。
+    const read = vi.spyOn(api, 'paneDialog').mockResolvedValueOnce({ dialog }).mockResolvedValueOnce({ dialog: null }).mockResolvedValue({ dialog })
+    vi.spyOn(api, 'answerPaneDialog').mockResolvedValue({ ok: true })
+    const view = render(<DialogCard hostID="host" paneID="w1:p1"/>)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes' })) })
+    await act(async () => { vi.advanceTimersByTime(600) })
+    expect(read).toHaveBeenCalledTimes(2)
+    await act(async () => { vi.advanceTimersByTime(DIALOG_POLL_MS) })
+    expect(screen.getByRole('group', { name: 'Do you want to proceed?' })).toBeInTheDocument()
+    view.unmount()
+
+    // 终端一直没重绘（读到的始终是同一个对话框）：最多隐藏 ANSWERED_HIDE_MS。
+    read.mockReset()
+    read.mockResolvedValue({ dialog })
+    render(<DialogCard hostID="host" paneID="w1:p1"/>)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes' })) })
+    await act(async () => { vi.advanceTimersByTime(ANSWERED_HIDE_MS - 500) })
+    expect(screen.queryByRole('group')).not.toBeInTheDocument()
+    await act(async () => { vi.advanceTimersByTime(1000) })
+    expect(screen.getByRole('group', { name: 'Do you want to proceed?' })).toBeInTheDocument()
   })
 
   it('cancels the follow-up read on unmount so it cannot close another pane card', async () => {

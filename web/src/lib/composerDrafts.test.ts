@@ -173,4 +173,33 @@ describe('composer guarded send', () => {
     await expect(runComposerPrompt('host', 'p1')).resolves.toEqual({ kind: 'dialog', dialog: null })
     expect(readComposerSend('host', 'p1').error).toContain('需要在终端里操作')
   })
+
+  it('keeps message ids per tab: another tab never reuses or deletes this tab id', async () => {
+    // 标签页 B 先打开（模块状态独立，共用 localStorage）。
+    vi.resetModules()
+    const tabB = { api: (await import('./api')).api, drafts: await import('./composerDrafts') }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ user, csrf_token: 'csrf-sess-a', session_id: 'sess-a' }))))
+    await tabB.api.login({ email: 'user@example.test', password: 'test' })
+    // 标签页 A 发送结果未知：它的 id 存进 localStorage 供刷新后去重。
+    const promptA = vi.spyOn(api, 'panePrompt').mockRejectedValue(new TypeError('Failed to fetch'))
+    writeComposerDraft('host', 'p1', '同一段话')
+    await runComposerPrompt('host', 'p1')
+    const idA = promptA.mock.calls[0][2].client_msg_id
+    const stored = () => [...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key) => key?.endsWith('#msg'))
+    expect(stored()).toHaveLength(1)
+    // 标签页 B 发相同正文：是另一条消息，用自己的 id；送达后也不删 A 的记录。
+    const promptB = vi.spyOn(tabB.api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
+    tabB.drafts.writeComposerDraft('host', 'p1', '同一段话')
+    await tabB.drafts.runComposerPrompt('host', 'p1')
+    expect(promptB.mock.calls[0][2].client_msg_id).not.toBe(idA)
+    expect(stored()).toHaveLength(1)
+    expect(JSON.parse(localStorage.getItem(stored()[0]!)!).id).toBe(idA)
+  })
+
+  it('stores nothing for a send that was delivered', async () => {
+    vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
+    writeComposerDraft('host', 'p1', '普通发送')
+    await runComposerPrompt('host', 'p1')
+    expect([...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key) => key?.endsWith('#msg'))).toEqual([])
+  })
 })
