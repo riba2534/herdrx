@@ -14,6 +14,7 @@ import { RelayConnectCommand } from '../components/RelayConnectCommand'
 import { Modal } from '../components/Modal'
 import { PrivateKeyInput } from '../components/PrivateKeyInput'
 import { AppearanceToggle } from '../components/AppearanceToggle'
+import { AgentOverviewLink } from '../components/AgentOverviewLink'
 import { Toast } from '../components/Toast'
 import { APIError, api } from '../lib/api'
 import { navigate } from '../lib/navigation'
@@ -379,6 +380,7 @@ export function HostsPage() {
       <a className="brand" href="/" onClick={(event) => { event.preventDefault(); navigate('/') }}><BrandLogo/></a>
       <div className="topbar-actions">
         <AppearanceToggle/>
+        <AgentOverviewLink/>
         <Button className="button-ghost topbar-nav-action" aria-label="密钥" data-tooltip="密钥管理" onClick={() => navigate('/keys')}><KeyRound size={16}/><span className="nav-action-label">密钥</span></Button>
         <span className="user-chip"><span data-tooltip={auth.user?.display_name}>{auth.user?.display_name}</span><small>{auth.user?.role === 'admin' ? '管理员' : '普通用户'}</small></span>
         {auth.user?.role === 'admin' && <Button className="button-ghost topbar-nav-action" aria-label="管理" data-tooltip="访问管理" onClick={() => navigate('/admin')}><ShieldCheck size={16} /><span className="nav-action-label">管理</span></Button>}

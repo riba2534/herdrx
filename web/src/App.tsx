@@ -22,6 +22,7 @@ import {
 
 const WorkbenchPage = lazy(() => import('./pages/WorkbenchPage').then((module) => ({ default: module.WorkbenchPage })))
 const AdminPage = lazy(() => import('./pages/AdminPage').then((module) => ({ default: module.AdminPage })))
+const AgentsPage = lazy(() => import('./pages/AgentsPage').then((module) => ({ default: module.AgentsPage })))
 const KeysPage = lazy(() => import('./pages/KeysPage').then((module) => ({ default: module.KeysPage })))
 
 function routePath() {
@@ -48,6 +49,7 @@ export default function App() {
   if (!auth.user) return <AuthPage bootstrap={false} />
   const authKey = `${auth.user.id}:${auth.sessionID}`
   if (path === '/keys') return <Suspense fallback={<main className="loading-screen">正在加载密钥…</main>}><KeysPage key={authKey}/></Suspense>
+  if (path === '/agents') return <Suspense fallback={<main className="loading-screen">正在加载 Agent 总览…</main>}><AgentsPage key={authKey}/></Suspense>
   if (path === '/admin') {
     if (auth.user.role !== 'admin') return <main className="auth-shell"><section className="auth-card"><h1>需要管理员权限</h1><p>当前账号无法访问管理页面。</p><a href="/">返回工作台</a></section></main>
     return <Suspense fallback={<main className="loading-screen">正在加载管理页面…</main>}><AdminPage key={authKey} /></Suspense>
