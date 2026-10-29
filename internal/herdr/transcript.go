@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -71,10 +72,13 @@ const (
 	ChatReasonInternalError        = "internal_error"
 )
 
-// 绑定来源。本期只允许 `selected`：即使候选只剩一个也**不自动认领**。
-// `verified` 在契约里预留但本期不得产生 —— herdrx 目前没有 hook 级别的 pane/provider
-// 会话证据源，凭空返回 verified 就是臆造绑定。
-const ChatBindingSelected = "selected"
+// 绑定来源。`selected` 是用户在候选里显式选择；`verified` 是 Herdr 集成上报的
+// pane 会话引用（agent_session）恰好指向候选集合里的某一份文件。没有这条证据时，
+// 即使候选只剩一个也**不自动认领**。
+const (
+	ChatBindingSelected = "selected"
+	ChatBindingVerified = "verified"
+)
 
 // TranscriptScope 是服务端自己取到的 pane 事实。agent 与 cwd 都来自
 // `endpoint.Snapshot`，**绝不接受客户端传入** —— 否则客户端可以谎报 cwd 去读别的项目。
@@ -82,6 +86,8 @@ type TranscriptScope struct {
 	PaneID string
 	Agent  string
 	CWD    string
+	// Evidence 是同一份 snapshot 里该 pane 的 agent_session；没有就是 nil。
+	Evidence *AgentSession
 }
 
 // TranscriptRequest 是三个不透明值的组合。客户端只回传，不解析、不构造、不缓存成路径。
@@ -107,6 +113,8 @@ type TranscriptPage struct {
 	HasMore    bool
 	Skipped    int
 	Binding    string
+	// Session 只在 verified 绑定时给出：服务端认领的那个候选 id，客户端之后带它续读。
+	Session string
 }
 
 // TranscriptEndpoint 是可选能力接口。实现它的 Endpoint 才有结构化会话记录可读。
@@ -320,7 +328,7 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 		return transcriptDegrade(ChatReasonCWDUnavailable, agent)
 	}
 	if request.Session == "" {
-		return transcriptCandidates(ctx, files, codec, agent, cwd)
+		return transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence)
 	}
 	parts, ok := codec.open(request.Session, 3)
 	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, cwd, parts[1], parts[2]) {
@@ -365,6 +373,69 @@ func transcriptCandidates(ctx context.Context, files transcriptFS, codec transcr
 		page.Reason = ChatReasonNoSessionCandidates
 	}
 	return page
+}
+
+// transcriptVerifiedOrCandidates 先列候选；Herdr 上报的会话引用指向其中一份文件时直接读取它
+// 并标记 verified，否则保持「只列候选」。证据只用来**挑选**候选：候选本身已经过 reader
+// 白名单与精确 cwd 核对，所以证据再离谱也只能落到这个 pane 自己的会话上。
+func transcriptVerifiedOrCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string, evidence *AgentSession) TranscriptPage {
+	page := transcriptCandidates(ctx, files, codec, agent, cwd)
+	if !page.Supported || evidence == nil {
+		return page
+	}
+	for _, candidate := range page.Candidates {
+		parts, ok := codec.open(candidate.ID, 3)
+		if !ok || !transcriptEvidenceMatches(agent, evidence, parts[1], parts[2]) {
+			continue
+		}
+		bound := transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], TranscriptRequest{Session: candidate.ID})
+		if bound.Binding == "" {
+			// 文件在列候选与读取之间消失或变得不可读：退回候选列表，不冒充绑定。
+			return page
+		}
+		bound.Binding = ChatBindingVerified
+		bound.Session = candidate.ID
+		bound.Candidates = page.Candidates
+		return bound
+	}
+	return page
+}
+
+// transcriptEvidenceMatches 判断 agent_session 是否指向这一份候选文件。
+//
+// 只认 Herdr 自己的集成来源（`herdr:<reader>`，agent 字段同名），避免第三方上报冒充。
+// kind=id 要求与候选的 provider 会话 id 精确相等；kind=path 要求是规范的绝对路径，且
+// 恰好以「固定日志根 + 候选相对路径」结尾。远端 $HOME 不在工作台侧，路径前缀无法独立核对，
+// 但读取的永远是候选里那一份文件，路径本身从不被打开。
+func transcriptEvidenceMatches(agent string, evidence *AgentSession, sessionID, rel string) bool {
+	if evidence.Source != "herdr:"+agent || evidence.Agent != agent {
+		return false
+	}
+	value := evidence.Value
+	switch evidence.Kind {
+	case "id":
+		return value != "" && value == sessionID
+	case "path":
+		if !strings.HasPrefix(value, "/") || path.Clean(value) != value {
+			return false
+		}
+		return strings.HasSuffix(value, "/"+strings.Join(transcriptRootParts(transcriptRootFor(agent)), "/")+"/"+rel)
+	}
+	return false
+}
+
+// transcriptRootParts 是各日志根相对 $HOME 的固定路径分量。
+func transcriptRootParts(root transcriptRootKind) []string {
+	switch root {
+	case transcriptRootClaude:
+		return []string{".claude", "projects"}
+	case transcriptRootCodex:
+		return []string{".codex", "sessions"}
+	case transcriptRootDSH:
+		// 固定根，来自上游 `dshHomePath('sessions')`；自定义 DSH_HOME 不在本期支持范围。
+		return []string{".dsh", "sessions"}
+	}
+	return nil
 }
 
 // transcriptSessionLost 对应契约里「session 失效」：重新给出候选让用户重选，并置 reset。

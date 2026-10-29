@@ -526,3 +526,51 @@ func TestTranscriptNeverAcceptsAClientPath(t *testing.T) {
 		t.Fatalf("unknown query parameters leaked into the request: %+v", endpoint.request)
 	}
 }
+
+// Herdr 上报的 agent_session 由服务端从 snapshot 取出交给能力层；verified 页带回候选 id 并记 opened。
+func TestTranscriptPassesHerdrSessionEvidenceAndAuditsVerified(t *testing.T) {
+	snapshot := agentPane(agentlog.AgentClaude, "/srv/proj", "")
+	snapshot.Agents = []herdr.Agent{
+		{PaneID: "w1:other", AgentSession: &herdr.AgentSession{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "sess-other"}},
+		{PaneID: "w1:p1", AgentSession: &herdr.AgentSession{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "sess-1"}},
+	}
+	endpoint := &transcriptTestEndpoint{
+		snapshot: snapshot,
+		page: herdr.TranscriptPage{
+			Supported: true, Agent: agentlog.AgentClaude, SessionID: "sess-1", Binding: herdr.ChatBindingVerified, Session: "candidate-token",
+			Messages: []agentlog.Record{{ID: "u-1", Role: agentlog.RoleUser, Blocks: []agentlog.Block{{Type: agentlog.BlockText, Text: "正文"}}}},
+		},
+	}
+	fixture := newTranscriptFixture(t, endpoint)
+
+	payload := requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", ""), "", nil, 200)
+	if endpoint.scope.Evidence == nil || endpoint.scope.Evidence.Value != "sess-1" {
+		t.Fatalf("evidence = %+v", endpoint.scope.Evidence)
+	}
+	if payload["binding"] != herdr.ChatBindingVerified || payload["session"] != "candidate-token" {
+		t.Fatalf("payload = %+v", payload)
+	}
+	opened, err := fixture.db.ListAudit(context.Background(), store.AuditFilter{Action: "transcript.opened"})
+	if err != nil || len(opened) != 1 || !strings.Contains(string(opened[0].Details), `"verified"`) {
+		t.Fatalf("opened audit = %v %v", opened, err)
+	}
+
+	// pane 自带的引用优先于 agents[]。
+	endpoint.snapshot.Panes[0].AgentSession = &herdr.AgentSession{Source: "herdr:claude", Agent: "claude", Kind: "id", Value: "sess-pane"}
+	requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", ""), "", nil, 200)
+	if endpoint.scope.Evidence == nil || endpoint.scope.Evidence.Value != "sess-pane" {
+		t.Fatalf("pane evidence = %+v", endpoint.scope.Evidence)
+	}
+
+	// 用户点「重选」后带 manual=1：证据不进能力层，只列候选。
+	requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "manual=1"), "", nil, 200)
+	if endpoint.scope.Evidence != nil {
+		t.Fatalf("manual request kept evidence: %+v", endpoint.scope.Evidence)
+	}
+	calls := endpoint.calls
+	requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "manual=yes"), "", nil, 400)
+	requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", "manual=1&manual=1"), "", nil, 400)
+	if endpoint.calls != calls {
+		t.Fatal("invalid manual flag reached the capability layer")
+	}
+}
