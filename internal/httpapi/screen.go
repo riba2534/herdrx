@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -169,12 +170,6 @@ func (s *workbenchSession) runScreen(ctx context.Context, watch *screenWatch) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	schedule := func(at time.Time) {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
 		due = at
 		timer.Reset(max(0, time.Until(at)))
 	}
@@ -536,16 +531,12 @@ func (r *screenReads) runSignal(ctx context.Context, key screenSignalKey, signal
 	scanner := bufio.NewScanner(process.Stdout())
 	scanner.Buffer(make([]byte, 64*1024), 16<<20)
 	for scanner.Scan() {
-		var frame struct {
-			Type string `json:"type"`
-		}
-		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
-			continue
-		}
-		if frame.Type == "terminal.closed" {
+		// Only the line type matters; skip decoding the whole screen payload.
+		line := scanner.Bytes()
+		if bytes.Contains(line, []byte(`"type":"terminal.closed"`)) {
 			break
 		}
-		if frame.Type != "terminal.frame" {
+		if !bytes.Contains(line, []byte(`"type":"terminal.frame"`)) {
 			continue
 		}
 		r.mu.Lock()

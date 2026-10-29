@@ -2,15 +2,12 @@ package httpapi
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -248,8 +245,8 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 
 // snapshotFailureMessage explains a failed first snapshot with the next step.
 func snapshotFailureMessage(err error) string {
-	if hostruntime.HerdrSocketUnavailable(err) {
-		return hostruntime.DescribeError(err).Error()
+	if detail := hostruntime.DescribeError(err); detail.Code == "herdr_not_running" {
+		return detail.Error()
 	}
 	return "读取 Herdr 工作区失败，请确认远程主机上的 Herdr 正常运行后点“立即重连”：" + err.Error()
 }
@@ -330,22 +327,24 @@ func snapshotSubscriptions(panes []string) []herdr.EventSubscription {
 func snapshotAgentPanes(snapshot herdr.Snapshot) []string {
 	panes := make([]string, 0, len(snapshot.Agents))
 	for _, agent := range snapshot.Agents {
-		if agent.PaneID != "" && !slices.Contains(panes, agent.PaneID) {
+		if agent.PaneID != "" {
 			panes = append(panes, agent.PaneID)
 		}
 	}
 	slices.Sort(panes)
-	return panes
+	return slices.Compact(panes)
 }
+
+// errResubscribe ends a subscription whose agent panes changed.
+var errResubscribe = errors.New("agent panes changed")
 
 type snapshotEvents struct {
 	live atomic.Bool   // a subscription is streaming
 	kick chan struct{} // something changed: take a snapshot (buffered 1)
 
-	mu       sync.Mutex
-	panes    string             // the agent panes of the current subscription
-	resub    context.CancelFunc // ends the current subscription for a new pane set
-	resubbed bool
+	mu    sync.Mutex
+	panes []string                // the agent panes of the current subscription
+	resub context.CancelCauseFunc // ends the current subscription for a new pane set
 }
 
 func newSnapshotEvents() *snapshotEvents {
@@ -362,15 +361,14 @@ func (e *snapshotEvents) poke() {
 // observe restarts the subscription when a snapshot shows agents in panes it
 // does not cover. It only cancels a context; no network call holds the lock.
 func (e *snapshotEvents) observe(snapshot herdr.Snapshot) {
-	if e == nil {
-		return
-	}
-	key := strings.Join(snapshotAgentPanes(snapshot), " ")
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.resub != nil && key != e.panes {
-		e.panes, e.resubbed = key, true
-		e.resub()
+	if e.resub == nil {
+		return
+	}
+	if panes := snapshotAgentPanes(snapshot); !slices.Equal(panes, e.panes) {
+		e.panes = panes
+		e.resub(errResubscribe)
 	}
 }
 
@@ -383,9 +381,9 @@ func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 		s.snapshotMu.Lock()
 		panes := snapshotAgentPanes(s.snapshot)
 		s.snapshotMu.Unlock()
-		ctx, cancel := context.WithCancel(s.ctx)
+		ctx, cancel := context.WithCancelCause(s.ctx)
 		e.mu.Lock()
-		e.panes, e.resub, e.resubbed = strings.Join(panes, " "), cancel, false
+		e.panes, e.resub = panes, cancel
 		e.mu.Unlock()
 		started := time.Now()
 		err := endpoint.SubscribeEvents(ctx, snapshotSubscriptions(panes), func(herdr.Event) {
@@ -393,19 +391,19 @@ func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 			e.live.Store(true)
 			e.poke()
 		})
-		cancel()
+		e.mu.Lock()
+		e.resub = nil
+		e.mu.Unlock()
+		resubscribe := context.Cause(ctx) == errResubscribe
+		cancel(nil)
 		if e.live.Swap(false) {
 			// Polling resumes at full speed; refresh now for anything missed.
 			e.poke()
 		}
-		e.mu.Lock()
-		e.resub = nil
-		resubbed := e.resubbed
-		e.mu.Unlock()
 		if s.ctx.Err() != nil || errors.Is(err, herdr.ErrEventsUnsupported) {
 			return
 		}
-		if resubbed {
+		if resubscribe {
 			continue
 		}
 		if time.Since(started) > time.Minute {
@@ -466,12 +464,6 @@ func (s *workbenchSession) pollSnapshots() {
 		interval := snapshotPollInterval
 		if s.events.live.Load() {
 			interval = snapshotFallbackInterval
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
 		}
 		timer.Reset(interval)
 	}
@@ -639,35 +631,67 @@ func (o *terminalOutput) merge(next terminalOutput) {
 	o.seq, o.width, o.height = next.seq, next.width, next.height
 }
 
+// terminalSource is one parsed line of Herdr's observer stream: an output
+// frame, or the reason the stream closed.
+type terminalSource struct {
+	output terminalOutput
+	closed bool
+	reason string
+}
+
+// readTerminalSource parses observer lines and hands them over one at a time,
+// so a send waiting for browser credit stops reading and keeps backpressure on
+// the observer.
+func readTerminalSource(scanner *bufio.Scanner, sources chan<- terminalSource, stop <-chan struct{}) {
+	defer close(sources)
+	installedFull := false
+	for scanner.Scan() {
+		var line struct {
+			Type   string `json:"type"`
+			Seq    uint64 `json:"seq"`
+			Width  uint16 `json:"width"`
+			Height uint16 `json:"height"`
+			Full   bool   `json:"full"`
+			Bytes  []byte `json:"bytes"` // base64, decoded by encoding/json
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			continue
+		}
+		var source terminalSource
+		switch {
+		case line.Type == "terminal.closed":
+			source = terminalSource{closed: true, reason: line.Reason}
+		case line.Type != "terminal.frame" || line.Width == 0 || line.Height == 0 || (!installedFull && !line.Full) || len(line.Bytes) > 8<<20:
+			continue
+		default:
+			installedFull = true
+			source.output = terminalOutput{seq: line.Seq, width: line.Width, height: line.Height, full: line.Full, ansi: line.Bytes}
+		}
+		select {
+		case sources <- source:
+		case <-stop:
+			return
+		}
+		if source.closed {
+			return
+		}
+	}
+}
+
 func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 	scanner := bufio.NewScanner(stream.process.Stdout())
 	scanner.Buffer(make([]byte, 64*1024), 16<<20)
-	// The reader hands over one line at a time, so a send waiting for browser
-	// credit still stops reading and keeps backpressure on the observer.
-	lines := make(chan []byte)
+	sources := make(chan terminalSource)
 	stopReading := make(chan struct{})
-	go func() {
-		defer close(lines)
-		for scanner.Scan() {
-			select {
-			case lines <- bytes.Clone(scanner.Bytes()):
-			case <-stopReading:
-				return
-			}
-		}
-	}()
+	go readTerminalSource(scanner, sources, stopReading)
 	closedReason := ""
-	installedFull := false
-	failed := false
 	var last time.Time
 	var pending *terminalOutput
-	var gate *time.Timer
-	var gateC <-chan time.Time
+	gate := time.NewTimer(time.Hour)
+	gate.Stop()
+	defer gate.Stop()
 	send := func(output terminalOutput) bool {
-		if gate != nil {
-			gate.Stop()
-			gate, gateC = nil, nil
-		}
 		flags := byte(0)
 		if output.full {
 			flags |= terminalwire.FlagFull
@@ -675,86 +699,53 @@ func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
 		frame := terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeFrame, Flags: flags, StreamID: stream.id, Seq: output.seq, Payload: terminalwire.TerminalPayload(output.width, output.height, output.ansi)})
 		// Credit is reserved for the merged frame's size under its last sequence.
 		if !stream.reserveCredit(s.ctx, output.seq, len(frame)) {
-			closedReason, failed = "browser is not consuming terminal output", true
-			return false
-		}
-		if err := s.writer.Binary(s.ctx, frame); err != nil {
-			failed = true
+			closedReason = "browser is not consuming terminal output"
 			return false
 		}
 		last = time.Now()
-		return true
+		return s.writer.Binary(s.ctx, frame) == nil
+	}
+	flush := func() bool {
+		gate.Stop()
+		if pending == nil {
+			return true
+		}
+		merged := *pending
+		pending = nil
+		return send(merged)
 	}
 read:
 	for {
+		var gateC <-chan time.Time
+		if pending != nil {
+			gateC = gate.C
+		}
 		select {
-		case line, ok := <-lines:
-			if !ok {
+		case source, ok := <-sources:
+			if !ok || source.closed {
+				closedReason = source.reason
+				// Output held by the gate still belongs before the close notice.
+				flush()
 				break read
 			}
-			var source struct {
-				Type   string `json:"type"`
-				Seq    uint64 `json:"seq"`
-				Width  uint16 `json:"width"`
-				Height uint16 `json:"height"`
-				Full   bool   `json:"full"`
-				Bytes  string `json:"bytes"`
-				Reason string `json:"reason"`
-			}
-			if err := json.Unmarshal(line, &source); err != nil {
-				continue
-			}
-			if source.Type == "terminal.closed" {
-				closedReason = source.Reason
-				break read
-			}
-			if source.Type != "terminal.frame" || source.Width == 0 || source.Height == 0 || (!installedFull && !source.Full) {
-				continue
-			}
-			ansi, err := base64.StdEncoding.DecodeString(source.Bytes)
-			if err != nil || len(ansi) > 8<<20 {
-				continue
-			}
-			installedFull = true
-			s.geometryObserved(stream, source.Width, source.Height)
-			output := terminalOutput{seq: source.Seq, width: source.Width, height: source.Height, full: source.Full, ansi: ansi}
-			if pending != nil {
-				pending.merge(output)
-				if len(pending.ansi) >= terminalMergedLimit {
-					merged := *pending
-					pending = nil
-					if !send(merged) {
-						break read
-					}
+			s.geometryObserved(stream, source.output.width, source.output.height)
+			switch {
+			case pending != nil:
+				pending.merge(source.output)
+				if len(pending.ansi) >= terminalMergedLimit && !flush() {
+					break read
 				}
-				continue
-			}
-			if wait := terminalOutputGap - time.Since(last); wait > 0 {
-				pending = &output
-				gate = time.NewTimer(wait)
-				gateC = gate.C
-				continue
-			}
-			if !send(output) {
+			case time.Since(last) < terminalOutputGap:
+				pending = &source.output
+				gate.Reset(terminalOutputGap - time.Since(last))
+			case !send(source.output):
 				break read
 			}
 		case <-gateC:
-			gate, gateC = nil, nil
-			if pending != nil {
-				merged := *pending
-				pending = nil
-				if !send(merged) {
-					break read
-				}
+			if !flush() {
+				break read
 			}
 		}
-	}
-	// Output held by the gate still belongs before the close notice.
-	if pending != nil && !failed {
-		send(*pending)
-	}
-	if gate != nil {
-		gate.Stop()
 	}
 	close(stopReading)
 	// A stalled observer must be detached before waiting for its process. Waiting
@@ -763,7 +754,7 @@ read:
 		stream.input.Close()
 	}
 	_ = stream.process.Close()
-	for range lines {
+	for range sources {
 	}
 	if err := scanner.Err(); err != nil && closedReason == "" {
 		closedReason = err.Error()

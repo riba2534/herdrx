@@ -6,27 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/riba2534/herdrx/internal/testpaths"
 )
 
 // eventServer accepts one events.subscribe request on a short Unix socket path
 // and lets the test script Herdr's replies.
 func eventServer(t *testing.T, serve func(request map[string]any, conn net.Conn)) *LocalEndpoint {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "hx-ev-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	path := filepath.Join(dir, "herdr.sock")
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
+	listener, path := testpaths.ListenShortUnix(t, testpaths.ShortTempDir(t), "herdr.sock")
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
