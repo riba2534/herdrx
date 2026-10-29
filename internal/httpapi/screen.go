@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,9 +14,10 @@ import (
 	"github.com/riba2534/herdrx/internal/herdr"
 )
 
-// 画面视图：工作台按 pane 轮询 Herdr 已渲染好的文本（pane.read，format=ansi），
-// 只把变化的行推给浏览器。它只读画面，不打开观察流，不申请尺寸控制，也不改变
-// 远端 PTY；输入仍走既有的 pane.send_input / 终端流。
+// 画面视图：工作台读取 Herdr 已渲染好的文本（pane.read，format=ansi），只把
+// 变化的行推给浏览器。同一主机同一 pane 共享一个只读观察流作为“画面变了”的
+// 信号，收到后防抖再读；观察流打不开时退回定时轮询。它不申请尺寸控制，也不
+// 改变远端 PTY；输入仍走既有的 pane.send_input / 终端流。
 //
 // 固定使用 format=ansi：Herdr 只在 format=text 读取全屏 Agent 历史时才会向 PTY
 // 注入滚轮来抓取更早内容，ansi 读取没有这种副作用。
@@ -163,28 +166,50 @@ func (s *workbenchSession) runScreen(ctx context.Context, watch *screenWatch) {
 	var seq uint64
 	first, unchanged, failures := true, 0, 0
 	lastError := ""
-	var kickedAt time.Time
+	var kickedAt, lastRead, due time.Time
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	schedule := func(at time.Time) {
+		due = at
+		timer.Reset(max(0, time.Until(at)))
+	}
+	// A shared read-only observer reports when the pane redraws; while it
+	// works, reads follow it instead of the polling schedule.
+	signal := screenSignalState{}
+	defer signal.releaseSub()
 	for {
+		signal.connect(s, watch.paneID)
 		select {
 		case <-ctx.Done():
 			return
 		case <-watch.kick:
 			unchanged, kickedAt = 0, time.Now()
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
+			schedule(time.Now().Add(screenKickDelay))
+			continue
+		case <-signal.changed():
+			signal.delivered()
+			// Debounce a burst of redraws, and keep busy output to a bounded read rate.
+			at := time.Now().Add(screenSignalDelay)
+			if gap := lastRead.Add(screenSignalMinGap); gap.After(at) {
+				at = gap
 			}
-			timer.Reset(screenKickDelay)
+			if due.IsZero() || at.Before(due) {
+				schedule(at)
+			}
+			continue
+		case <-signal.ended():
+			signal.lost()
+			if at := time.Now().Add(screenInterval(unchanged)); due.IsZero() || at.Before(due) {
+				schedule(at)
+			}
 			continue
 		case <-timer.C:
+			due = time.Time{}
 		}
 		if s.access.check() != nil {
 			return
 		}
+		lastRead = time.Now()
 		text, truncated, err := s.api.readScreen(ctx, s.hostID, s.endpoint, watch.paneID, watch.lines, kickedAt)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -197,7 +222,7 @@ func (s *workbenchSession) runScreen(ctx context.Context, watch *screenWatch) {
 				lastError = message
 				_ = s.writer.JSON(s.ctx, map[string]any{"t": "screen.error", "pane_id": watch.paneID, "gen": watch.gen, "code": code, "message": message})
 			}
-			timer.Reset(screenBackoff(failures))
+			schedule(time.Now().Add(screenBackoff(failures)))
 			continue
 		}
 		failures, lastError = 0, ""
@@ -223,7 +248,7 @@ func (s *workbenchSession) runScreen(ctx context.Context, watch *screenWatch) {
 			unchanged++
 		}
 		first = false
-		timer.Reset(screenInterval(unchanged))
+		schedule(time.Now().Add(signal.interval(unchanged)))
 	}
 }
 
@@ -313,6 +338,7 @@ func screenShiftCost(previous, next []string, shift int) int {
 type screenReads struct {
 	mu      sync.Mutex
 	entries map[screenReadKey]*screenReadEntry
+	signals map[screenSignalKey]*screenSignal
 }
 
 type screenReadKey struct {
@@ -423,4 +449,198 @@ func screenInputPane(method string, params any) string {
 	}
 	paneID, _ := values["pane_id"].(string)
 	return paneID
+}
+
+// Change signal: one read-only Herdr observer per host and pane, shared by
+// every window watching it, reports when the pane redraws. Its frames are only
+// a signal; the text still comes from pane.read. The observer is an access
+// stream like a terminal observer: ending it never touches the pane or PTY.
+const (
+	screenSignalDelay    = 50 * time.Millisecond
+	screenSignalMinGap   = 150 * time.Millisecond
+	screenSignalFallback = 10 * time.Second
+	screenSignalRetry    = 5 * time.Second
+	screenSignalMaxRetry = time.Minute
+)
+
+type screenSignalKey struct {
+	hostID string
+	paneID string
+}
+
+type screenSignal struct {
+	subscribers map[*screenSignalSub]struct{}
+	cancel      context.CancelFunc
+	ended       chan struct{}
+}
+
+type screenSignalSub struct {
+	changed chan struct{}
+	ended   <-chan struct{}
+}
+
+// subscribeSignal joins the pane's observer, starting it if needed. open runs
+// outside the lock and only for the first subscriber.
+func (r *screenReads) subscribeSignal(key screenSignalKey, open func(context.Context) (herdr.TerminalProcess, error)) (*screenSignalSub, func()) {
+	r.mu.Lock()
+	if r.signals == nil {
+		r.signals = make(map[screenSignalKey]*screenSignal)
+	}
+	signal := r.signals[key]
+	if signal == nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		signal = &screenSignal{subscribers: make(map[*screenSignalSub]struct{}), cancel: cancel, ended: make(chan struct{})}
+		r.signals[key] = signal
+		go r.runSignal(ctx, key, signal, open)
+	}
+	sub := &screenSignalSub{changed: make(chan struct{}, 1), ended: signal.ended}
+	signal.subscribers[sub] = struct{}{}
+	r.mu.Unlock()
+	var once sync.Once
+	return sub, func() {
+		once.Do(func() {
+			r.mu.Lock()
+			delete(signal.subscribers, sub)
+			if len(signal.subscribers) == 0 {
+				if r.signals[key] == signal {
+					delete(r.signals, key)
+				}
+				signal.cancel()
+			}
+			r.mu.Unlock()
+		})
+	}
+}
+
+func (r *screenReads) runSignal(ctx context.Context, key screenSignalKey, signal *screenSignal, open func(context.Context) (herdr.TerminalProcess, error)) {
+	defer func() {
+		r.mu.Lock()
+		if r.signals[key] == signal {
+			delete(r.signals, key)
+		}
+		r.mu.Unlock()
+		signal.cancel()
+		close(signal.ended)
+	}()
+	process, err := open(ctx)
+	if err != nil {
+		return
+	}
+	stop := context.AfterFunc(ctx, func() { _ = process.Close() })
+	defer stop()
+	scanner := bufio.NewScanner(process.Stdout())
+	scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	for scanner.Scan() {
+		// Only the line type matters; skip decoding the whole screen payload.
+		line := scanner.Bytes()
+		if bytes.Contains(line, []byte(`"type":"terminal.closed"`)) {
+			break
+		}
+		if !bytes.Contains(line, []byte(`"type":"terminal.frame"`)) {
+			continue
+		}
+		r.mu.Lock()
+		for sub := range signal.subscribers {
+			select {
+			case sub.changed <- struct{}{}:
+			default:
+			}
+		}
+		r.mu.Unlock()
+	}
+	_ = process.Close()
+	_ = process.Wait()
+}
+
+// screenSignalState is one watcher's view of the shared signal.
+type screenSignalState struct {
+	sub      *screenSignalSub
+	release  func()
+	live     bool // the observer delivered at least one change
+	failures int
+	retryAt  time.Time
+}
+
+func (st *screenSignalState) connect(s *workbenchSession, paneID string) {
+	if st.sub != nil || time.Now().Before(st.retryAt) {
+		return
+	}
+	st.sub, st.release = s.api.screenReads.subscribeSignal(screenSignalKey{hostID: s.hostID, paneID: paneID}, func(ctx context.Context) (herdr.TerminalProcess, error) {
+		return s.openScreenObserver(ctx, paneID)
+	})
+}
+
+func (st *screenSignalState) changed() <-chan struct{} {
+	if st.sub == nil {
+		return nil
+	}
+	return st.sub.changed
+}
+
+func (st *screenSignalState) ended() <-chan struct{} {
+	if st.sub == nil {
+		return nil
+	}
+	return st.sub.ended
+}
+
+func (st *screenSignalState) delivered() { st.live, st.failures = true, 0 }
+
+// lost falls back to polling and retries the observer later; observers that
+// never deliver back off further.
+func (st *screenSignalState) lost() {
+	if !st.live {
+		st.failures++
+	}
+	st.releaseSub()
+	st.live = false
+	st.retryAt = time.Now().Add(min(screenSignalRetry<<min(st.failures, 4), screenSignalMaxRetry))
+}
+
+func (st *screenSignalState) releaseSub() {
+	if st.release != nil {
+		st.release()
+	}
+	st.sub, st.release = nil, nil
+}
+
+// interval is the next read without a change signal: a slow safety read while
+// the observer works, otherwise the polling schedule.
+func (st *screenSignalState) interval(unchanged int) time.Duration {
+	if st.live {
+		return screenSignalFallback
+	}
+	return screenInterval(unchanged)
+}
+
+// openScreenObserver opens a read-only observer at the pane's own size. The
+// native observer follows the real PTY geometry; the CLI observer is the
+// fallback. Neither attaches a controller, resizes the PTY or sends input.
+func (s *workbenchSession) openScreenObserver(ctx context.Context, paneID string) (herdr.TerminalProcess, error) {
+	s.snapshotMu.Lock()
+	protocol := s.snapshot.Protocol
+	cols, rows := uint16(80), uint16(24)
+	for _, layout := range s.snapshot.Layouts {
+		for _, pane := range layout.Panes {
+			if pane.PaneID == paneID && pane.Rect.Width >= 10 && pane.Rect.Width <= 1000 && pane.Rect.Height >= 3 && pane.Rect.Height <= 500 {
+				cols, rows = uint16(pane.Rect.Width), uint16(pane.Rect.Height)
+			}
+		}
+	}
+	s.snapshotMu.Unlock()
+	if protocol != 20 && protocol != 22 {
+		return nil, errors.New("this Herdr terminal protocol has no observer for the screen view")
+	}
+	if err := s.checkTerminalFeature("observe", false); err != nil {
+		return nil, err
+	}
+	if native, ok := s.endpoint.(herdr.NativeScrollEndpoint); ok {
+		geometryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		geometry, err := native.TerminalGeometry(geometryCtx, paneID)
+		cancel()
+		if err == nil {
+			return herdr.OpenViewportObserver(ctx, native, protocol, paneID, geometry)
+		}
+	}
+	return s.endpoint.OpenTerminal(ctx, herdr.TerminalOpen{PaneID: paneID, Mode: "observe", Cols: cols, Rows: rows})
 }
