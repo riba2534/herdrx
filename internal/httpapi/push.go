@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,28 @@ func (a *API) pushRoutes(router chi.Router) {
 		writeJSON(writer, http.StatusOK, map[string]string{"public_key": a.push.PublicKey()})
 	})
 	router.With(a.requireCSRF).Post("/subscriptions", a.subscribePush)
+	// The endpoint is a capability URL, so it travels in the body, never the query string.
+	router.With(a.requireCSRF, requireJSON).Post("/subscriptions/status", a.pushSubscriptionStatus)
+}
+
+// pushSubscriptionStatus reports whether this browser's subscription is still
+// registered for the signed-in user. It only reads: a page uses it to leave
+// background notifications to Web Push, and anything else (another user's or a
+// deleted subscription) answers false so the page keeps notifying itself.
+func (a *API) pushSubscriptionStatus(writer http.ResponseWriter, request *http.Request) {
+	var input struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if decodeJSON(request, &input) != nil || input.Endpoint == "" || len(input.Endpoint) > 4096 {
+		writeError(writer, http.StatusBadRequest, "invalid_subscription", "通知订阅无效，请重新启用浏览器通知")
+		return
+	}
+	_, err := a.store.PushSubscriptionByEndpoint(request.Context(), userFromContext(request.Context()).ID, input.Endpoint)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		writeError(writer, http.StatusInternalServerError, "database_error", "暂时无法读取通知订阅，请稍后重试")
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]bool{"subscribed": err == nil})
 }
 
 func (a *API) subscribePush(writer http.ResponseWriter, request *http.Request) {

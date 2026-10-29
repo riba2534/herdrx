@@ -57,7 +57,7 @@ function clipboardBlocked() {
 
 const HISTORY_READ_LINES = 1000
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0, transformInput }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number; transformInput?: (data: string) => string }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0, transformInput }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null, sendKey?: (key: string) => void) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number; transformInput?: (data: string) => string }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -380,6 +380,21 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     client.sendInput(streamRef.current, data)
   }
 
+  // Herdr 按键接口（如 Shift+Enter）不经过终端流：硬件按键和键栏粘滞修饰键共用这一处。
+  // 断流或尚未连上时不发，否则会排到还在等待的正文之前；只提示，不排队重放。
+  const sendKeyRef = useRef<(key: string) => void>(() => {})
+  sendKeyRef.current = (key: string) => {
+    if (inputBlockedRef.current || streamRef.current == null) {
+      setHistoryError('终端未连接，Shift+Enter 未发送，请重连后重试')
+      return
+    }
+    if (historyRef.current.active) returnToLiveRef.current()
+    revealCursorRef.current()
+    void client.call('pane.send_keys', { pane_id: pane.pane_id, keys: [key] }).catch((error) => {
+      if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : '无法发送 Shift+Enter，请检查连接后重试')
+    })
+  }
+
   returnToLiveRef.current = () => {
     historyRef.current.generation++
     historyRef.current.active = false
@@ -676,13 +691,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
         event.preventDefault()
         event.stopPropagation()
-        if (event.type === 'keydown') {
-          if (historyRef.current.active) returnToLiveRef.current()
-          revealCursorRef.current()
-          void client.call('pane.send_keys', { pane_id: pane.pane_id, keys: ['shift+enter'] }).catch((error) => {
-            if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : '无法发送 Shift+Enter，请检查连接后重试')
-          })
-        }
+        if (event.type === 'keydown') sendKeyRef.current('shift+enter')
         return false
       }
       if ((event.ctrlKey || event.metaKey) && (event.key === 'v' || event.key === 'V')) {
@@ -730,7 +739,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   useEffect(() => {
     if (!onControlReady) return
-    onControlReady((data) => requestInputRef.current(data))
+    onControlReady((data) => requestInputRef.current(data), (key) => sendKeyRef.current(key))
     return () => onControlReady(null)
   }, [onControlReady])
 

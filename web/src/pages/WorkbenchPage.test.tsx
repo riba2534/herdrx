@@ -56,6 +56,7 @@ vi.mock('../lib/workbench', () => ({
 }))
 vi.mock('../lib/api', () => ({
   api: {
+    pushSubscriptionStatus: vi.fn().mockResolvedValue({ subscribed: false }),
     host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
     hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
     renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
@@ -71,7 +72,7 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; transformInput?: (data: string) => string }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null, sendKey?: (key: string) => void) => void; transformInput?: (data: string) => string }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
@@ -82,7 +83,7 @@ vi.mock('../components/TerminalPane', () => ({
   >
     <button aria-label={`点 ${props.pane.pane_id} 终端直接输入`} onClick={() => props.onDirectInput?.()}>点终端</button>
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
-    <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
+    <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) }, (key) => { paneInput.push(`key:${key}`) })}>接通</button>
     {/* 软键盘在 xterm 里键入一个字母：真实组件在 onData 里先过 transformInput 再发送。 */}
     <button aria-label={`${props.pane.pane_id} 软键盘输入 a`} onClick={() => paneInput.push(props.transformInput ? props.transformInput('a') : 'a')}>a</button>
     <button aria-label={`${props.pane.pane_id} 软键盘回车`} onClick={() => { const data = props.transformInput ? props.transformInput('\r') : '\r'; if (data) paneInput.push(data) }}>回车</button>
@@ -149,7 +150,10 @@ describe('workbench page notifications', () => {
     Reflect.deleteProperty(document, 'visibilityState')
   })
 
-  async function blockAgentInBackground(subscription: object | null) {
+  async function blockAgentInBackground(subscription: object | null, status?: { subscribed: boolean } | Error) {
+    vi.mocked(api.pushSubscriptionStatus).mockReset()
+    if (status instanceof Error) vi.mocked(api.pushSubscriptionStatus).mockRejectedValue(status)
+    else vi.mocked(api.pushSubscriptionStatus).mockResolvedValue(status ?? { subscribed: false })
     const showNotification = vi.fn(async () => {})
     const registration = { showNotification, pushManager: { getSubscription: vi.fn(async () => subscription) } }
     Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { ready: Promise.resolve(registration), addEventListener() {}, removeEventListener() {} } })
@@ -163,10 +167,26 @@ describe('workbench page notifications', () => {
     return showNotification
   }
 
-  it('leaves background notifications to the debounced server push when subscribed', async () => {
-    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' })
+  it('leaves background notifications to the debounced server push when the server confirms the subscription', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' }, { subscribed: true })
+    await waitFor(() => expect(api.pushSubscriptionStatus).toHaveBeenCalledWith('https://push.example.test/sub'))
     await act(async () => { await Promise.resolve() })
     expect(showNotification).not.toHaveBeenCalled()
+    // 60 秒内的下一次变化复用结果，不再请求。
+    act(() => emitSnapshot({ ...snapshot, agents: snapshot.agents.map((agent) => agent.pane_id === 'w1:p1' ? { ...agent, agent_status: 'done' as const } : agent) }))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(api.pushSubscriptionStatus).toHaveBeenCalledTimes(1)
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('still notifies when the browser subscription belongs to another user or was deleted', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/stale' }, { subscribed: false })
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
+  })
+
+  it('still notifies when the subscription status cannot be read', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/offline' }, new Error('offline'))
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
   })
 
   it('falls back to a page notification with the pane deep link when not subscribed', async () => {
@@ -842,15 +862,13 @@ describe('mobile auxiliary keybar paste', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
     fireEvent.click(shift)
     fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘回车' }))
-    expect(paneInput).toEqual([])
-    expect(call.mock.calls.filter(([method]) => method === 'pane.send_keys')).toEqual([
-      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
-      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
-    ])
+    // 交给终端面板的按键通道（与硬件 Shift+Enter 同一段逻辑），工作台自己不调 Herdr。
+    expect(paneInput).toEqual(['key:shift+enter', 'key:shift+enter'])
+    expect(call).not.toHaveBeenCalledWith('pane.send_keys', expect.anything())
     expect(shift).toHaveAttribute('aria-pressed', 'false')
     // 没有修饰时回车照常是 \r。
     fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
-    expect(paneInput).toEqual(['\r'])
+    expect(paneInput).toEqual(['key:shift+enter', 'key:shift+enter', '\r'])
   })
 
   it('sends a repeatable key on keyboard activation too, since it has no click handler', async () => {
