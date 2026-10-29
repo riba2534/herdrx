@@ -71,7 +71,7 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; transformInput?: (data: string) => string }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null, sendKey?: (key: string) => void) => void; transformInput?: (data: string) => string }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
@@ -82,7 +82,7 @@ vi.mock('../components/TerminalPane', () => ({
   >
     <button aria-label={`点 ${props.pane.pane_id} 终端直接输入`} onClick={() => props.onDirectInput?.()}>点终端</button>
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
-    <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
+    <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) }, (key) => { paneInput.push(`key:${key}`) })}>接通</button>
     {/* 软键盘在 xterm 里键入一个字母：真实组件在 onData 里先过 transformInput 再发送。 */}
     <button aria-label={`${props.pane.pane_id} 软键盘输入 a`} onClick={() => paneInput.push(props.transformInput ? props.transformInput('a') : 'a')}>a</button>
     <button aria-label={`${props.pane.pane_id} 软键盘回车`} onClick={() => { const data = props.transformInput ? props.transformInput('\r') : '\r'; if (data) paneInput.push(data) }}>回车</button>
@@ -842,15 +842,13 @@ describe('mobile auxiliary keybar paste', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
     fireEvent.click(shift)
     fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘回车' }))
-    expect(paneInput).toEqual([])
-    expect(call.mock.calls.filter(([method]) => method === 'pane.send_keys')).toEqual([
-      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
-      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
-    ])
+    // 交给终端面板的按键通道（与硬件 Shift+Enter 同一段逻辑），工作台自己不调 Herdr。
+    expect(paneInput).toEqual(['key:shift+enter', 'key:shift+enter'])
+    expect(call).not.toHaveBeenCalledWith('pane.send_keys', expect.anything())
     expect(shift).toHaveAttribute('aria-pressed', 'false')
     // 没有修饰时回车照常是 \r。
     fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
-    expect(paneInput).toEqual(['\r'])
+    expect(paneInput).toEqual(['key:shift+enter', 'key:shift+enter', '\r'])
   })
 
   it('sends a repeatable key on keyboard activation too, since it has no click handler', async () => {

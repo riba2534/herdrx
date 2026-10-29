@@ -241,6 +241,30 @@ describe('TerminalPane paste interception', () => {
     act(() => { terminalHarness.dataHandler!('a'); terminalHarness.dataHandler!('\r'); terminalHarness.dataHandler!('b') })
     expect(input.mock.calls).toEqual([[7, '\x01'], [7, 'b']])
   })
+  it('sends keybar Herdr keys through the hardware Shift+Enter path, only on a live stream', async () => {
+    const client = new WorkbenchClient('hst_test')
+    let resolveOpen: (id: number) => void = () => {}
+    vi.spyOn(client, 'openTerminal').mockImplementation(() => new Promise<number>((resolve) => { resolveOpen = resolve }))
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const call = vi.spyOn(client, 'call').mockResolvedValue({})
+    let sendKey: ((key: string) => void) | undefined
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} onControlReady={(_send, key) => { sendKey = key }} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(sendKey).toBeDefined())
+    // 终端流还没连上：不发送，避免排到待发正文之前，并提示用户。
+    act(() => sendKey!('shift+enter'))
+    expect(call).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Shift+Enter 未发送')
+    await act(async () => { resolveOpen(7) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    act(() => sendKey!('shift+enter'))
+    expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: mockPane.pane_id, keys: ['shift+enter'] })
+    // 流失败后同样不发送。
+    act(() => frames.mock.calls[0][2]!('stream lost'))
+    call.mockClear()
+    act(() => sendKey!('shift+enter'))
+    expect(call).not.toHaveBeenCalled()
+  })
   it('keeps xterm stdin disabled in composer mode so local typing is not sent as keystrokes', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)

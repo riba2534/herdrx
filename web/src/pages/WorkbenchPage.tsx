@@ -170,11 +170,14 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
   // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
+  // 当前 pane 的 Herdr 按键通道，与硬件 Shift+Enter 同一段逻辑（断流不发、先回到实时画面）。
+  const terminalKeyRef = useRef<((key: string) => void) | null>(null)
   const repeatTimersRef = useRef<{ delay: number; tick: number } | null>(null)
-  const handleControlReady = useCallback((send: ((data: string) => void) | null) => {
+  const handleControlReady = useCallback((send: ((data: string) => void) | null, sendKey?: (key: string) => void) => {
     // `send` 是函数，直接塞进 state 会被 React 当成 updater 调用，所以 state 里存一层包装；
     // ref 存的必须是 `send` 本身，长按重复和键盘激活都直接调用它。
     terminalInputRef.current = send
+    terminalKeyRef.current = send ? sendKey ?? null : null
     setTerminalInput(send ? () => send : null)
   }, [])
   const stopKeyRepeat = useCallback(() => {
@@ -195,10 +198,9 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     updateStickyModifiers(NO_MODIFIERS)
     const herdrKey = herdrKeyFor(data, modifiers)
     if (!herdrKey) return applyModifiers(data, modifiers)
-    // 结果不确定也不重发，与硬件 Shift+Enter 一致。
-    void client.call('pane.send_keys', { pane_id: paneID, keys: [herdrKey] }).catch((reason) => setActionError(reason instanceof Error ? reason.message : '无法发送 Shift+Enter，请检查连接后重试'))
+    terminalKeyRef.current?.(herdrKey)
     return ''
-  }, [client, paneID, updateStickyModifiers])
+  }, [updateStickyModifiers])
   // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
   const repeatOnHold = (key: string) => ({
     onPointerDown: () => {
