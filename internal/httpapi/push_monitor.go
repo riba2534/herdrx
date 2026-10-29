@@ -24,6 +24,9 @@ const pushDoneDelay = 60 * time.Second
 type pushPollState struct {
 	mu       sync.Mutex
 	previous map[string]string
+	// seqs holds the last state_change_seq per key, so a whole round finishing
+	// between two polls (same status, new sequence) still counts as a change.
+	seqs     map[string]int64
 	failures map[string]pushFailure
 	// pending holds done rounds waiting for pushDoneDelay; every key is also in previous.
 	pending map[string]pushPendingDone
@@ -50,7 +53,7 @@ func newPushPollState(previous map[string]string) *pushPollState {
 	if previous == nil {
 		previous = make(map[string]string)
 	}
-	return &pushPollState{previous: previous, failures: make(map[string]pushFailure), pending: make(map[string]pushPendingDone), now: time.Now}
+	return &pushPollState{previous: previous, failures: make(map[string]pushFailure), seqs: make(map[string]int64), pending: make(map[string]pushPendingDone), now: time.Now}
 }
 func pushHostPrefix(host store.Host) string { return host.OwnerID + ":" + host.ID + ":" }
 
@@ -102,6 +105,7 @@ func (a *API) collectPushHosts(ctx context.Context, state *pushPollState) {
 		}
 		if last < 0 || !live[key[:last+1]] {
 			delete(state.previous, key)
+			delete(state.seqs, key)
 			delete(state.pending, key)
 		}
 	}
@@ -255,29 +259,25 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 		key := prefix + agent.PaneID
 		seen[key] = true
 		old, exists := state.previous[key]
+		oldSeq, hasSeq := state.seqs[key]
 		if exists || len(state.previous) < 65536 {
 			state.previous[key] = agent.AgentStatus
+			state.seqs[key] = agent.StateChangeSeq
 		}
 		if agent.AgentStatus != "done" {
 			// Working again, blocked or gone idle cancels a waiting done round.
 			delete(state.pending, key)
 		}
+		changed := exists && (old != agent.AgentStatus || (hasSeq && oldSeq != agent.StateChangeSeq))
 		switch {
-		case !exists:
-		case old != agent.AgentStatus && agent.AgentStatus == "blocked":
+		case changed && agent.AgentStatus == "blocked":
 			title, body := describe(agent)
 			notifications = append(notifications, pushNotification(job.host, agent, title+" 需要你", body))
-		case old != agent.AgentStatus && agent.AgentStatus == "done":
+		case changed && agent.AgentStatus == "done":
+			// A new round, including one that ran and finished between polls, starts its own delay.
 			state.pending[key] = pushPendingDone{seq: agent.StateChangeSeq, due: now.Add(pushDoneDelay)}
 		case agent.AgentStatus == "done":
-			pending, ok := state.pending[key]
-			if !ok {
-				break
-			}
-			if pending.seq != agent.StateChangeSeq {
-				// Another round finished between polls; its own delay starts now.
-				state.pending[key] = pushPendingDone{seq: agent.StateChangeSeq, due: now.Add(pushDoneDelay)}
-			} else if !now.Before(pending.due) {
+			if pending, ok := state.pending[key]; ok && !now.Before(pending.due) {
 				delete(state.pending, key)
 				due = append(due, agent)
 			}
@@ -286,6 +286,7 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 	for key := range state.previous {
 		if strings.HasPrefix(key, prefix) && !seen[key] {
 			delete(state.previous, key)
+			delete(state.seqs, key)
 			delete(state.pending, key)
 		}
 	}

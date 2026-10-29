@@ -121,7 +121,16 @@ export function isModifiableKey(data: string) {
 }
 
 /**
- * 把一个按键的原始字节换成带修饰的字节。只处理“一个键”：方向键与 Del 走
+ * 需要交给 Herdr 按键接口而不是写字节的组合。硬件 Shift+Enter 在终端里走
+ * `pane.send_keys(['shift+enter'])`，由 Herdr 按目标 pane 的键盘协议编码（多数 Agent
+ * 把它当换行）；传统字节里没有它，粘滞 ⇧+Enter 必须走同一条路，否则会直接提交。
+ */
+export function herdrKeyFor(data: string, { ctrl, alt, shift }: StickyModifiers) {
+  return data === '\r' && shift && !ctrl && !alt ? 'shift+enter' : ''
+}
+
+/**
+ * 把一个按键的原始字节换成带修饰的字节；herdrKeyFor 命中的组合先由调用方处理。只处理“一个键”：方向键与 Del 走
  * `CSI 1;m X` / `CSI 3;m ~`；Tab、回车、退格、Esc 和单个字符按传统终端规则；
  * Alt 一律是前缀 ESC。多字符输入（输入法上屏、粘贴）不是一个键，原样返回。
  */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyModifiers, hasModifiers, isModifiableKey, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, type StickyModifiers } from './terminalKeys'
+import { applyModifiers, hasModifiers, herdrKeyFor, isModifiableKey, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, type StickyModifiers } from './terminalKeys'
 
 describe('terminal auxiliary keys aligned with the orca mobile bar', () => {
   it('keeps orca ordering: editing keys first, control keys last', () => {
@@ -94,7 +94,11 @@ describe('sticky modifiers', () => {
   it.each(combos)('encodes Tab, Enter, Backspace and Esc with %s', (_name, modifiers) => {
     const meta = modifiers.alt ? '\x1b' : ''
     expect(applyModifiers('\t', modifiers)).toBe(meta + (modifiers.shift ? '\x1b[Z' : '\t'))
-    expect(applyModifiers('\r', modifiers)).toBe(meta + '\r')
+    // 只有 ⇧ 时与硬件 Shift+Enter 一样交给 Herdr 按键接口（换行而不是提交）；其余组合按字节发送。
+    const shiftOnly = modifiers.shift && !modifiers.ctrl && !modifiers.alt
+    expect(herdrKeyFor('\r', modifiers)).toBe(shiftOnly ? 'shift+enter' : '')
+    if (!shiftOnly) expect(applyModifiers('\r', modifiers)).toBe(meta + '\r')
+    for (const other of ['\t', '\x7f', '\x1b', 'a', '\x1b[A']) expect(herdrKeyFor(other, modifiers)).toBe('')
     expect(applyModifiers('\x7f', modifiers)).toBe(meta + (modifiers.ctrl ? '\x08' : '\x7f'))
     expect(applyModifiers('\x1b', modifiers)).toBe(meta + '\x1b')
     expect(applyModifiers('\x1b[Z', modifiers)).toBe(meta + '\x1b[Z')

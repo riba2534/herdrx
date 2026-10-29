@@ -120,6 +120,10 @@ func TestPushBlockedIsImmediateWithDeepLinkAndChineseText(t *testing.T) {
 	if got := f.poll(5*time.Second, pushAgent("blocked", 2)); len(got) != 0 {
 		t.Fatal("unchanged blocked state notified twice")
 	}
+	// Answered and blocked again between polls: a new question, a new notification.
+	if got := f.poll(5*time.Second, pushAgent("blocked", 4)); len(got) != 1 {
+		t.Fatal("a new blocked round between polls was dropped")
+	}
 }
 
 func TestPushDoneWaitsSixtySecondsAndSkipsSeenRounds(t *testing.T) {
@@ -188,6 +192,21 @@ func TestPushDoneWaitsSixtySecondsAndSkipsSeenRounds(t *testing.T) {
 		}
 		if got := f.poll(time.Second, pushAgent("done", 7)); len(got) != 1 {
 			t.Fatal("the newer round was never announced")
+		}
+	})
+	t.Run("whole round between polls after a notified one", func(t *testing.T) {
+		f := newPushDebounceFixture(t)
+		f.poll(0, pushAgent("working", 4))
+		f.poll(5*time.Second, pushAgent("done", 5))
+		if got := f.poll(pushDoneDelay, pushAgent("done", 5)); len(got) != 1 {
+			t.Fatal("the first round was not announced")
+		}
+		// It ran and finished again inside one poll interval: still done, newer sequence.
+		if got := f.poll(5*time.Second, pushAgent("done", 7)); len(got) != 0 {
+			t.Fatal("the hidden round skipped its delay")
+		}
+		if got := f.poll(pushDoneDelay, pushAgent("done", 7)); len(got) != 1 {
+			t.Fatal("a round that started and finished between polls was dropped")
 		}
 	})
 	t.Run("pane closed", func(t *testing.T) {

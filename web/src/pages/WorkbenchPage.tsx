@@ -21,7 +21,7 @@ import { useAgentSeen } from '../lib/useAgentSeen'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
-import { applyModifiers, hasModifiers, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
+import { applyModifiers, hasModifiers, herdrKeyFor, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
 import { usePaneDeepLink, workbenchPaneURL } from '../lib/workbenchDeepLink'
@@ -188,12 +188,17 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [stickyModifiers, setStickyModifiers] = useState<StickyModifiers>(NO_MODIFIERS)
   const stickyModifiersRef = useRef(NO_MODIFIERS)
   const updateStickyModifiers = useCallback((next: StickyModifiers) => { stickyModifiersRef.current = next; setStickyModifiers(next) }, [])
+  // 返回要写入终端的字节；Shift+Enter 与硬件一样走 Herdr 按键接口，此时返回空串。
   const consumeModifiers = useCallback((data: string) => {
     const modifiers = stickyModifiersRef.current
     if (!hasModifiers(modifiers) || !isModifiableKey(data)) return data
     updateStickyModifiers(NO_MODIFIERS)
-    return applyModifiers(data, modifiers)
-  }, [updateStickyModifiers])
+    const herdrKey = herdrKeyFor(data, modifiers)
+    if (!herdrKey) return applyModifiers(data, modifiers)
+    // 结果不确定也不重发，与硬件 Shift+Enter 一致。
+    void client.call('pane.send_keys', { pane_id: paneID, keys: [herdrKey] }).catch((reason) => setActionError(reason instanceof Error ? reason.message : '无法发送 Shift+Enter，请检查连接后重试'))
+    return ''
+  }, [client, paneID, updateStickyModifiers])
   // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
   const repeatOnHold = (key: string) => ({
     onPointerDown: () => {
@@ -1030,7 +1035,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
         {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <Fragment key={key.id}>
           {key.id === 'ctrlC' && STICKY_MODIFIER_KEYS.map((modifier) => <button key={modifier.id} className={stickyModifiers[modifier.id] ? 'key-active' : undefined} aria-label={modifier.aria} aria-pressed={stickyModifiers[modifier.id]} disabled={!terminalInput} onClick={() => updateStickyModifiers({ ...stickyModifiersRef.current, [modifier.id]: !stickyModifiersRef.current[modifier.id] })}>{modifier.label}</button>)}
-          <button aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(consumeModifiers(key.bytes))} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>
+          <button aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => { const data = consumeModifiers(key.bytes); if (data) terminalInput?.(data) }} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>
         </Fragment>)}
         <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button>
       </div>}
@@ -1121,6 +1126,9 @@ async function showAgentNotification(name: string, status: string, hostID: strin
   const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: workbenchPaneURL(hostID, paneID) } }
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready
+    // 已订阅后台推送时由服务端发送同一条通知：它有 60 秒完成延迟和已读判断，
+    // 页内再发一次只会重复（tag 也不同，无法互相替换），所以只在没有订阅时兜底。
+    if (await registration.pushManager?.getSubscription().catch(() => null)) return
     await registration.showNotification(title, options)
   } else {
     new Notification(title, options)

@@ -85,6 +85,7 @@ vi.mock('../components/TerminalPane', () => ({
     <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
     {/* 软键盘在 xterm 里键入一个字母：真实组件在 onData 里先过 transformInput 再发送。 */}
     <button aria-label={`${props.pane.pane_id} 软键盘输入 a`} onClick={() => paneInput.push(props.transformInput ? props.transformInput('a') : 'a')}>a</button>
+    <button aria-label={`${props.pane.pane_id} 软键盘回车`} onClick={() => { const data = props.transformInput ? props.transformInput('\r') : '\r'; if (data) paneInput.push(data) }}>回车</button>
     <button aria-label={`${props.pane.pane_id} 切到对话视图`} aria-pressed={props.viewMode === 'chat'} onClick={() => props.onViewModeChange('chat')}>对话</button>
     <button aria-label={`${props.pane.pane_id} 切回终端视图`} aria-pressed={props.viewMode === 'terminal'} onClick={() => props.onViewModeChange('terminal')}>终端</button>
   </div>,
@@ -141,6 +142,39 @@ function emitSnapshot(value: Snapshot = snapshot) {
 }
 
 const savedW2 = { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' as const }
+
+describe('workbench page notifications', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'serviceWorker')
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+
+  async function blockAgentInBackground(subscription: object | null) {
+    const showNotification = vi.fn(async () => {})
+    const registration = { showNotification, pushManager: { getSubscription: vi.fn(async () => subscription) } }
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { ready: Promise.resolve(registration), addEventListener() {}, removeEventListener() {} } })
+    vi.stubGlobal('Notification', Object.assign(vi.fn(), { permission: 'granted' }))
+    render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => emitSnapshot({ ...snapshot, agents: snapshot.agents.map((agent) => agent.pane_id === 'w1:p1' ? { ...agent, agent_status: 'blocked' as const } : agent) }))
+    await act(async () => { await registration.pushManager.getSubscription.mock.results[0]?.value })
+    await waitFor(() => expect(registration.pushManager.getSubscription).toHaveBeenCalled())
+    return showNotification
+  }
+
+  it('leaves background notifications to the debounced server push when subscribed', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' })
+    await act(async () => { await Promise.resolve() })
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a page notification with the pane deep link when not subscribed', async () => {
+    const showNotification = await blockAgentInBackground(null)
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
+    expect(showNotification).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ data: { url: '/h/host?pane=w1%3Ap1' } }))
+  })
+})
 
 describe('workbench pane deep link', () => {
   afterEach(() => window.history.replaceState(null, '', '/'))
@@ -793,6 +827,30 @@ describe('mobile auxiliary keybar paste', () => {
     fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘输入 a' }))
     expect(paneInput).toEqual(['\x1b[1;3D', '\t', '\x1b[1;6C', '\x1b[Z', '\x01', 'a'])
     expect(ctrl).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('sends sticky Shift+Enter through the same Herdr key as a hardware Shift+Enter', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    call.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    const toolbar = screen.getByRole('toolbar', { name: '终端辅助键' })
+    const shift = within(toolbar).getByRole('button', { name: 'Shift 修饰键，作用于下一个键' })
+    // 键栏回车与软键盘回车都不能写入会直接提交的 \r。
+    fireEvent.click(shift)
+    fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
+    fireEvent.click(shift)
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘回车' }))
+    expect(paneInput).toEqual([])
+    expect(call.mock.calls.filter(([method]) => method === 'pane.send_keys')).toEqual([
+      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
+      ['pane.send_keys', { pane_id: 'w1:p1', keys: ['shift+enter'] }],
+    ])
+    expect(shift).toHaveAttribute('aria-pressed', 'false')
+    // 没有修饰时回车照常是 \r。
+    fireEvent.click(within(toolbar).getByRole('button', { name: '回车键' }))
+    expect(paneInput).toEqual(['\r'])
   })
 
   it('sends a repeatable key on keyboard activation too, since it has no click handler', async () => {
