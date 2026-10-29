@@ -465,3 +465,54 @@ func TestFreeTextIsAnExactLabel(t *testing.T) {
 		}
 	}
 }
+
+// 输入框里形如 `❯ 1. …` 的草稿：无论是横线输入框还是边框输入框，都不是对话框，兜底也不拦。
+func TestInputBoxDraftsAreNeverDialogs(t *testing.T) {
+	for name, text := range map[string]string{
+		"rules with status": inputBox("❯ 1. fix the parser", "  2. add tests"),
+		"rules only":        screen("● Done.", "", rule, "❯ 1. fix the parser", "  2. add tests", rule),
+		"box":               screen("● Done.", "╭──────────────────────────────╮", "│ ❯ 1. fix the parser          │", "│   2. add tests               │", "╰──────────────────────────────╯", "  ? for shortcuts"),
+		"dim status":        screen("● Done.", rule, "❯ 1. fix the parser", rule, "\x1b[2m  ⏵⏵ accept edits on\x1b[0m"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if dialog := ParseDialog(text); dialog != nil {
+				t.Fatalf("dialog=%+v", dialog)
+			}
+			if LooksLikeDialog(text) {
+				t.Fatal("flagged as a dialog")
+			}
+		})
+	}
+}
+
+// Ctrl+C 退出后画面残留旧对话框、下面是 Shell 提示符：不是对话框。
+func TestLeftoverDialogAboveAShellPrompt(t *testing.T) {
+	for name, text := range map[string]string{
+		"bash":           screen(rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel", "", "user@host:~/project$ "),
+		"zsh":            screen(rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel", "host% "),
+		"without footer": screen(rule, " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "user@host:~$ "),
+		"any other text": screen(rule, " Trust?", " ❯ No, exit", "   Yes", "", " Enter to confirm · Esc to cancel", "Goodbye!"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if dialog := ParseDialog(text); dialog != nil {
+				t.Fatalf("dialog=%+v", dialog)
+			}
+			if LooksLikeDialog(text) {
+				t.Fatal("flagged as a dialog")
+			}
+		})
+	}
+	// 整行灰字的状态行是 Agent 自己画的，允许出现在页脚下方。
+	dimStatus := screen(rule, " Proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel", "\x1b[2m  some status\x1b[0m")
+	if ParseDialog(dimStatus) == nil {
+		t.Fatal("a dim status line under the footer must be allowed")
+	}
+}
+
+// 带光标的编号行只在底部的选项区里找，不越过其他文字往上扫。
+func TestCursorSearchStaysInTheOptionBlock(t *testing.T) {
+	text := screen("● reply", " ❯ 1. old choice", "   2. other", "done: the agent printed this", "  1. step", "  2. step")
+	if LooksLikeDialog(text) {
+		t.Fatal("a cursor above unrelated text was treated as the bottom dialog")
+	}
+}

@@ -202,4 +202,42 @@ describe('composer guarded send', () => {
     await runComposerPrompt('host', 'p1')
     expect([...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key) => key?.endsWith('#msg'))).toEqual([])
   })
+
+  it('drops the uncertain record once the draft moves on, so an old text is never mistaken for a duplicate', async () => {
+    const storedKeys = () => [...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key): key is string => Boolean(key?.endsWith('#msg')))
+    const prompt = vi.spyOn(api, 'panePrompt').mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    writeComposerDraft('host', 'p1', 'T1')
+    await runComposerPrompt('host', 'p1')
+    const first = prompt.mock.calls[0][2].client_msg_id
+    expect(storedKeys()).toHaveLength(1)
+    // 用户改成 T2：那次结果未知的 T1 不会再原样重试，记录删掉。
+    writeComposerDraft('host', 'p1', 'T2')
+    expect(storedKeys()).toEqual([])
+    prompt.mockResolvedValue({ delivered: 'sent' })
+    await runComposerPrompt('host', 'p1')
+    // 刷新后再发 T1：是新消息，换新 id。
+    vi.resetModules()
+    const fresh = await import('./api')
+    const drafts = await import('./composerDrafts')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ user, csrf_token: 'csrf-sess-a', session_id: 'sess-a' }))))
+    await fresh.api.login({ email: 'user@example.test', password: 'test' })
+    const again = vi.spyOn(fresh.api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
+    drafts.writeComposerDraft('host', 'p1', 'T1')
+    await drafts.runComposerPrompt('host', 'p1')
+    expect(again.mock.calls[0][2].client_msg_id).not.toBe(first)
+  })
+
+  it('drops a stale record for a different text after a successful send', async () => {
+    const storedKeys = () => [...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key): key is string => Boolean(key?.endsWith('#msg')))
+    vi.spyOn(api, 'panePrompt').mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValue({ delivered: 'sent' })
+    writeComposerDraft('host', 'p1', '旧的')
+    await runComposerPrompt('host', 'p1')
+    const record = localStorage.getItem(storedKeys()[0])!
+    writeComposerDraft('host', 'p1', '新的')
+    // 别的标签页刚好又写回了旧记录：发送“新的”成功后仍清掉它。
+    localStorage.setItem(storedKeys()[0] ?? `herdrx.composer.v1.${encodeURIComponent('sess-a')}/host/p1#msg`, record)
+    expect(storedKeys()).toHaveLength(1)
+    await runComposerPrompt('host', 'p1')
+    expect(storedKeys()).toEqual([])
+  })
 })

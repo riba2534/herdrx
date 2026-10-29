@@ -114,6 +114,7 @@ export function writeComposerDraft(hostID: string, paneID: string, text: string)
   if (!sessionID || !key) return
   const previous = drafts.get(key)
   persistDraft(key, sessionID, hostID, paneID, { text, revision: (previous?.revision || 0) + 1 })
+  if (text) dropStaleStoredID(sessionID, hostID, paneID, text)
   notify()
 }
 
@@ -224,6 +225,17 @@ function rememberUncertainID(key: string, sessionID: string, hostID: string, pan
   try { localStorage.setItem(messageStorageKey(sessionID, hostID, paneID), JSON.stringify({ ...record, at: now() })) } catch { /* in-memory id still lasts this visit */ }
 }
 
+/**
+ * 存储里该 pane 的记录正文与 text 不同：用户已经改了草稿或发出了别的内容，那次结果未知的消息
+ * 不会再原样重试，删掉它，免得以后刚好发回旧正文时被当成重复丢掉。
+ */
+function dropStaleStoredID(sessionID: string, hostID: string, paneID: string, text: string) {
+  const stored = storedMessageID(sessionID, hostID, paneID)
+  if (stored && stored.text !== text) {
+    try { localStorage.removeItem(messageStorageKey(sessionID, hostID, paneID)) } catch { /* ignore */ }
+  }
+}
+
 /** 换新 id；存储里的记录只有是自己这次的才删，不动别的标签页写下的。 */
 function forgetMessageID(key: string, sessionID: string, hostID: string, paneID: string) {
   const mine = messageIDs.get(key)
@@ -316,6 +328,7 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
     }
     if (!inflight.has(key)) return { kind: 'skipped' }
     forgetMessageID(key, sessionID, hostID, paneID)
+    dropStaleStoredID(sessionID, hostID, paneID, text)
     // 草稿在发送期间被改写则保留用户的新内容。
     const latest = drafts.get(key)
     if (latest && latest.revision === revision && latest.text === text) {

@@ -152,18 +152,21 @@ const (
 // 兜底，宁可不发送。
 func ParseDialog(ansi string) *Dialog {
 	lines := screenLines(ansi)
-	if footer := footerLine(lines); footer >= 0 {
-		region := trimDialogTail(lines[:footer])
+	if lines.inputBoxAtBottom() {
+		return nil
+	}
+	if footer := lines.footerLine(); footer >= 0 {
+		region := trimDialogTail(lines.plain[:footer])
 		if len(region) == 0 {
 			return nil
 		}
-		if numberedRow.MatchString(region[len(region)-1]) || hasNumberedCursor(region) {
+		if hasNumberedCursor(region) {
 			return parseNumbered(region, false)
 		}
 		return parseUnnumbered(region)
 	}
-	region, ok := belowStatus(lines, 0)
-	if !ok || len(region) == 0 || !hasNumberedCursor(region) {
+	region := lines.aboveStatus()
+	if !hasNumberedCursor(region) {
 		return nil
 	}
 	return parseNumbered(region, true)
@@ -173,21 +176,113 @@ func ParseDialog(ansi string) *Dialog {
 // 不管 ParseDialog 认不认得出。用于发送前兜底：认不出但像对话框时也不打字。
 func LooksLikeDialog(ansi string) bool {
 	lines := screenLines(ansi)
-	if footerLine(lines) >= 0 {
-		return true
+	if lines.inputBoxAtBottom() {
+		return false
 	}
-	region, ok := belowStatus(lines, 4)
-	return ok && hasNumberedCursor(region)
+	return lines.footerLine() >= 0 || hasNumberedCursor(lines.aboveStatus())
 }
 
-// screenLines 是去掉边框左右竖线、末尾空行与边框底边后的纯文本行。
-func screenLines(ansi string) []string {
-	plain, _ := splitLines(ansi)
-	lines := make([]string, len(plain))
+// screenView 是去掉边框左右竖线、末尾空行与边框底边后的纯文本行；dim 标出整行都是灰字的行。
+type screenView struct {
+	plain []string
+	dim   []bool
+	// boxBottom：被去掉的末尾里有边框底边 `╰──╯`（输入框或对话框的边框画到了最后一行）。
+	boxBottom bool
+}
+
+func screenLines(ansi string) screenView {
+	plain, raw := splitLines(ansi)
+	lines := screenView{plain: make([]string, len(plain)), dim: make([]bool, len(plain))}
 	for i, line := range plain {
-		lines[i] = unbox(line)
+		lines.plain[i] = unbox(line)
+		lines.dim[i] = wholeLineDim(raw[i])
 	}
-	return trimDialogTail(lines)
+	end := len(trimDialogTail(lines.plain))
+	for _, line := range lines.plain[end:] {
+		lines.boxBottom = lines.boxBottom || isBoxBottom(line)
+	}
+	lines.plain, lines.dim = lines.plain[:end], lines.dim[:end]
+	return lines
+}
+
+// wholeLineDim：一行里所有可见字符都是 dim（Claude 底部状态行的画法）。
+func wholeLineDim(raw string) bool {
+	visible := false
+	runs, _ := styleRuns(raw, sgrState{})
+	for _, run := range runs {
+		if strings.TrimSpace(run.text) == "" {
+			continue
+		}
+		if !run.dim {
+			return false
+		}
+		visible = true
+	}
+	return visible
+}
+
+// 页脚或选项下方允许出现的 Agent 状态行（Claude 与 Codex 的实际形态）。其他任何文字——尤其是
+// Shell 提示符——都说明对话框已经不在了（例如 Ctrl+C 退出后画面残留的旧对话框）。
+var agentStatusPattern = regexp.MustCompile(`^(?:⏵|⏸|\? for shortcuts)|shift\+tab to cycle|⏎ send|ctrl\+c to exit`)
+
+func (lines screenView) agentStatus(i int) bool {
+	return lines.dim[i] || agentStatusPattern.MatchString(strings.TrimSpace(lines.plain[i]))
+}
+
+// 页脚在最后这么多行非空文字里找。
+const footerReach = 4
+
+// footerLine 返回页脚所在行：在最后几行里，且下方只有空行与 Agent 状态行；没有时为 -1。
+func (lines screenView) footerLine() int {
+	for i, seen := len(lines.plain)-1, 0; i >= 0 && seen < footerReach; i-- {
+		line := lines.plain[i]
+		if strings.TrimSpace(line) == "" || isBoxBottom(line) {
+			continue
+		}
+		if footerPattern.MatchString(line) {
+			return i
+		}
+		if !lines.agentStatus(i) {
+			return -1
+		}
+		seen++
+	}
+	return -1
+}
+
+// aboveStatus 去掉底部的空行与 Agent 状态行，返回其上方的部分。
+func (lines screenView) aboveStatus() []string {
+	end := len(lines.plain)
+	for end > 0 && (strings.TrimSpace(lines.plain[end-1]) == "" || isBoxBottom(lines.plain[end-1]) || lines.agentStatus(end-1)) {
+		end--
+	}
+	return trimDialogTail(lines.plain[:end])
+}
+
+// inputBoxAtBottom：画面底部（下方只有状态行）是 Claude 的输入框——上下两条边线包住、第一行以
+// `❯`/`>`/`!` 开头。输入框里的草稿即使形如 `❯ 1. …` 也不是对话框。
+func (lines screenView) inputBoxAtBottom() bool {
+	// bottom 是输入框下沿所在的行号；边框底边画到最后一行时它已被去掉，下沿视为在末尾之后。
+	bottom := len(lines.plain)
+	if !lines.boxBottom {
+		for bottom > 0 && (strings.TrimSpace(lines.plain[bottom-1]) == "" || lines.agentStatus(bottom-1)) {
+			bottom--
+		}
+		if bottom == 0 || !isEdge(lines.plain[bottom-1]) {
+			return false
+		}
+		bottom--
+	}
+	for top := bottom - 1; top >= max(0, bottom-maxScanLines); top-- {
+		if isEdge(lines.plain[top]) {
+			if top+1 >= bottom {
+				return false
+			}
+			first := strings.TrimSpace(lines.plain[top+1])
+			return strings.HasPrefix(first, "❯") || strings.HasPrefix(first, ">") || strings.HasPrefix(first, "!")
+		}
+	}
+	return false
 }
 
 // trimDialogTail 去掉末尾的空行和对话框边框的底边 `╰──╯`。
@@ -203,73 +298,32 @@ func isBoxBottom(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "╰") && isBoxEdge(line)
 }
 
-// 页脚在最后这么多行非空文字里找；页脚下方的行不能是横线或提示符。
-const footerReach = 4
-
-// footerLine 返回页脚所在行，没有时为 -1。
-func footerLine(lines []string) int {
-	seen := 0
-	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
-		line := lines[i]
-		if strings.TrimSpace(line) == "" || isBoxBottom(line) {
-			continue
-		}
-		if footerPattern.MatchString(line) {
-			return i
-		}
-		if isEdge(line) || promptRow(line) {
-			return -1
-		}
-		seen++
-	}
-	return -1
-}
-
-// belowStatus 去掉底部至多两行状态（再加 extra 行），返回其上方的选项区。状态行不能是横线、
-// 提示符或编号选项本身；遇到横线或提示符说明下面是输入框或 Shell，返回 false。
-func belowStatus(lines []string, extra int) ([]string, bool) {
-	end := len(lines)
-	for skipped := 0; end > 0; {
-		line := lines[end-1]
-		switch {
-		case strings.TrimSpace(line) == "" || isBoxBottom(line):
-		case isEdge(line) || promptRow(line):
-			return nil, false
-		case numberedRow.MatchString(line):
-			return trimDialogTail(lines[:end]), true
-		default:
-			if skipped == 2+extra {
-				return trimDialogTail(lines[:end]), true
-			}
-			skipped++
-		}
-		end--
-	}
-	return nil, true
-}
-
-// promptRow：输入框或 Shell 的提示符行（`❯ `、`› `、`> `、`$ `、`! ` 开头且不是编号选项）。
-func promptRow(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" || numberedRow.MatchString(line) {
-		return false
-	}
-	for _, prefix := range []string{"❯", "›", ">", "$", "!", "%"} {
-		if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
-			return true
-		}
-	}
-	return false
-}
-
-// hasNumberedCursor：选项区（最后一个空段之后）里有带光标的编号行。
+// hasNumberedCursor：选项区本身（从底部往上的编号选项与缩进的说明行，可隔一条分隔线）里有带光标的
+// 编号行。遇到空段、顶边或不属于选项的文字即停。
 func hasNumberedCursor(lines []string) bool {
 	for i := len(lines) - 1; i >= max(0, len(lines)-maxScanLines); i-- {
-		if strings.TrimSpace(lines[i]) == "" || isEdge(lines[i]) {
-			return false
+		line := lines[i]
+		if match := numberedRow.FindStringSubmatch(line); match != nil {
+			if match[2] != "" {
+				return true
+			}
+			continue
 		}
-		if match := numberedRow.FindStringSubmatch(lines[i]); match != nil && match[2] != "" {
-			return true
+		if strings.TrimSpace(line) == "" || isEdge(line) {
+			// 分隔线（可隔着空行）上方紧挨着编号选项时跳过；单纯的空段或顶边说明选项区到此为止。
+			j, separator := i, false
+			for j >= 0 && (strings.TrimSpace(lines[j]) == "" || isEdge(lines[j])) {
+				separator = separator || isEdge(lines[j])
+				j--
+			}
+			if !separator || j < 0 || !numberedRow.MatchString(lines[j]) {
+				return false
+			}
+			i = j + 1
+			continue
+		}
+		if len(line)-len(strings.TrimLeft(line, " ")) < 3 {
+			return false
 		}
 	}
 	return false
