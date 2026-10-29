@@ -144,6 +144,7 @@ v0.1.0-rc.2 之后发布的 CLI 在访问服务启动时，如果默认会话的
 | 退出 SSH 后无法连接 | 检查 linger，确认后台服务运行；重新登录后查看日志 |
 | `connect` 提示 daemon 未运行 | 运行 setup 或 `~/.local/bin/herdrx service start`，通过 status 确认就绪 |
 | 已有旧版配置迁移失败 | 按错误修复旧配置或停止旧版 herdrx-agent 服务后重试；不会静默生成新身份 |
+| Chat 提示更新远程主机上的 herdrx CLI | 读取会话记录需要受控端 v0.1.0-rc.3 或更新版本；按上文更新 CLI 并重启 herdrx 服务后重试 |
 | 绑定超时 | 检查远程主机和工作台主机的网络，运行 doctor / logs；刷新网页续接已有任务 |
 
 ## 自建中继与端点迁移

@@ -341,6 +341,8 @@ async function main() {
   assert.equal(await page.getByRole('switch', { name: '对话视图' }).count(), 2, 'expected exactly one switch per pane')
   assert.equal(await page.locator('.pane-view-toggle').first().getByRole('tab').count(), 0, 'the toggle must not be a segmented control')
   await page.locator('.xterm-rows').first().filter({ hasText: TERMINAL_MARKER }).waitFor()
+  // 每个 pane 都各自开一条终端流；两条都出画面后再取 spawn 基线，否则较慢的那条会被算到切视图头上。
+  await expect(page.locator('.xterm-rows').filter({ hasText: TERMINAL_MARKER })).toHaveCount(2)
 
   const spawnCount = async () => (await callLines(spawnFile)).filter((entry) => entry.kind === 'spawn').length
   // 整页重载会让**每个** pane 各自重开一次终端流，两次 spawn 之间有随机间隔。要断言
@@ -671,6 +673,54 @@ async function main() {
   const foreignEvidence = await api.get(`/api/hosts/${host.id}/panes/p1/transcript`)
   assert.equal(foreignEvidence.body.binding, undefined, 'evidence outside the candidate set must not bind')
   assert.deepEqual(foreignEvidence.body.messages, [])
+
+  // 17) 新读取器接入同一套 verified：traex 的 hook 报成 codex，证据在 traex 根的候选里挑；
+  //     Pi 上报绝对路径，只按「固定根 + 候选相对路径」后缀挑候选，路径本身不被打开。
+  const TRAEX_SESSION_ID = '11111111-2222-4333-8444-555555555555'
+  const traexDir = join(home, '.trae', 'cli', 'sessions', '2026', '10', '30')
+  await mkdir(traexDir, { recursive: true })
+  await writeFile(join(traexDir, `rollout-2026-10-30T09-00-00-${TRAEX_SESSION_ID}_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl`),
+    line({ type: 'session_meta', payload: { id: TRAEX_SESSION_ID, cwd: CWD } })
+    + line({ type: 'history_mutation', timestamp: at(1), payload: { operation: 'append', items: [
+      { type: 'message', id: 'tu1', role: 'user', content: [{ type: 'input_text', text: 'TRAEX-MARKER 问题' }] },
+      { type: 'reasoning', id: 'tr1', summary: [{ type: 'summary_text', text: 'TRAEX-THINK-SECRET' }] },
+      { type: 'message', id: 'ta1', role: 'assistant', content: [{ type: 'output_text', text: 'TRAEX-MARKER 回答' }] },
+    ] } }))
+  const PI_SESSION_ID = '22222222-2222-4333-8444-555555555555'
+  const piProject = `--${CWD.replace(/^\//, '').replaceAll('/', '-')}--`
+  const piDir = join(home, '.pi', 'agent', 'sessions', piProject)
+  const piFile = join(piDir, `2026-10-30T09-00-00-000Z_${PI_SESSION_ID}.jsonl`)
+  await mkdir(piDir, { recursive: true })
+  await writeFile(piFile,
+    line({ type: 'session', version: 3, id: PI_SESSION_ID, timestamp: at(0), cwd: CWD })
+    + line({ type: 'message', id: 'pu1', parentId: null, timestamp: at(1), message: { role: 'user', content: 'PI-MARKER 问题' } }))
+  const readerSnapshot = snapshotFixture({ width: 160 })
+  readerSnapshot.panes[1].agent = 'traex'
+  readerSnapshot.panes[1].agent_session = { source: 'herdr:codex', agent: 'codex', kind: 'id', value: TRAEX_SESSION_ID }
+  await writeFile(snapshotPath, JSON.stringify(readerSnapshot))
+  const traexPage = await api.get(`/api/hosts/${host.id}/panes/p2/transcript`)
+  assert.equal(traexPage.body.binding, 'verified', `traex evidence must bind: ${JSON.stringify(traexPage.body)}`)
+  assert.equal(traexPage.body.agent, 'traex')
+  const traexText = JSON.stringify(traexPage.body.messages)
+  assert.ok(traexText.includes('TRAEX-MARKER 问题') && traexText.includes('TRAEX-MARKER 回答') && !traexText.includes('TRAEX-THINK-SECRET'))
+  const traexNext = await api.get(`/api/hosts/${host.id}/panes/p2/transcript?session=${encodeURIComponent(traexPage.body.session)}&cursor=${encodeURIComponent(traexPage.body.next_cursor)}`)
+  assert.equal(traexNext.body.binding, 'selected', 'a verified continuation carries session and reads as selected')
+  assert.equal(traexNext.body.session_id, TRAEX_SESSION_ID)
+  readerSnapshot.panes[1].agent_session = { source: 'herdr:traex', agent: 'traex', kind: 'id', value: TRAEX_SESSION_ID }
+  await writeFile(snapshotPath, JSON.stringify(readerSnapshot))
+  assert.equal((await api.get(`/api/hosts/${host.id}/panes/p2/transcript`)).body.binding, undefined, 'herdr:traex is not an official Herdr source')
+
+  readerSnapshot.panes[1].agent = 'pi'
+  readerSnapshot.panes[1].agent_session = { source: 'herdr:pi', agent: 'pi', kind: 'path', value: piFile }
+  await writeFile(snapshotPath, JSON.stringify(readerSnapshot))
+  const piPage = await api.get(`/api/hosts/${host.id}/panes/p2/transcript`)
+  assert.equal(piPage.body.binding, 'verified', `pi path evidence must bind: ${JSON.stringify(piPage.body)}`)
+  assert.ok(JSON.stringify(piPage.body.messages).includes('PI-MARKER 问题'))
+  readerSnapshot.panes[1].agent_session.value = join(root, 'elsewhere', piProject, `x_${PI_SESSION_ID}.jsonl`)
+  await writeFile(snapshotPath, JSON.stringify(readerSnapshot))
+  const piElsewhere = await api.get(`/api/hosts/${host.id}/panes/p2/transcript`)
+  assert.equal(piElsewhere.body.binding, undefined, 'a path outside the fixed root must not bind')
+  assert.deepEqual(piElsewhere.body.messages, [])
 
   assert.deepEqual(pageErrors, [], 'the page logged uncaught errors')
   console.log(`structured chat end-to-end passed: candidates=2 rounds=3 paging=${page1.body.messages.length}+ messages, DSH zstd source selection, verified binding, screenshots in ${artifacts}`)

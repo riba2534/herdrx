@@ -96,13 +96,16 @@ func TestTranscriptRemoteReaderRejectsSymlinkedRootParent(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")
 	}
-	for _, agent := range []string{"claude", "codex", "dsh"} {
+	for _, agent := range []string{"claude", "codex", "dsh", "cursor", "gemini"} {
 		t.Run(agent, func(t *testing.T) {
 			home := t.TempDir()
 			outside := t.TempDir()
 			leaf := "sessions"
-			if agent == "claude" {
+			switch agent {
+			case "claude", "cursor":
 				leaf = "projects"
+			case "gemini":
+				leaf = "tmp"
 			}
 			if err := os.MkdirAll(filepath.Join(outside, leaf), 0700); err != nil {
 				t.Fatal(err)

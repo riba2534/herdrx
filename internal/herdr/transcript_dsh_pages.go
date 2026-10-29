@@ -108,7 +108,7 @@ func transcriptDSHCompressedMessages(ctx context.Context, files transcriptFS, co
 	if shape.DSHVersion != agentlog.DSHFormatVersion {
 		return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 	}
-	if shape.CWD != cwd || shape.SessionID != sessionID {
+	if !cwdMatch(files, shape.CWD, cwd) || shape.SessionID != sessionID {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	// 归属过了不代表 header 行可以被准入：分页只解自己要用的那一段，header 行常常不在

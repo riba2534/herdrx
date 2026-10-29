@@ -370,6 +370,29 @@ func TestTranscriptRefusesSymlinkedParentDirectory(t *testing.T) {
 	}
 }
 
+type refusingTranscriptFS struct{ t *testing.T }
+
+func (f refusingTranscriptFS) List(context.Context, transcriptRootKind, string, int) ([]transcriptEntry, error) {
+	f.t.Fatal("cursor transcript listed files")
+	return nil, nil
+}
+
+func (f refusingTranscriptFS) Read(context.Context, transcriptRootKind, []transcriptReadSpec) ([]transcriptReadResult, error) {
+	f.t.Fatal("cursor transcript read files")
+	return nil, nil
+}
+
+func TestUnprovenHarnessesStayUnsupported(t *testing.T) {
+	for _, agent := range []string{"omp", "openclaude", "kilo"} {
+		page := readTranscript(context.Background(), refusingTranscriptFS{t: t}, newTranscriptCodecForTest(t), TranscriptScope{
+			PaneID: "p", Agent: agent, CWD: "/srv/app",
+		}, TranscriptRequest{})
+		if page.Supported || page.Reason != ChatReasonUnsupportedAgent || len(page.Messages) != 0 {
+			t.Fatalf("%s pane = %+v", agent, page)
+		}
+	}
+}
+
 func TestTranscriptDegradesForUnknownAgentAndMissingCWD(t *testing.T) {
 	home := t.TempDir()
 	codec := newTranscriptCodecForTest(t)
@@ -379,7 +402,7 @@ func TestTranscriptDegradesForUnknownAgentAndMissingCWD(t *testing.T) {
 	if shell.Supported || shell.Reason != ChatReasonNoAgent {
 		t.Fatalf("shell pane = %+v", shell)
 	}
-	other := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "gemini", CWD: "/srv"}, TranscriptRequest{})
+	other := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: "omp", CWD: "/srv"}, TranscriptRequest{})
 	if other.Supported || other.Reason != ChatReasonUnsupportedAgent {
 		t.Fatalf("unknown agent = %+v", other)
 	}

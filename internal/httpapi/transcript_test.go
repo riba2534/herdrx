@@ -394,6 +394,26 @@ func TestTranscriptAuditRecordsIdentityWithoutContent(t *testing.T) {
 	}
 }
 
+func TestVerifiedOpenIsAuditedWithoutASessionQuery(t *testing.T) {
+	endpoint := &transcriptTestEndpoint{
+		snapshot: agentPane(agentlog.AgentClaude, "/srv/proj", ""),
+		page: herdr.TranscriptPage{
+			Supported: true, Agent: agentlog.AgentClaude, SessionID: "sess-secret",
+			Binding:  herdr.ChatBindingVerified,
+			Messages: []agentlog.Record{{ID: "u-1", Role: agentlog.RoleUser, Blocks: []agentlog.Block{{Type: agentlog.BlockText, Text: "绝密的正文"}}}},
+		},
+	}
+	fixture := newTranscriptFixture(t, endpoint)
+	requestJSON(t, fixture.client, "GET", fixture.url("w1:p1", ""), "", nil, 200)
+	opened, err := fixture.db.ListAudit(context.Background(), store.AuditFilter{Action: "transcript.opened"})
+	if err != nil || len(opened) != 1 {
+		t.Fatalf("verified audit = %v %v", opened, err)
+	}
+	if strings.Contains(string(opened[0].Details), "绝密的正文") || !strings.Contains(string(opened[0].Details), "sess-secret") {
+		t.Fatalf("audit details = %s", opened[0].Details)
+	}
+}
+
 // 响应必须 no-store：会话正文不得被任何中间层缓存。
 func TestTranscriptResponseIsNotCacheable(t *testing.T) {
 	endpoint := &transcriptTestEndpoint{

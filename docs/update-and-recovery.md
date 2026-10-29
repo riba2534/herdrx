@@ -62,6 +62,8 @@ herdrx rollback                       # 回到已验证的兼容版本
 
 滚动闪烁修复增加受控端只读终端尺寸命令及 Herdr client socket 转发。Tailcat 连接需同步安装配套 CLI 并使 herdrx 访问服务运行新二进制；仅替换网站不会升级远程 CLI。旧版缺少该能力时，全屏滚动会提示更新，网页观察和终端任务继续保留。基础 SSH 无 CLI 依赖，远程需有 Python 3。详见[兼容要求](install.md#终端滚动兼容要求)。
 
+Chat 视图读取 Tailcat 主机上的会话记录依赖受控端只读命令 `herdrx-transcript`，最低版本将是 v0.1.0-rc.3。旧版受控端会拒绝这个命令，Chat 提示更新远程主机上的 herdrx CLI 后重试；更新并执行 `herdrx service restart` 后重新打开 Chat 即可，不需要重新绑定。该命令只读固定的 Agent 日志目录，不接受路径参数，不影响远程 Herdr 和任务。
+
 ## 配对恢复
 
 - 网页受理后的任务通过任务 ID 查询状态；对异常刷新和未完成任务的恢复仍需完成候选验收。

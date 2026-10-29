@@ -53,6 +53,8 @@ const (
 	transcriptMaxListEntries = 500
 	// Codex 会话目录的最大递归深度（`sessions/YYYY/MM/DD/rollout-*.jsonl`）。
 	transcriptMaxCodexDepth = 4
+	// Gemini：`<hash>/chats/session-*.json[l]`。
+	transcriptMaxGeminiDepth = 3
 	// 规范消息路径探测的总预算；未找到 response_item 时须扫完文件才能认定 event_msg。
 	transcriptCodexProbeMaxBytes = 8 << 20
 )
@@ -82,6 +84,7 @@ const (
 
 // TranscriptScope 是服务端自己取到的 pane 事实。agent 与 cwd 都来自
 // `endpoint.Snapshot`，**绝不接受客户端传入** —— 否则客户端可以谎报 cwd 去读别的项目。
+// Evidence 同样只来自 snapshot 的 agent_session，请求里没有 session 时才使用。
 type TranscriptScope struct {
 	PaneID string
 	Agent  string
@@ -198,15 +201,33 @@ type transcriptRootKind string
 const (
 	transcriptRootClaude transcriptRootKind = "claude"
 	transcriptRootCodex  transcriptRootKind = "codex"
+	transcriptRootTraex  transcriptRootKind = "traex"
 	transcriptRootDSH    transcriptRootKind = "dsh"
+	transcriptRootCursor transcriptRootKind = "cursor"
+	transcriptRootGemini transcriptRootKind = "gemini"
+	transcriptRootAgy    transcriptRootKind = "agy"
+	transcriptRootPi     transcriptRootKind = "pi"
+	transcriptRootGrok   transcriptRootKind = "grok"
 )
 
 func transcriptRootFor(agent string) transcriptRootKind {
 	switch agent {
 	case agentlog.AgentCodex:
 		return transcriptRootCodex
+	case agentlog.AgentTraex:
+		return transcriptRootTraex
 	case agentlog.AgentDSH:
 		return transcriptRootDSH
+	case agentlog.AgentCursor:
+		return transcriptRootCursor
+	case agentlog.AgentGemini:
+		return transcriptRootGemini
+	case agentlog.AgentAgy:
+		return transcriptRootAgy
+	case agentlog.AgentPi:
+		return transcriptRootPi
+	case agentlog.AgentGrok:
+		return transcriptRootGrok
 	}
 	return transcriptRootClaude
 }
@@ -221,6 +242,8 @@ var (
 	// errTranscriptTransport 表示当前接入方式拿不到受限读取能力。
 	errTranscriptTransport = errors.New("structured chat transport unsupported")
 	errTranscriptLimit     = errors.New("structured chat read limit exceeded")
+	// errTranscriptUnrecognized 表示文件在，但不是这个读取器认识的会话库。
+	errTranscriptUnrecognized = errors.New("structured chat unrecognized")
 )
 
 type transcriptEntry struct {
@@ -292,9 +315,10 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	case agentlog.AgentClaude:
 		// `<编码目录>/<会话 id>.jsonl`：直属一层。
 		return len(parts) == 2 && agentlog.ClaudeSessionFile(name)
-	case agentlog.AgentCodex:
-		// `YYYY/MM/DD/rollout-*.jsonl`：层数有界，不做递归通配。
-		return len(parts) >= 1 && len(parts) <= transcriptMaxCodexDepth+1 && agentlog.CodexSessionFile(name)
+	case agentlog.AgentCodex, agentlog.AgentTraex:
+		// `YYYY/MM/DD/rollout-*.jsonl`。kind=id 跨根查找时，第一段可以是
+		// `trae-root` 或 `codex-root`，用来记住文件在哪一个日志根，不会把它传给文件系统。
+		return rolloutRelAllowed(parts)
 	case agentlog.AgentDSH:
 		// `<项目目录>/<会话目录>/session.v3.jsonl[.zstd]`：恰好三层。
 		if len(parts) != 3 {
@@ -305,6 +329,16 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 		}
 		expected, ok := dshRelForSession(cwd, sessionID, name)
 		return ok && expected == rel
+	case agentlog.AgentCursor:
+		return agentlog.CursorTranscriptRel(rel) && agentlog.CursorSessionID(rel) == sessionID
+	case agentlog.AgentGemini:
+		return agentlog.GeminiSessionRel(rel)
+	case agentlog.AgentAgy:
+		return agentlog.AgyDBRel(rel) && agentlog.AgySessionID(rel) == sessionID
+	case agentlog.AgentPi:
+		return len(parts) == 2 && parts[0] == agentlog.PiProjectDir(cwd) && agentlog.PiSessionID(name) == sessionID
+	case agentlog.AgentGrok:
+		return agentlog.GrokHistoryRel(rel) && agentlog.GrokCWD(rel) == cwd && agentlog.GrokSessionID(rel) == sessionID
 	}
 	return false
 }
@@ -314,7 +348,8 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 // readTranscript 是共用引擎：判定 agent / cwd → 解析候选或会话 → 按游标切片 → 返回记录。
 // 它从不返回 Go 错误：所有失败都表达成契约里的降级形状，客户端才能渲染诚实的空态。
 func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest) TranscriptPage {
-	agent := strings.TrimSpace(scope.Agent)
+	reported := strings.TrimSpace(scope.Agent)
+	agent := agentlog.TranscriptFormat(reported)
 	if agent == "" {
 		return transcriptDegrade(ChatReasonNoAgent, "")
 	}
@@ -325,16 +360,33 @@ func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCod
 	}
 	cwd := strings.TrimSpace(scope.CWD)
 	if !strings.HasPrefix(cwd, "/") {
-		return transcriptDegrade(ChatReasonCWDUnavailable, agent)
+		return relabelTranscript(transcriptDegrade(ChatReasonCWDUnavailable, agent), reported, agent)
 	}
 	if request.Session == "" {
-		return transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence)
+		return relabelTranscript(transcriptVerifiedOrCandidates(ctx, files, codec, agent, cwd, scope.Evidence), reported, agent)
 	}
 	parts, ok := codec.open(request.Session, 3)
-	if !ok || parts[0] != agent || !transcriptRelAllowed(agent, cwd, parts[1], parts[2]) {
-		return transcriptSessionLost(ctx, files, codec, agent, cwd)
+	if !ok || parts[0] != agent || !transcriptRelAllowedAny(files, agent, cwd, parts[1], parts[2]) {
+		return relabelTranscript(transcriptSessionLost(ctx, files, codec, agent, cwd), reported, agent)
 	}
-	return transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request)
+	return relabelTranscript(transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], request), reported, agent)
+}
+
+// relabelTranscript 把读取器名换回 pane 上的进程名（traex 仍显示 traex）。
+// 令牌内部用的是读取器名，客户端不解析令牌。
+func relabelTranscript(page TranscriptPage, reported, format string) TranscriptPage {
+	if reported == "" || reported == format {
+		return page
+	}
+	if page.Agent == format {
+		page.Agent = reported
+	}
+	for index := range page.Candidates {
+		if page.Candidates[index].Agent == format {
+			page.Candidates[index].Agent = reported
+		}
+	}
+	return page
 }
 
 func transcriptDegrade(reason, agent string) TranscriptPage {
@@ -351,6 +403,8 @@ func transcriptDegradeFromError(err error, agent string) TranscriptPage {
 		return transcriptDegrade(ChatReasonReadDenied, agent)
 	case errors.Is(err, errTranscriptLimit):
 		return transcriptDegrade(ChatReasonReadLimitExceeded, agent)
+	case errors.Is(err, errTranscriptUnrecognized):
+		return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 	default:
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
@@ -378,12 +432,48 @@ func transcriptCandidates(ctx context.Context, files transcriptFS, codec transcr
 // transcriptVerifiedOrCandidates 先列候选；Herdr 上报的会话引用指向其中一份文件时直接读取它
 // 并标记 verified，否则保持「只列候选」。证据只用来**挑选**候选：候选本身已经过 reader
 // 白名单与精确 cwd 核对，所以证据再离谱也只能落到这个 pane 自己的会话上。
+//
+// 两处扩展仍然只在候选里挑：Codex 的 hook 把 traex 也报成 codex，所以主根没命中时再列
+// 另一个 rollout 根的候选（同样按 cwd 核对）；agy 见 transcriptAgyEvidenceCandidate。
 func transcriptVerifiedOrCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string, evidence *AgentSession) TranscriptPage {
 	page := transcriptCandidates(ctx, files, codec, agent, cwd)
-	if !page.Supported || evidence == nil {
+	if evidence == nil {
 		return page
 	}
-	for _, candidate := range page.Candidates {
+	candidates := page.Candidates
+	if agent == agentlog.AgentAgy {
+		// agy 没有可列的候选（见 collectCandidates），只会得到证据指向的那一个。
+		candidate, ok := transcriptAgyEvidenceCandidate(codec, evidence)
+		if !ok {
+			return page
+		}
+		candidates = []agentlog.Candidate{candidate}
+	} else if !page.Supported {
+		return page
+	}
+	bound, ok := transcriptBindEvidence(ctx, files, codec, agent, cwd, evidence, candidates)
+	if sibling, rollout := rolloutSiblingRoot(agent); !ok && rollout && transcriptEvidenceFromHerdr(agent, evidence) {
+		// 只探测文件名可能是证据所指的那几份，不把另一个根整棵探一遍。
+		extra, _, err := collectCandidatesIn(ctx, files, codec, agent, sibling, cwd, func(rel string) bool {
+			if evidence.Kind == "path" {
+				return strings.HasSuffix(evidence.Value, "/"+rel)
+			}
+			return strings.Contains(baseName(rel), evidence.Value)
+		})
+		if err == nil {
+			bound, ok = transcriptBindEvidence(ctx, files, codec, agent, cwd, evidence, extra)
+		}
+	}
+	if !ok {
+		return page
+	}
+	bound.Candidates = page.Candidates
+	return bound
+}
+
+// transcriptBindEvidence 在给定候选里找证据指向的那一份并读取它。
+func transcriptBindEvidence(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string, evidence *AgentSession, candidates []agentlog.Candidate) (TranscriptPage, bool) {
+	for _, candidate := range candidates {
 		parts, ok := codec.open(candidate.ID, 3)
 		if !ok || !transcriptEvidenceMatches(agent, evidence, parts[1], parts[2]) {
 			continue
@@ -391,24 +481,41 @@ func transcriptVerifiedOrCandidates(ctx context.Context, files transcriptFS, cod
 		bound := transcriptMessages(ctx, files, codec, agent, cwd, parts[1], parts[2], TranscriptRequest{Session: candidate.ID})
 		if bound.Binding == "" {
 			// 文件在列候选与读取之间消失或变得不可读：退回候选列表，不冒充绑定。
-			return page
+			return TranscriptPage{}, false
 		}
 		bound.Binding = ChatBindingVerified
 		bound.Session = candidate.ID
-		bound.Candidates = page.Candidates
-		return bound
+		return bound, true
 	}
-	return page
+	return TranscriptPage{}, false
+}
+
+// transcriptEvidenceSource 是各 reader 认可的 Herdr 官方集成来源（`source`, `agent`），
+// 对照 Herdr `agent_resume.rs` 的 is_official_agent_source。traex 没有自己的集成，
+// Codex 的 hook 把它报成 codex；agy 的集成名是 antigravity_cli。
+func transcriptEvidenceSource(agent string) (string, string) {
+	switch agent {
+	case agentlog.AgentTraex:
+		return "herdr:codex", agentlog.AgentCodex
+	case agentlog.AgentAgy:
+		return "herdr:antigravity_cli", agentlog.AgentAgy
+	}
+	return "herdr:" + agent, agent
+}
+
+func transcriptEvidenceFromHerdr(agent string, evidence *AgentSession) bool {
+	source, reported := transcriptEvidenceSource(agent)
+	return evidence.Source == source && evidence.Agent == reported
 }
 
 // transcriptEvidenceMatches 判断 agent_session 是否指向这一份候选文件。
 //
-// 只认 Herdr 自己的集成来源（`herdr:<reader>`，agent 字段同名），避免第三方上报冒充。
+// 只认 Herdr 自己的集成来源（见 transcriptEvidenceSource），避免第三方上报冒充。
 // kind=id 要求与候选的 provider 会话 id 精确相等；kind=path 要求是规范的绝对路径，且
 // 恰好以「固定日志根 + 候选相对路径」结尾。远端 $HOME 不在工作台侧，路径前缀无法独立核对，
 // 但读取的永远是候选里那一份文件，路径本身从不被打开。
 func transcriptEvidenceMatches(agent string, evidence *AgentSession, sessionID, rel string) bool {
-	if evidence.Source != "herdr:"+agent || evidence.Agent != agent {
+	if !transcriptEvidenceFromHerdr(agent, evidence) {
 		return false
 	}
 	value := evidence.Value
@@ -416,12 +523,30 @@ func transcriptEvidenceMatches(agent string, evidence *AgentSession, sessionID, 
 	case "id":
 		return value != "" && value == sessionID
 	case "path":
-		if !strings.HasPrefix(value, "/") || path.Clean(value) != value {
+		if agent == agentlog.AgentAgy || !strings.HasPrefix(value, "/") || path.Clean(value) != value {
 			return false
 		}
-		return strings.HasSuffix(value, "/"+strings.Join(transcriptRootParts(transcriptRootFor(agent)), "/")+"/"+rel)
+		root, rel := rolloutStorage(agent, rel)
+		parts := transcriptRootParts(root)
+		return parts != nil && strings.HasSuffix(value, "/"+strings.Join(parts, "/")+"/"+rel)
 	}
 	return false
+}
+
+// transcriptAgyEvidenceCandidate 把 agy 的 kind=id 证据变成唯一候选。
+//
+// agy 是唯一例外：会话库里没有 cwd 字段，无法按 cwd 列候选，没有证据时也不扫目录。
+// 候选只能是固定根下的 `<uuid>.db`：值必须是严格的 uuid（不含任何路径字符），
+// 读取时仍按 AgyDBRel 校验并逐段拒绝符号链接；证据来源必须是 Herdr 的 antigravity_cli 集成。
+func transcriptAgyEvidenceCandidate(codec transcriptCodec, evidence *AgentSession) (agentlog.Candidate, bool) {
+	if evidence.Kind != "id" || !agentlog.AgyUUID(evidence.Value) || !transcriptEvidenceFromHerdr(agentlog.AgentAgy, evidence) {
+		return agentlog.Candidate{}, false
+	}
+	id, err := codec.seal(agentlog.AgentAgy, evidence.Value, evidence.Value+".db")
+	if err != nil {
+		return agentlog.Candidate{}, false
+	}
+	return agentlog.Candidate{ID: id, Agent: agentlog.AgentAgy, SessionID: evidence.Value}, true
 }
 
 // transcriptRootParts 是各日志根相对 $HOME 的固定路径分量。
@@ -431,9 +556,21 @@ func transcriptRootParts(root transcriptRootKind) []string {
 		return []string{".claude", "projects"}
 	case transcriptRootCodex:
 		return []string{".codex", "sessions"}
+	case transcriptRootTraex:
+		return []string{".trae", "cli", "sessions"}
 	case transcriptRootDSH:
 		// 固定根，来自上游 `dshHomePath('sessions')`；自定义 DSH_HOME 不在本期支持范围。
 		return []string{".dsh", "sessions"}
+	case transcriptRootCursor:
+		return []string{".cursor", "projects"}
+	case transcriptRootGemini:
+		return []string{".gemini", "tmp"}
+	case transcriptRootAgy:
+		return []string{".gemini", "antigravity-cli", "conversations"}
+	case transcriptRootPi:
+		return []string{".pi", "agent", "sessions"}
+	case transcriptRootGrok:
+		return []string{".grok", "sessions"}
 	}
 	return nil
 }
@@ -454,7 +591,18 @@ func transcriptSessionLost(ctx context.Context, files transcriptFS, codec transc
 // collectCandidates 列出当前 cwd 的候选会话。第二个返回值表示「找到了会话目录，但没有
 // 本实现支持的产物代际」——调用方据此区分「这里没有会话」与「这里的会话读不了」。
 func collectCandidates(ctx context.Context, files transcriptFS, codec transcriptCodec, agent, cwd string) ([]agentlog.Candidate, bool, error) {
-	root := transcriptRootFor(agent)
+	return collectCandidatesIn(ctx, files, codec, agent, transcriptRootFor(agent), cwd, nil)
+}
+
+// collectCandidatesIn 同 collectCandidates，但 rollout reader 可以指定另一个 rollout 根
+// （见 rolloutSiblingRoot）；那时候选的相对路径带上根标记，读取时据此还原。want 非 nil 时
+// 只探测它接受的相对路径，候选资格的核对不变。
+func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcriptCodec, agent string, root transcriptRootKind, cwd string, want func(string) bool) ([]agentlog.Candidate, bool, error) {
+	// agy 的会话 id 就是文件名。没有 hook 证据时不扫 conversations 目录，
+	// 也不用 mtime 挑一个。
+	if agent == agentlog.AgentAgy {
+		return nil, false, nil
+	}
 	var (
 		entries []transcriptEntry
 		err     error
@@ -463,21 +611,35 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 	case agentlog.AgentClaude:
 		// 目录名编码只能**缩小搜索范围**：编码是有损的（`/a-b` 与 `/a/b` 同码），
 		// 所以这里只列出与当前 cwd 编码同名的那一个目录，归属仍由记录内容判定。
-		entries, err = files.List(ctx, root, agentlog.ClaudeProjectDir(cwd), 1)
+		entries, err = listCWDProjects(ctx, files, root, cwd, claudeProject, 1)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
 	case agentlog.AgentDSH:
 		// `projectKey` 同样只能缩小范围（分隔符折叠 + 截断都有损），而且目录下还有一层
 		// 会话目录，所以按两层列。归属仍由 header 里 cwd 的精确相等判定。
-		project, ok := dshProjectDir(cwd)
-		if !ok {
-			return nil, false, nil
-		}
-		entries, err = files.List(ctx, root, project, 2)
+		entries, err = listCWDProjects(ctx, files, root, cwd, dshProjectDir, 2)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
+	case agentlog.AgentCursor:
+		// 项目目录名把分隔符折成 `-`，不能用来认 cwd。先按项目目录读
+		// `.workspace-trusted`，只有 workspacePath 对上才列出那个项目的 transcript。
+		// 不能把所有项目的 jsonl 一起塞进 500 项预算，否则家目录会话会在看到自己的
+		// 项目之前就报 read_limit_exceeded。
+		return collectCursorCandidates(ctx, files, codec, cwd)
+	case agentlog.AgentPi:
+		entries, err = listCWDProjects(ctx, files, root, cwd, piProject, 1)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
+	case agentlog.AgentGrok:
+		entries, err = listCWDProjects(ctx, files, root, cwd, grokProject, 2)
+		if errors.Is(err, errTranscriptNotFound) {
+			return nil, false, nil
+		}
+	case agentlog.AgentGemini:
+		entries, err = files.List(ctx, root, "", transcriptMaxGeminiDepth)
 	default:
 		entries, err = files.List(ctx, root, "", transcriptMaxCodexDepth)
 	}
@@ -500,10 +662,18 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 			if !keep && dshForeignGeneration(name) {
 				foreign = true
 			}
+		case agentlog.AgentCursor:
+			keep = agentlog.CursorTranscriptRel(entry.Rel)
+		case agentlog.AgentPi:
+			keep = agentlog.PiSessionRel(entry.Rel)
+		case agentlog.AgentGrok:
+			keep = agentlog.GrokHistoryRel(entry.Rel)
+		case agentlog.AgentGemini:
+			keep = agentlog.GeminiSessionRel(entry.Rel)
 		default:
 			keep = agentlog.CodexSessionFile(name)
 		}
-		if !keep {
+		if !keep || want != nil && !want(entry.Rel) {
 			continue
 		}
 		files_ = append(files_, entry)
@@ -539,14 +709,58 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 				continue
 			}
 			shape := shapes[position]
+			if agent == agentlog.AgentCursor {
+				workspace, err := cursorWorkspace(ctx, files, entry.Rel)
+				if err != nil {
+					return nil, false, err
+				}
+				if workspace == "" {
+					continue
+				}
+				shape.CWD = workspace
+				shape.SessionID = agentlog.CursorSessionID(entry.Rel)
+			}
+			if agent == agentlog.AgentGrok {
+				decoded := agentlog.GrokCWD(entry.Rel)
+				if decoded == "" || !cwdMatch(files, decoded, cwd) {
+					continue
+				}
+				shape.CWD = decoded
+				shape.SessionID = agentlog.GrokSessionID(entry.Rel)
+			}
+			if agent == agentlog.AgentGemini {
+				document, err := readGeminiDocument(ctx, files, entry.Rel, result.Size)
+				if errors.Is(err, errTranscriptLimit) {
+					continue
+				}
+				if err != nil {
+					return nil, false, err
+				}
+				shape.CWD = document.CWD
+				shape.SessionID = document.SessionID
+			}
 			// 归属判定必须落到记录内容：目录名编码证明不了 cwd 归属。
-			if shape.CWD != cwd {
+			if !cwdMatch(files, shape.CWD, cwd) {
 				continue
 			}
 			sessionID := shape.SessionID
 			switch agent {
 			case agentlog.AgentClaude:
 				sessionID = agentlog.SessionStem(baseName(entry.Rel))
+			case agentlog.AgentCursor:
+				sessionID = agentlog.CursorSessionID(entry.Rel)
+			case agentlog.AgentGemini:
+				if sessionID == "" {
+					continue
+				}
+			case agentlog.AgentPi:
+				if sessionID == "" || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
+					continue
+				}
+			case agentlog.AgentGrok:
+				if sessionID == "" {
+					continue
+				}
 			case agentlog.AgentDSH:
 				// 会话 id 只认 header；同时要求目录段**逐字**等于该 id 的规范编码 ——
 				// 这是「严格 canonical 目录规则」的一半，另一半由归属判定给出。
@@ -562,7 +776,7 @@ func collectCandidates(ctx context.Context, files transcriptFS, codec transcript
 					sessionID = agentlog.SessionStem(baseName(entry.Rel))
 				}
 			}
-			id, err := codec.seal(agent, sessionID, entry.Rel)
+			id, err := codec.seal(agent, sessionID, rolloutTokenRel(agent, root, entry.Rel))
 			if err != nil {
 				return nil, false, err
 			}
@@ -700,7 +914,14 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	if agent == agentlog.AgentDSH && agentlog.DSHCompressedSessionFile(baseName(rel)) {
 		return transcriptDSHCompressedMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
 	}
-	root := transcriptRootFor(agent)
+	if agent == agentlog.AgentGemini {
+		return transcriptGeminiMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
+	}
+	if agent == agentlog.AgentAgy {
+		return transcriptAgyMessages(ctx, files, codec, agent, cwd, sessionID, rel, request)
+	}
+	sealedRel := rel
+	root, rel := rolloutStorage(agent, rel)
 	shapes, heads, err := transcriptShapes(ctx, files, root, agent, []string{rel})
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
@@ -716,6 +937,25 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	shape := shapes[0]
+	if agent == agentlog.AgentCursor {
+		workspace, err := cursorWorkspace(ctx, files, rel)
+		if err != nil {
+			return transcriptDegradeFromError(err, agent)
+		}
+		if workspace == "" || !cwdMatch(files, workspace, cwd) {
+			return transcriptSessionLost(ctx, files, codec, agent, cwd)
+		}
+		shape.CWD = workspace
+		shape.SessionID = sessionID
+	}
+	if agent == agentlog.AgentGrok {
+		decoded := agentlog.GrokCWD(rel)
+		if decoded == "" || !cwdMatch(files, decoded, cwd) || agentlog.GrokSessionID(rel) != sessionID {
+			return transcriptSessionLost(ctx, files, codec, agent, cwd)
+		}
+		shape.CWD = decoded
+		shape.SessionID = sessionID
+	}
 	// 空文件（或还没有任何完整行）是正常的「空会话」，不是降级，也不能因此判定归属；
 	// 但只要文件里已经有完整记录，cwd 就必须精确相等 —— 这是归属的唯一证明。
 	empty := len(head.Data) == 0 || !hasCompleteLine(head.Data)
@@ -730,10 +970,10 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			// 分页通常只读尾部窗口，header 行不在其中，所以这个检查不能省。
 			return transcriptDegrade(ChatReasonUnrecognizedFormat, agent)
 		}
-		if shape.CWD != cwd {
+		if !cwdMatch(files, shape.CWD, cwd) {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
-		if (agent == agentlog.AgentCodex || agent == agentlog.AgentDSH) && shape.SessionID != "" && shape.SessionID != sessionID {
+		if (agent == agentlog.AgentCodex || agent == agentlog.AgentTraex || agent == agentlog.AgentDSH || agent == agentlog.AgentPi) && shape.SessionID != "" && shape.SessionID != sessionID {
 			// 请求里的 session 与文件里解析出的会话 id 不再对应同一个文件。
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
@@ -743,16 +983,16 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 文件身份来自 stat，Codex 的规范路径也绑定到游标；追加首个 response_item
 	// 改变规范路径时重建旧视图，避免已展示的 event_msg 与新记录双记。
 	identity := head.Identity
-	if agent == agentlog.AgentCodex {
+	if agent == agentlog.AgentCodex || agent == agentlog.AgentTraex {
 		if !shape.ResponseItemPath {
-			shape.ResponseItemPath, err = transcriptCodexResponsePath(ctx, files, rel, head)
+			shape.ResponseItemPath, err = transcriptCodexResponsePath(ctx, files, root, rel, head)
 			if err != nil {
 				return transcriptDegradeFromError(err, agent)
 			}
 		}
 		identity += ":" + strconv.FormatBool(shape.ResponseItemPath)
 	}
-	token := []string{sessionID, rel, identity}
+	token := []string{sessionID, sealedRel, identity}
 
 	start := size - transcriptInitialWindowBytes
 	if start < 0 {
@@ -887,6 +1127,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 			last++
 		}
 	}
+	first, last = includeWholeLines(records, first, last)
 
 	pageStart := trueStart
 	page := TranscriptPage{
@@ -917,7 +1158,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		page.HasMore = last < len(records) || start+transcriptInitialWindowBytes < size
 	}
 
-	next, err := codec.seal(sessionID, rel, identity, strconv.FormatInt(consumed, 10))
+	next, err := codec.seal(sessionID, sealedRel, identity, strconv.FormatInt(consumed, 10))
 	if err != nil {
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
@@ -932,13 +1173,27 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 	// 或已经读到文件开头时才收起入口。
 	offeredPrevious := backward && decoded.Consumed > trueStart
 	if pageStart > 0 && offeredPrevious {
-		previous, err := codec.seal(sessionID, rel, identity, strconv.FormatInt(pageStart, 10))
+		previous, err := codec.seal(sessionID, sealedRel, identity, strconv.FormatInt(pageStart, 10))
 		if err != nil {
 			return transcriptDegrade(ChatReasonInternalError, agent)
 		}
 		page.PrevCursor = previous
 	}
 	return page
+}
+
+// includeWholeLines 不把同一行里的多条记录拆到两页。traex 的 append 把多个 item 写在一行。
+func includeWholeLines(records []agentlog.RangeEntry, first, last int) (int, int) {
+	if first >= last || len(records) == 0 {
+		return first, last
+	}
+	for first > 0 && records[first].Start == records[first-1].Start {
+		first--
+	}
+	for last < len(records) && records[last-1].Start == records[last].Start {
+		last++
+	}
+	return first, last
 }
 
 // transcriptCursorOffset 解开游标并校验它绑定的正是这个会话与这个文件身份。
@@ -1053,14 +1308,14 @@ func hasCompleteLine(data []byte) bool { return bytes.IndexByte(data, '\n') >= 0
 // transcriptCodexResponsePath 在有界范围内查找规范 response_item。
 // 首部身份字段齐全不能证明文件没有 response_item：前面的 turn_context 可以很长。
 // 只有确实扫到文件末尾才能采用 event_msg；超过预算时明确降级。
-func transcriptCodexResponsePath(ctx context.Context, files transcriptFS, rel string, head transcriptReadResult) (bool, error) {
+func transcriptCodexResponsePath(ctx context.Context, files transcriptFS, root transcriptRootKind, rel string, head transcriptReadResult) (bool, error) {
 	var pending []byte
 	for offset := int64(0); offset < head.Size; {
 		if offset >= transcriptCodexProbeMaxBytes {
 			return false, errTranscriptLimit
 		}
 		length := min(int64(transcriptInitialWindowBytes), head.Size-offset, int64(transcriptCodexProbeMaxBytes)-offset, int64(transcriptMaxReadBytes-len(pending)))
-		part, err := transcriptReadOne(ctx, files, transcriptRootCodex, rel, offset, length)
+		part, err := transcriptReadOne(ctx, files, root, rel, offset, length)
 		if err != nil {
 			return false, err
 		}

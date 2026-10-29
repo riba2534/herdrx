@@ -25,7 +25,7 @@ type TranscriptDiagnostics interface {
 // Transcript 实现 `TranscriptEndpoint`。
 //
 // 本机之外的三种接入共用同一个 `*SSHEndpoint`：原生 SSH 与 Tailcat 走 `cryptoSSHClient`，
-// 系统 OpenSSH 走 ControlMaster 上的 exec。只缓存已知 transport 的能力限制；
+// 系统 OpenSSH 走 ControlMaster 上的 exec。只缓存「这个接入方式根本没有读取器」；
 // 超时、空输出、命令失败均可重试，不能污染同一主机其他 pane 的读取能力。
 func (e *SSHEndpoint) Transcript(ctx context.Context, scope TranscriptScope, request TranscriptRequest) (TranscriptPage, error) {
 	codec, err := transcriptTokens()
@@ -56,6 +56,20 @@ func (e *SSHEndpoint) transcriptUnavailable() bool {
 	return e.transcriptUnsupported
 }
 
+func (e *SSHEndpoint) rememberTranscriptHome(response transcriptRemoteResponse) {
+	if !strings.HasPrefix(response.Home, "/") {
+		return
+	}
+	real := response.HomeReal
+	if !strings.HasPrefix(real, "/") {
+		real = response.Home
+	}
+	e.transcriptMu.Lock()
+	defer e.transcriptMu.Unlock()
+	e.transcriptHome = response.Home
+	e.transcriptHomeReal = real
+}
+
 func (e *SSHEndpoint) markTranscriptUnsupported(reason string) {
 	e.transcriptMu.Lock()
 	defer e.transcriptMu.Unlock()
@@ -76,7 +90,7 @@ type sshTranscriptFS struct {
 }
 
 func (f *sshTranscriptFS) rememberReadError(err error) {
-	if err != nil && !errors.Is(err, errTranscriptTransport) && !errors.Is(err, errTranscriptRoot) && !errors.Is(err, errTranscriptNotFound) && !errors.Is(err, errTranscriptDenied) {
+	if err != nil && !errors.Is(err, errTranscriptTransport) && !errors.Is(err, errTranscriptRoot) && !errors.Is(err, errTranscriptNotFound) && !errors.Is(err, errTranscriptDenied) && !errors.Is(err, errTranscriptUnrecognized) {
 		f.transientErr = err
 	}
 }
@@ -142,11 +156,17 @@ func (f *sshTranscriptFS) Read(ctx context.Context, root transcriptRootKind, spe
 // 请求经 stdin 以 JSON 传递，**不拼进命令行**：远端命令字符串里只有服务端自己的常量，
 // 任何用户可控的字节都不会成为 shell 语法。
 type transcriptRemoteRequest struct {
-	Op    string                 `json:"op"`
-	Agent string                 `json:"agent,omitempty"`
-	Rel   string                 `json:"rel,omitempty"`
-	Depth int                    `json:"depth,omitempty"`
-	Reads []transcriptRemoteRead `json:"reads,omitempty"`
+	Op           string                 `json:"op"`
+	Agent        string                 `json:"agent,omitempty"`
+	Rel          string                 `json:"rel,omitempty"`
+	Depth        int                    `json:"depth,omitempty"`
+	Reads        []transcriptRemoteRead `json:"reads,omitempty"`
+	AgyHasAfter  bool                   `json:"agy_has_after,omitempty"`
+	AgyAfter     int64                  `json:"agy_after,omitempty"`
+	AgyHasBefore bool                   `json:"agy_has_before,omitempty"`
+	AgyBefore    int64                  `json:"agy_before,omitempty"`
+	AgyDesc      bool                   `json:"agy_desc,omitempty"`
+	AgyLimit     int                    `json:"agy_limit,omitempty"`
 }
 
 type transcriptRemoteRead struct {
@@ -172,19 +192,50 @@ type transcriptRemoteResult struct {
 	Identity string `json:"identity"`
 }
 
+type transcriptRemoteStep struct {
+	Idx      int64  `json:"idx"`
+	StepType int    `json:"step_type"`
+	Status   int    `json:"status"`
+	Format   int    `json:"step_format"`
+	Data     string `json:"data,omitempty"`
+	Oversize bool   `json:"oversize,omitempty"`
+}
+
 type transcriptRemoteResponse struct {
-	OK      bool                     `json:"ok"`
-	Error   string                   `json:"error"`
-	Entries []transcriptRemoteEntry  `json:"entries"`
-	Reads   []transcriptRemoteResult `json:"reads"`
+	OK       bool                     `json:"ok"`
+	Error    string                   `json:"error"`
+	Entries  []transcriptRemoteEntry  `json:"entries"`
+	Reads    []transcriptRemoteResult `json:"reads"`
+	Steps    []transcriptRemoteStep   `json:"steps"`
+	Identity string                   `json:"identity"`
+	End      bool                     `json:"end"`
+	Home     string                   `json:"home"`
+	HomeReal string                   `json:"home_real"`
+}
+
+// transcriptTailcatCommand 是 access daemon 白名单里的固定命令，与 pane.read
+// 同属「只允许这一个名字」。命令行不带路径、不经过 shell，也不投送 python。
+// 请求仍走 stdin，应答仍是下面的 JSON 协议。
+const transcriptTailcatCommand = "herdrx-transcript"
+
+// transcriptCommandFor 选出这个接入方式允许使用的读取器。
+// 空 transport 与 ssh 继续用原来的 python 读取器。tailcat 只用白名单命令。
+// 其他接入方式没有安全的读取器，这才是可以缓存的能力缺失。
+func transcriptCommandFor(transport string) (string, bool) {
+	switch transport {
+	case "tailcat":
+		return transcriptTailcatCommand, true
+	case "", "ssh":
+		return transcriptReaderCommand, true
+	default:
+		return "", false
+	}
 }
 
 func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcriptRemoteRequest) (transcriptRemoteResponse, error) {
-	if e.host.Transport == "tailcat" {
-		// Tailcat 的 access daemon 只接受严格白名单的命令语法（herdr 与少量内部子命令），
-		// 没有任意 exec，也不允许把自定义读取器投送过去。所以这里给明确的不支持，
-		// 而不是把 `python3 -c ...` 发过去等它拒绝。
-		e.markTranscriptUnsupported("tailcat agent command grammar has no arbitrary exec")
+	command, ok := transcriptCommandFor(e.host.Transport)
+	if !ok {
+		e.markTranscriptUnsupported("transport has no whitelisted transcript reader")
 		return transcriptRemoteResponse{}, errTranscriptTransport
 	}
 	payload, err := json.Marshal(request)
@@ -209,7 +260,12 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 	}
 	var stderr limitedSSHLog
 	session.setStderr(&stderr)
-	if err := session.Start(transcriptReaderCommand); err != nil {
+	if err := session.Start(command); err != nil {
+		if e.host.Transport == "tailcat" {
+			// 旧 daemon 拒绝未知命令时必须可以重试：更新 CLI 后同一条连接再读即可。
+			// 不要把它记成「这台主机永远不能读会话记录」。
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		return transcriptRemoteResponse{}, err
 	}
 	go func() {
@@ -232,6 +288,9 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 		return transcriptRemoteResponse{}, fmt.Errorf("会话记录读取中断，请重试")
 	}
 	if waitErr != nil {
+		if e.host.Transport == "tailcat" {
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器执行失败，请确认 python3 可用后重试")
 	}
 	response := transcriptRemoteResponse{}
@@ -239,12 +298,18 @@ func (e *SSHEndpoint) execTranscriptReader(ctx context.Context, request transcri
 		// 空输出、截断或非 JSON 都不能证明主机永久缺失能力。
 		return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器返回空或无效响应，请重试")
 	}
+	e.rememberTranscriptHome(response)
 	if !response.OK {
+		if request.Op == "agy" && response.Error == "unknown_op" {
+			return transcriptRemoteResponse{}, fmt.Errorf("远端会话读取器还不认识 Antigravity 记录，请更新远程主机上的 herdrx CLI 后重试")
+		}
 		switch response.Error {
 		case "root_unavailable", "home_unavailable":
 			return transcriptRemoteResponse{}, errTranscriptRoot
 		case "not_found":
 			return transcriptRemoteResponse{}, errTranscriptNotFound
+		case "unrecognized":
+			return transcriptRemoteResponse{}, errTranscriptUnrecognized
 		case "denied", "bad_request", "unknown_agent", "unknown_op":
 			return transcriptRemoteResponse{}, errTranscriptDenied
 		}
