@@ -30,8 +30,6 @@ export function ChatMediaComposer(props: ChatMediaComposerProps) {
   // 通过 ref 读取最新 prop，保证状态机实例不随渲染重建。
   const stageRef = useRef(props.stageImage)
   stageRef.current = props.stageImage
-  const submitRef = useRef(props.submit)
-  submitRef.current = props.submit
 
   const storeRef = useRef<ChatMediaStore | null>(null)
   if (storeRef.current === null) {
@@ -68,17 +66,8 @@ export function ChatMediaComposer(props: ChatMediaComposerProps) {
   // 加入时的 host/pane + epoch 丢弃，不会落到新的 pane。
   useEffect(() => () => { store.discard(hostID, paneID) }, [store, hostID, paneID])
 
-  /**
-   * 提交事务：正文与图片引用的合成由 Composer 在发送前调用 `mediaHost.compose` 完成
-   * （唯一一条合成路径，见契约 §8.3）。这里只保留一道防御性守卫：
-   * 图片仍在上传时，宁可抛中文错误，也不静默丢掉用户刚加上的图片。
-   */
-  // 两腿提交：正文与回车分别调用，pane 固定为本次提交开始时选中的终端。
-  const submit = useCallback(async (targetPane: string, text: string, keys: string[]) => {
-    // 新增附件只阻止下一次正文提交，不能打断已经发送正文的提交回车。
-    if (keys.length === 0 && store.busy(hostID, paneID)) throw new Error('图片仍在上传，请稍候再发送')
-    await submitRef.current(targetPane, text, keys)
-  }, [store, hostID, paneID])
+  // 正文与图片引用的合成由 Composer 在发送前调用 `mediaHost.compose` 完成（唯一一条合成路径，
+  // 见契约 §8.3）。图片仍在上传时 `busy` 经 sendDisabled 挡住发送，不会静默丢掉刚加上的图片。
 
   /**
    * 交给 Composer 的媒体接线点。`tray` 只在真的有条目时渲染，
@@ -163,7 +152,6 @@ export function ChatMediaComposer(props: ChatMediaComposerProps) {
       placeholder={props.placeholder}
       onDirectInput={props.onDirectInput}
       onLocalInput={props.onLocalInput}
-      submit={submit}
       mediaHost={mediaHost}
     />
   </div>

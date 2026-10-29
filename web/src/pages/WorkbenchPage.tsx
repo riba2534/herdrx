@@ -21,7 +21,6 @@ import { useAgentSeen } from '../lib/useAgentSeen'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
-import { composerSubmitParams } from '../lib/composerDrafts'
 import { applyModifiers, hasModifiers, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
@@ -1027,7 +1026,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {/* 当前 pane 的 Agent 在等选择时，浮出对话框答题卡片（认不出的对话框不出卡片）。 */}
       {snapshot?.panes.find((pane) => pane.pane_id === paneID)?.agent_status === 'blocked' && connection === 'ready' && <div className="workbench-dialog-card"><DialogCard key={`${hostID}\n${paneID}`} primary hostID={hostID} paneID={paneID}/></div>}
       {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
-      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
+      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
         {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <Fragment key={key.id}>
           {key.id === 'ctrlC' && STICKY_MODIFIER_KEYS.map((modifier) => <button key={modifier.id} className={stickyModifiers[modifier.id] ? 'key-active' : undefined} aria-label={modifier.aria} aria-pressed={stickyModifiers[modifier.id]} disabled={!terminalInput} onClick={() => updateStickyModifiers({ ...stickyModifiersRef.current, [modifier.id]: !stickyModifiersRef.current[modifier.id] })}>{modifier.label}</button>)}

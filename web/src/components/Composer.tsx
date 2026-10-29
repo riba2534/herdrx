@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { ChevronUp, Keyboard, SquareTerminal } from 'lucide-react'
 import { Button } from './ui'
 import { clipboardImages } from '../lib/imagePaste'
-import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerPrompt, subscribeComposer, writeComposerDraft, type ComposerSendState, type ComposerSubmit } from '../lib/composerDrafts'
+import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerPrompt, subscribeComposer, writeComposerDraft, type ComposerSendState } from '../lib/composerDrafts'
 import type { PaneDialog } from '../types'
 import { DialogCard, usePrimaryDialogCard } from './DialogCard'
 import { useConfirm } from './useConfirm'
@@ -110,11 +110,6 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
-  /**
-   * 不再使用：发送统一经服务端 `api.panePrompt`（先读屏防护，再两腿送入）。
-   * 保留为可选只为兼容现有调用方，集成时删除。
-   */
-  submit?: ComposerSubmit
   onPasteImages?: (files: File[]) => void
   /**
    * 可选的媒体层接线点（图片附件）。缺席时本组件行为与接线前**逐字节一致**：

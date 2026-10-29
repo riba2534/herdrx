@@ -54,14 +54,6 @@ type promptLog struct {
 	entries map[promptKey]*promptEntry
 }
 
-// 每个 API 实例一张表（测试里会有多个实例）。
-var promptLogs sync.Map
-
-func (a *API) promptLog() *promptLog {
-	value, _ := promptLogs.LoadOrStore(a, &promptLog{})
-	return value.(*promptLog)
-}
-
 // begin 登记一次发送；同一个 key 已有记录时返回那条记录与 false。
 func (l *promptLog) begin(key promptKey, now time.Time) (*promptEntry, bool) {
 	l.mu.Lock()
@@ -130,7 +122,7 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log := a.promptLog()
+	log := &a.prompts
 	key := promptKey{user: userFromContext(request.Context()).ID, host: host.ID, pane: paneID, id: input.ClientMsgID}
 	var entry *promptEntry
 	for {

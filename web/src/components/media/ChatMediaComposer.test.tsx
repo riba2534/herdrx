@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, invalidateAuthentication } from '../../lib/api'
 import type { PanePromptInput, PanePromptResult } from '../../types'
-import { clearComposerDrafts, readComposerDraft, readComposerSend, runComposerSend } from '../../lib/composerDrafts'
+import { clearComposerDrafts, readComposerDraft, readComposerSend } from '../../lib/composerDrafts'
 import { ChatMediaComposer } from './ChatMediaComposer'
 
 const user = { id: 'user', email: 'user@example.test', role: 'user', display_name: 'User' }
@@ -47,7 +47,6 @@ function mockPrompt(impl: () => Promise<PanePromptResult> = async () => ({ deliv
 }
 
 function renderComposer(overrides: Overrides = {}) {
-  const submit = overrides.submit ?? vi.fn(async () => {})
   const stageMock: StageMock = vi.fn(async (_host: string, _pane: string, file: File) => ({ path: `/remote/${file.name}` }))
   const stageImage = overrides.stageImage ?? stageMock
   const view = render(<ChatMediaComposer
@@ -57,14 +56,12 @@ function renderComposer(overrides: Overrides = {}) {
     variant="chat"
     onDirectInput={() => {}}
     onLocalInput={() => {}}
-    send={runComposerSend}
     readSend={readComposerSend}
-    submit={submit}
     stageImage={stageImage}
     {...overrides}
   />)
   const wrapper = view.container.querySelector('.chat-media-composer') as HTMLElement
-  return { ...view, wrapper, submit, stageImage, stageMock }
+  return { ...view, wrapper, stageImage, stageMock }
 }
 
 function tray() { return screen.queryByRole('list', { name: /图片附件/ }) }
@@ -223,27 +220,27 @@ describe('ChatMediaComposer 图片附件', () => {
 
   it('切换 pane 时不显示其它 pane 的附件', async () => {
     const stageImage = vi.fn(async (_host: string, _pane: string, file: File) => ({ path: `/remote/${file.name}` }))
-    const { wrapper, rerender, submit } = renderComposer({ stageImage })
+    const { wrapper, rerender } = renderComposer({ stageImage })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
 
     rerender(<ChatMediaComposer
       hostID="host" paneID="p2" visible variant="chat"
       onDirectInput={() => {}} onLocalInput={() => {}}
-      send={runComposerSend} readSend={readComposerSend} submit={submit} stageImage={stageImage}
+      readSend={readComposerSend} stageImage={stageImage}
     />)
     expect(tray()).not.toBeInTheDocument()
   })
 
   it('可见时渲染语音槽位；不可见时整体不渲染', () => {
-    const { rerender, submit, stageImage } = renderComposer({ voice: <button type="button">语音输入</button> })
+    const { rerender, stageImage } = renderComposer({ voice: <button type="button">语音输入</button> })
     expect(screen.getByRole('button', { name: '语音输入' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '添加图片' })).toBeInTheDocument()
 
     rerender(<ChatMediaComposer
       hostID="host" paneID="p1" visible={false} variant="chat"
       onDirectInput={() => {}} onLocalInput={() => {}}
-      send={runComposerSend} readSend={readComposerSend} submit={submit} stageImage={stageImage}
+      readSend={readComposerSend} stageImage={stageImage}
     />)
     expect(screen.queryByRole('button', { name: '添加图片' })).not.toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '对话输入内容' })).not.toBeInTheDocument()

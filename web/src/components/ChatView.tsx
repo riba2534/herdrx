@@ -4,7 +4,7 @@ import { ChatMediaComposer } from './media/ChatMediaComposer'
 import { VoiceInput } from './media/VoiceInput'
 import { Button, StatusDot } from './ui'
 import { api } from '../lib/api'
-import { readComposerDraft, readComposerSend, runComposerSend, writeComposerDraft } from '../lib/composerDrafts'
+import { readComposerDraft, readComposerSend, writeComposerDraft } from '../lib/composerDrafts'
 import { voiceTransport } from '../lib/voiceClient'
 import type { VoiceInputState } from '../lib/chatMediaTypes'
 import { chatFoldSummary, collectToolCalls, foldChatTurn, formatChatTime, groupChatTurns, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
@@ -21,7 +21,6 @@ export type ChatViewProps = {
   client: WorkbenchClient
   compact: boolean
   connected: boolean
-  submit: (paneID: string, text: string, keys: string[]) => Promise<void>
   onSwitchToTerminal: () => void
   /**
    * 终端视图的整页拖放入口（`inject=true`，会把路径打进终端）。对话视图**不再使用**它：
@@ -36,8 +35,8 @@ export type ChatViewProps = {
  * Chat 视图：同一 pane 内的覆盖层。
  *
  * 数据源是 Agent 自己写下的会话日志（经 owner 认证的 HTTP 端点增量读取），**完全不读
- * `pane.read` 终端文本**——屏幕文本没有 role，冒充不了逐轮问答。发送仍走 `props.submit`
- * 单次输入到当前终端，不新建、不恢复任何 Agent 会话。Herdr 集成上报了该 pane 的会话时直接打开它，否则用户必须先显式选择"此终端的会话记录"，
+ * `pane.read` 终端文本**——屏幕文本没有 role，冒充不了逐轮问答。发送经 `api.panePrompt`
+ * 读屏防护后单次输入到当前终端，不新建、不恢复任何 Agent 会话。Herdr 集成上报了该 pane 的会话时直接打开它，否则用户必须先显式选择"此终端的会话记录"，
  * 页面才会显示记录；没有权威数据时只显示可执行的降级说明，绝不编造助手回答。
  *
  * 输入区是 `ChatMediaComposer`（契约 §8.4）：拖拽 / 粘贴 / 选择图片只落占位并走
@@ -45,7 +44,7 @@ export type ChatViewProps = {
  * 语音输入只把**用户自己**的最终转写追加进草稿，没有自动发送，语音模型的回答只在这里
  * 单独展示，绝不写草稿或终端。
  */
-export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToTerminal, onFocus }: ChatViewProps) {
+export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal, onFocus }: ChatViewProps) {
   const paneID = pane.pane_id
   const session = useMemo(() => new StructuredChatSession({ hostID, paneID }), [hostID, paneID])
   const snapshot: StructuredChatSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
@@ -105,7 +104,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
 
   /**
    * 图片 stage-only 上传：`inject=false` 只把图片落到远端并返回路径，**绝不**向终端打字。
-   * 路径只在用户点发送时由媒体层合成进同一条 `submit`。
+   * 路径只在用户点发送时由媒体层合成进同一次发送。
    */
   const stageImage = useCallback(
     (host: string, targetPane: string, file: File) =>
@@ -314,9 +313,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
         onDirectInput={() => {}}
         onLocalInput={() => {}}
-        submit={submit}
         stageImage={stageImage}
-        send={runComposerSend}
         readSend={readComposerSend}
         voice={
           <VoiceInput
