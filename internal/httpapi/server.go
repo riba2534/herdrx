@@ -184,6 +184,7 @@ func (a *API) Handler() http.Handler {
 			a.registerAuthenticatedMeRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
+			router.Route("/agents", a.agentRoutes)
 			router.Route("/ssh-keys", a.sshKeyRoutes)
 			router.Route("/host-folders", a.hostFolderRoutes)
 			router.Route("/tailcat", a.tailcatRoutes)
