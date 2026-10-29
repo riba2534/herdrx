@@ -143,6 +143,39 @@ function emitSnapshot(value: Snapshot = snapshot) {
 
 const savedW2 = { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' as const }
 
+describe('workbench page notifications', () => {
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'serviceWorker')
+    Reflect.deleteProperty(document, 'visibilityState')
+  })
+
+  async function blockAgentInBackground(subscription: object | null) {
+    const showNotification = vi.fn(async () => {})
+    const registration = { showNotification, pushManager: { getSubscription: vi.fn(async () => subscription) } }
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { ready: Promise.resolve(registration), addEventListener() {}, removeEventListener() {} } })
+    vi.stubGlobal('Notification', Object.assign(vi.fn(), { permission: 'granted' }))
+    render(<WorkbenchPage hostID="host"/>)
+    await waitForRestoredWorkbench()
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    act(() => emitSnapshot({ ...snapshot, agents: snapshot.agents.map((agent) => agent.pane_id === 'w1:p1' ? { ...agent, agent_status: 'blocked' as const } : agent) }))
+    await act(async () => { await registration.pushManager.getSubscription.mock.results[0]?.value })
+    await waitFor(() => expect(registration.pushManager.getSubscription).toHaveBeenCalled())
+    return showNotification
+  }
+
+  it('leaves background notifications to the debounced server push when subscribed', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' })
+    await act(async () => { await Promise.resolve() })
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a page notification with the pane deep link when not subscribed', async () => {
+    const showNotification = await blockAgentInBackground(null)
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
+    expect(showNotification).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ data: { url: '/h/host?pane=w1%3Ap1' } }))
+  })
+})
+
 describe('workbench pane deep link', () => {
   afterEach(() => window.history.replaceState(null, '', '/'))
 

@@ -1126,6 +1126,9 @@ async function showAgentNotification(name: string, status: string, hostID: strin
   const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: workbenchPaneURL(hostID, paneID) } }
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready
+    // 已订阅后台推送时由服务端发送同一条通知：它有 60 秒完成延迟和已读判断，
+    // 页内再发一次只会重复（tag 也不同，无法互相替换），所以只在没有订阅时兜底。
+    if (await registration.pushManager?.getSubscription().catch(() => null)) return
     await registration.showNotification(title, options)
   } else {
     new Notification(title, options)
