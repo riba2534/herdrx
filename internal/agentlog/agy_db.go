@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 
 	_ "modernc.org/sqlite"
 )
@@ -21,7 +20,8 @@ import (
 //
 // sqlite 只能按路径名打开文件，而调用方是按 fd 逐段核对过的。为了不让「核对之后把中间目录
 // 换成符号链接」的竞态生效，打开前记下本进程的 fd 表（/proc/self/fd 或 /dev/fd），查询结束、
-// 连接还开着时，要求**这次新增**的 fd 里有一个指向核对过的 inode，否则丢弃结果。长驻进程里
+// 连接还开着时，要求**这次新增**的 fd 里有一个指向核对过的 inode，否则丢弃结果（fd 表的
+// 读法见 agy_fd_unix.go）。长驻进程里
 // 别处已经打开的同 inode fd 不算数；带核对的查询互斥执行，新增的同 inode fd 只可能来自本次
 // sqlite。读不到 fd 表时一律拒绝。
 
@@ -179,31 +179,6 @@ var agyQueryMu sync.Mutex
 
 type agyFD struct {
 	dev, ino uint64
-}
-
-// agyOpenFDs 返回本进程当前的 fd 表：fd 号到它指向的文件。
-func agyOpenFDs() (map[string]agyFD, error) {
-	for _, base := range []string{"/proc/self/fd", "/dev/fd"} {
-		entries, err := os.ReadDir(base)
-		if err != nil {
-			continue
-		}
-		fds := make(map[string]agyFD, len(entries))
-		for _, entry := range entries {
-			if info, err := os.Stat(base + "/" + entry.Name()); err == nil {
-				fds[entry.Name()] = agyFileID(info)
-			}
-		}
-		return fds, nil
-	}
-	return nil, errors.New("fd table unavailable")
-}
-
-func agyFileID(info os.FileInfo) agyFD {
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		return agyFD{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
-	}
-	return agyFD{}
 }
 
 // agyOpenedInode 报告 before 之后新出现的 fd（新号码，或号码被复用后指向别的文件）里是否有

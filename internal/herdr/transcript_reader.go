@@ -188,6 +188,7 @@ def op_read(root_fd, request):
 
 
 def open_fds():
+    # 目录只用来列 fd 号；身份用 fstat 取。macOS 的 /dev/fd 是 fdesc，stat 路径不保证是目标文件。
     for base in ("/proc/self/fd", "/dev/fd"):
         try:
             names = os.listdir(base)
@@ -196,8 +197,8 @@ def open_fds():
         fds = {}
         for name in names:
             try:
-                info = os.stat(base + "/" + name)
-            except OSError:
+                info = os.fstat(int(name))
+            except (OSError, ValueError):
                 continue
             fds[name] = (info.st_dev, info.st_ino)
         return fds
