@@ -273,6 +273,14 @@ CREATE TABLE IF NOT EXISTS user_workbench_sessions (
   client_class TEXT NOT NULL DEFAULT '' CHECK(client_class IN ('','desktop','mobile')),
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS agent_seen (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  host_id TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  pane_id TEXT NOT NULL,
+  state_change_seq INTEGER NOT NULL CHECK(state_change_seq >= 0),
+  seen_at TEXT NOT NULL,
+  PRIMARY KEY(user_id, host_id, pane_id)
+);
 CREATE TABLE IF NOT EXISTS user_workbench_writers (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   writer_id TEXT NOT NULL,

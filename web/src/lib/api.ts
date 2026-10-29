@@ -1,4 +1,4 @@
-import type { HerdrCapabilities, HerdrStartResult, Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession } from '../types'
+import type { HerdrCapabilities, HerdrStartResult, Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession, AgentOverview, PanePromptInput, PanePromptResult, PaneDialog } from '../types'
 
 let csrfToken = ''
 let sessionID = ''
@@ -132,6 +132,15 @@ export const api = {
     request<{ tasks: { id: string; status: string; host_id?: string; error?: string; agent_id?: string }[] }>('/api/tailcat/enrollments'),
   pushConfig: () => request<{ public_key: string }>('/api/push/config'),
   subscribePush: (subscription: PushSubscriptionJSON) => request<{ ok: boolean }>('/api/push/subscriptions', { method: 'POST', body: JSON.stringify(subscription) }),
+  agents: (init?: RequestInit) => request<AgentOverview>('/api/agents', init),
+  markAgentSeen: (host_id: string, pane_id: string, state_change_seq: number) =>
+    request<{ ok: boolean }>('/api/agents/seen', { method: 'POST', body: JSON.stringify({ host_id, pane_id, state_change_seq }) }),
+  panePrompt: (hostID: string, paneID: string, input: PanePromptInput) =>
+    request<PanePromptResult>(`/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}/prompt`, { method: 'POST', body: JSON.stringify(input) }),
+  paneDialog: (hostID: string, paneID: string, init?: RequestInit) =>
+    request<{ dialog: PaneDialog | null }>(`/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}/dialog`, init),
+  answerPaneDialog: (hostID: string, paneID: string, fingerprint: string, option_index: number) =>
+    request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}/dialog/answer`, { method: 'POST', body: JSON.stringify({ fingerprint, option_index }) }),
   pasteImage: (hostID: string, paneID: string, file: File | Blob, inject = true) => {
     const formData = new FormData()
     formData.append('file', file)
