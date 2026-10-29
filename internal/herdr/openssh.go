@@ -82,13 +82,31 @@ func WithStderrTail(err error, source, stderr string) error {
 
 var terminalEscape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])`)
 
-// StderrTail returns the last non-empty stderr line without terminal escapes
-// or control characters, bounded for display in an error message.
+// stderrDiagnostics are OpenSSH lines that name the cause better than the
+// final line, most important first. A changed host key prints a banner and
+// several lines before the generic "Host key verification failed.".
+var stderrDiagnostics = []string{
+	"remote host identification has changed",
+	"host key for", // "Host key for X has changed and you have requested strict checking."
+	"possible dns spoofing",
+	"host key is known for", // "No ED25519 host key is known for X ..."
+	"permission denied",
+	"could not resolve hostname",
+	"connection refused",
+	"connection timed out",
+	"no route to host",
+	"network is unreachable",
+}
+
+// StderrTail returns the stderr line that best explains a failure: the most
+// important known OpenSSH diagnostic, otherwise the last non-empty line. The
+// line has no terminal escapes or control characters and is bounded for
+// display in an error message.
 func StderrTail(stderr string) string {
 	const maxRunes = 240
-	lines := strings.Split(stderr, "\n")
-	for index := len(lines) - 1; index >= 0; index-- {
-		line := terminalEscape.ReplaceAllString(lines[index], "")
+	var lines []string
+	for _, raw := range strings.Split(stderr, "\n") {
+		line := terminalEscape.ReplaceAllString(raw, "")
 		line = strings.Map(func(r rune) rune {
 			if r == '\t' {
 				return ' '
@@ -98,16 +116,28 @@ func StderrTail(stderr string) string {
 			}
 			return r
 		}, line)
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		// OpenSSH frames its warnings with "@" banners.
+		if line = strings.TrimSpace(strings.Trim(line, "@ ")); line != "" {
+			lines = append(lines, line)
 		}
-		if runes := []rune(line); len(runes) > maxRunes {
-			line = string(runes[:maxRunes]) + "…"
-		}
-		return line
 	}
-	return ""
+	if len(lines) == 0 {
+		return ""
+	}
+	chosen := lines[len(lines)-1]
+search:
+	for _, diagnostic := range stderrDiagnostics {
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), diagnostic) {
+				chosen = line
+				break search
+			}
+		}
+	}
+	if runes := []rune(chosen); len(runes) > maxRunes {
+		chosen = string(runes[:maxRunes]) + "…"
+	}
+	return chosen
 }
 
 func openSSHArgs(options SSHOptions, control string) ([]string, error) {

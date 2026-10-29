@@ -34,6 +34,11 @@ func TestDescribeErrorExplainsOfflineCauses(t *testing.T) {
 			}
 		})
 	}
+	// A changed key must never read as a missing fingerprint to add.
+	changed := DescribeError(herdr.WithStderrTail(errors.New("system OpenSSH 连接失败"), "SSH 输出", "@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@\nHost key for remote.example.test has changed and you have requested strict checking.\nHost key verification failed.\n"))
+	if changed.Code != "host_key_changed" || !changed.Permanent || !strings.Contains(changed.Error(), "中间人攻击") || !strings.Contains(changed.Error(), "REMOTE HOST IDENTIFICATION HAS CHANGED") || strings.Contains(changed.Error(), "添加") {
+		t.Fatalf("changed host key: code=%s permanent=%v %v", changed.Code, changed.Permanent, changed)
+	}
 	// The SSH tail line stays visible to the user.
 	detail := DescribeError(herdr.WithStderrTail(errors.New("system OpenSSH 连接失败"), "SSH 输出", "Host key verification failed.\n"))
 	if !strings.Contains(detail.Error(), "SSH 输出：Host key verification failed.") {

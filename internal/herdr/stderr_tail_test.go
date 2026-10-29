@@ -18,6 +18,9 @@ func TestStderrTailKeepsTheLastReadableLine(t *testing.T) {
 		{"escapes", "\x1b[31mherdrx-mux: command not found\x1b[0m\r\n", "herdrx-mux: command not found"},
 		{"osc-and-controls", "\x1b]0;title\x07bad\x00\tline\x7f\n", "bad line"},
 		{"bounded", strings.Repeat("界", 300), strings.Repeat("界", 240) + "…"},
+		{"changed-host-key", "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\nIT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\nOffending ED25519 key in /home/svc/.ssh/known_hosts:3\nHost key for remote.example.test has changed and you have requested strict checking.\nHost key verification failed.\n", "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"},
+		{"unknown-host-key", "No ED25519 host key is known for remote.example.test and you have requested strict checking.\nHost key verification failed.\n", "No ED25519 host key is known for remote.example.test and you have requested strict checking."},
+		{"diagnostic-before-noise", "user@remote.example.test: Permission denied (publickey).\nConnection closed by 192.0.2.1 port 22\n", "user@remote.example.test: Permission denied (publickey)."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := StderrTail(tc.stderr); got != tc.want {
