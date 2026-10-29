@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ChevronUp, Clock3, MessageSquare, RefreshCw, SquareTerminal, TriangleAlert } from 'lucide-react'
+import { ChevronRight, ChevronUp, Clock3, MessageSquare, RefreshCw, SquareTerminal, TriangleAlert } from 'lucide-react'
 import { ChatMediaComposer } from './media/ChatMediaComposer'
 import { VoiceInput } from './media/VoiceInput'
 import { Button, StatusDot } from './ui'
 import { api } from '../lib/api'
-import { readComposerDraft, readComposerSend, runComposerSend, writeComposerDraft } from '../lib/composerDrafts'
+import { readComposerDraft, readComposerSend, writeComposerDraft } from '../lib/composerDrafts'
 import { voiceTransport } from '../lib/voiceClient'
 import type { VoiceInputState } from '../lib/chatMediaTypes'
-import { collectToolCalls, formatChatTime, groupChatTurns, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
+import { chatFoldSummary, collectToolCalls, foldChatTurn, formatChatTime, groupChatTurns, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
 import type { ChatReason, ChatSource } from '../lib/structuredChatTypes'
 import { ChatMessage } from './chat/ChatMessage'
 import { agentStatusLabel, paneDisplayName } from '../lib/labels'
@@ -21,7 +21,6 @@ export type ChatViewProps = {
   client: WorkbenchClient
   compact: boolean
   connected: boolean
-  submit: (paneID: string, text: string, keys: string[]) => Promise<void>
   onSwitchToTerminal: () => void
   /**
    * 终端视图的整页拖放入口（`inject=true`，会把路径打进终端）。对话视图**不再使用**它：
@@ -36,8 +35,8 @@ export type ChatViewProps = {
  * Chat 视图：同一 pane 内的覆盖层。
  *
  * 数据源是 Agent 自己写下的会话日志（经 owner 认证的 HTTP 端点增量读取），**完全不读
- * `pane.read` 终端文本**——屏幕文本没有 role，冒充不了逐轮问答。发送仍走 `props.submit`
- * 单次输入到当前终端，不新建、不恢复任何 Agent 会话。用户必须先显式选择"此终端的会话记录"，
+ * `pane.read` 终端文本**——屏幕文本没有 role，冒充不了逐轮问答。发送经 `api.panePrompt`
+ * 读屏防护后单次输入到当前终端，不新建、不恢复任何 Agent 会话。Herdr 集成上报了该 pane 的会话时直接打开它，否则用户必须先显式选择"此终端的会话记录"，
  * 页面才会显示记录；没有权威数据时只显示可执行的降级说明，绝不编造助手回答。
  *
  * 输入区是 `ChatMediaComposer`（契约 §8.4）：拖拽 / 粘贴 / 选择图片只落占位并走
@@ -45,13 +44,15 @@ export type ChatViewProps = {
  * 语音输入只把**用户自己**的最终转写追加进草稿，没有自动发送，语音模型的回答只在这里
  * 单独展示，绝不写草稿或终端。
  */
-export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToTerminal, onFocus }: ChatViewProps) {
+export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal, onFocus }: ChatViewProps) {
   const paneID = pane.pane_id
   const session = useMemo(() => new StructuredChatSession({ hostID, paneID }), [hostID, paneID])
   const snapshot: StructuredChatSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const [docVisible, setDocVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
   const [atLatest, setAtLatest] = useState(true)
   const [voiceReply, setVoiceReply] = useState('')
+  // 用户展开过的轮次（按 turn key）；轮询合并新记录时保持展开状态。
+  const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<string>>(() => new Set())
   const voiceFinalRef = useRef(false)
   const logRef = useRef<HTMLDivElement>(null)
   const followingRef = useRef(true)
@@ -103,7 +104,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
 
   /**
    * 图片 stage-only 上传：`inject=false` 只把图片落到远端并返回路径，**绝不**向终端打字。
-   * 路径只在用户点发送时由媒体层合成进同一条 `submit`。
+   * 路径只在用户点发送时由媒体层合成进同一次发送。
    */
   const stageImage = useCallback(
     (host: string, targetPane: string, file: File) =>
@@ -131,6 +132,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const { state, error, candidates } = snapshot
   const turns = useMemo(() => groupChatTurns(state.messages), [state.messages])
   const tools = useMemo(() => collectToolCalls(state.messages), [state.messages])
+  const folds = useMemo(() => turns.map(foldChatTurn), [turns])
 
   // pane 变成已识别的 claude / codex 之后，服务端会拒绝 `source=dsh`（snapshot 每次现取）。
   // 这里在开始取数**之前**先放弃显式读取源：作废在途请求并清空选择 / 游标 / 候选，不继续发
@@ -185,6 +187,14 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
   const name = paneDisplayName(pane)
   const status = pane.agent_status || 'unknown'
   const bound = state.session !== undefined
+  const verified = state.binding === 'verified'
+  // 最新一轮还在进行时不折叠：此时最后一条正文还不是最终回答。
+  const lastTurnLive = status === 'working' || status === 'blocked'
+  const toggleTurn = (key: string) => setExpandedTurns((previous) => {
+    const next = new Set(previous)
+    if (!next.delete(key)) next.add(key)
+    return next
+  })
   // 读取源只来自用户在本 pane 的显式选择，绝不从窗口标题、进程名或候选文件名推断。
   const dshSelected = state.source === 'dsh'
   // 只有"没识别出程序"或"识别出的程序不支持"时才提供 DSH 入口；已知的 claude / codex 不给。
@@ -201,6 +211,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
       </span>
       <span className="chat-head-actions">
         {dshSelected && <span className="chat-head-source" data-tooltip="当前读取源：DSH 会话记录（只读，不改变终端里的程序）">DSH</span>}
+        {verified && <span className="chat-head-source chat-head-verified" data-tooltip="Herdr 的 Agent 集成上报了这个终端正在写的会话，已自动打开；可点「重选」改看其它会话">已确认</span>}
         {bound && <span className="chat-head-session" data-tooltip="当前读取的会话记录"><code>{shortSessionID(state.sessionID || '')}</code>{state.agent && <small>{state.agent}</small>}</span>}
         {bound && <Button className="tool-button chat-reselect" aria-label="重新选择会话记录" data-tooltip="回到候选列表，重新选择读取哪一个会话记录" onClick={() => session.reselect()}>重选</Button>}
         {dshSelected && <Button className="tool-button chat-source-reset" aria-label="恢复默认读取源" data-tooltip="停止按 DSH 读取，改回按当前 Agent 写下的记录读取（会清空当前选择）" onClick={() => session.clearReadSource()}>默认源</Button>}
@@ -210,7 +221,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
     </header>
     <p className="chat-notice" role="note">
       <MessageSquare size={13} aria-hidden="true"/>
-      <span>这里的回答来自 Agent 写下的会话记录；输入会发送到<strong>当前终端</strong>（不会新建或恢复会话）。{dshSelected ? '当前按你选择的 DSH 读取源读取，只用于查看，不改变终端里运行的程序。' : ''}{bound ? '所选会话只用于读取，输入不会写入它。' : '请选择此终端的会话记录后再查看逐轮对话。'}</span>
+      <span>这里的回答来自 Agent 写下的会话记录；输入会发送到<strong>当前终端</strong>（不会新建或恢复会话）。{dshSelected ? '当前按你选择的 DSH 读取源读取，只用于查看，不改变终端里运行的程序。' : ''}{verified ? '会话由 Herdr 上报自动匹配，只用于读取。' : bound ? '所选会话只用于读取，输入不会写入它。' : '请选择此终端的会话记录后再查看逐轮对话。'}</span>
     </p>
 
     <div className="chat-log-wrap">
@@ -268,10 +279,17 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
           {/* 受限读取超限：说清楚"读不下"，而不是让下面的空态冒充"这个会话没有记录"。 */}
           {state.reason === 'read_limit_exceeded' && <p className="chat-limit" role="alert">{reasonText('read_limit_exceeded', pane.agent, state.source)}</p>}
           {pane.agent && status === 'working' && <p className="chat-waiting" role="status">Agent 正在工作（{agentStatusLabel(status)}），本轮写盘后会自动出现在下方。</p>}
-          {turns.map((turn) => <article className="chat-turn" key={turn.key}>
-            {turn.user && <div className="chat-turn-user"><ChatMessage record={turn.user} tools={tools}/></div>}
-            {turn.responses.map((record) => <ChatMessage key={record.id} record={record} tools={tools}/>)}
-          </article>)}
+          {turns.map((turn, index) => {
+            const fold = lastTurnLive && index === turns.length - 1 ? null : folds[index]
+            const open = !fold || expandedTurns.has(turn.key)
+            return <article className="chat-turn" key={turn.key}>
+              {turn.user && <div className="chat-turn-user"><ChatMessage record={turn.user} tools={tools}/></div>}
+              {fold && <button type="button" className="chat-fold" aria-expanded={open} onClick={() => toggleTurn(turn.key)}>
+                <ChevronRight size={12} aria-hidden="true"/>{chatFoldSummary(fold)}
+              </button>}
+              {(open ? turn.responses : fold.visible).map((record) => <ChatMessage key={record.id} record={record} tools={tools}/>)}
+            </article>
+          })}
           {state.status === 'empty' && !state.previousCursor && state.reason !== 'read_limit_exceeded' && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
         </>}
       </div>
@@ -295,9 +313,7 @@ export function ChatView({ hostID, pane, compact, connected, submit, onSwitchToT
         placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
         onDirectInput={() => {}}
         onLocalInput={() => {}}
-        submit={submit}
         stageImage={stageImage}
-        send={runComposerSend}
         readSend={readComposerSend}
         voice={
           <VoiceInput

@@ -18,7 +18,6 @@ import { attachTerminalTouch } from '../lib/terminalTouch'
 import { DEFAULT_DISPLAY, type TerminalDisplay } from '../lib/displayPreferences'
 import { isLocalInputTarget } from '../lib/keymap'
 import { paneDisplayName } from '../lib/labels'
-import { composerSubmitParams } from '../lib/composerDrafts'
 import type { PaneViewMode } from '../lib/paneViewMode'
 import type { TerminalControlState, TerminalResizeStatus, WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
@@ -58,7 +57,7 @@ function clipboardBlocked() {
 
 const HISTORY_READ_LINES = 1000
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0 }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0, transformInput }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null, sendKey?: (key: string) => void) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number; transformInput?: (data: string) => string }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -360,6 +359,9 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (top < viewport.scrollTop) viewport.scrollTop = top
     else if (top + cellHeight > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + cellHeight - viewport.clientHeight
   }
+  // 键栏粘滞修饰键只作用于本地 xterm 键入的下一个键；键栏自己的按键在工作台里换算。
+  const transformInputRef = useRef(transformInput)
+  transformInputRef.current = transformInput
   const requestInputRef = useRef<(data: string) => void>(() => {})
   requestInputRef.current = (data: string) => {
     if (inputBlockedRef.current) return
@@ -376,6 +378,23 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       return
     }
     client.sendInput(streamRef.current, data)
+  }
+
+  // Herdr 按键接口（如 Shift+Enter）不经过终端流：硬件按键和键栏粘滞修饰键共用这一处。
+  // 断流或尚未连上时不发，否则会排到还在等待的正文之前；只提示，不排队重放。
+  const sendKeyRef = useRef<(key: string) => void>(() => {})
+  sendKeyRef.current = (key: string) => {
+    // 按实际按键描述（`shift+enter` → `Shift+Enter`），键栏也会经这里发其他组合键。
+    const label = key.split('+').map((part) => part.length <= 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)).join('+')
+    if (inputBlockedRef.current || streamRef.current == null) {
+      setHistoryError(`终端未连接，${label} 未发送，请重连后重试`)
+      return
+    }
+    if (historyRef.current.active) returnToLiveRef.current()
+    revealCursorRef.current()
+    void client.call('pane.send_keys', { pane_id: pane.pane_id, keys: [key] }).catch((error) => {
+      if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : `无法发送 ${label}，请检查连接后重试`)
+    })
   }
 
   returnToLiveRef.current = () => {
@@ -674,13 +693,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       if (event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing) {
         event.preventDefault()
         event.stopPropagation()
-        if (event.type === 'keydown') {
-          if (historyRef.current.active) returnToLiveRef.current()
-          revealCursorRef.current()
-          void client.call('pane.send_keys', { pane_id: pane.pane_id, keys: ['shift+enter'] }).catch((error) => {
-            if (mountedRef.current) setHistoryError(error instanceof Error ? error.message : '无法发送 Shift+Enter，请检查连接后重试')
-          })
-        }
+        if (event.type === 'keydown') sendKeyRef.current('shift+enter')
         return false
       }
       if ((event.ctrlKey || event.metaKey) && (event.key === 'v' || event.key === 'V')) {
@@ -692,7 +705,11 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     writeSessionRef.current = { pending: 0, waiters: [], pumping: false, closed: false }
     fontMeasureRef.current = createFontMeasure(hostRef.current, terminal.options.fontFamily!)
     searchRef.current = search
-    const inputDisposable = terminal.onData((data) => requestInputRef.current(data))
+    const inputDisposable = terminal.onData((data) => {
+      // transformInput 可以把按键改走 Herdr 按键接口，此时返回空串，不再写字节。
+      const next = transformInputRef.current?.(data) ?? data
+      if (next) requestInputRef.current(next)
+    })
     const host = hostRef.current
     const revealCursor = () => revealCursorRef.current()
     // Scroll gestures use the outer viewport and the public terminal APIs.
@@ -724,7 +741,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
 
   useEffect(() => {
     if (!onControlReady) return
-    onControlReady((data) => requestInputRef.current(data))
+    onControlReady((data) => requestInputRef.current(data), (key) => sendKeyRef.current(key))
     return () => onControlReady(null)
   }, [onControlReady])
 
@@ -1229,7 +1246,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       }}/><span className="terminal-search-count" aria-live="polite">{searchResults.count > 0 ? `第 ${searchResults.index + 1}/${searchResults.count} 个` : '无匹配'}</span><button type="submit">下一个</button><button type="button" onClick={(event) => { const form = (event.currentTarget as HTMLButtonElement).form; const query = String(new FormData(form!).get('query') || ''); runSearch(query, 'previous') }}>上一个</button><button type="button" aria-label="关闭搜索" onClick={closeSearch}><X size={14}/></button></Form>}
       {historyActive && <div className="history-navigation" role="toolbar" aria-label="终端历史导航"><Button className="tool-button" onClick={() => returnToLiveRef.current()}>返回实时</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(-Math.max(3, termRef.current?.rows || 24))}>上一屏</Button><Button className="tool-button" onClick={() => scrollHistoryRef.current(Math.max(3, termRef.current?.rows || 24))}>下一屏</Button></div>}
       <div className={`terminal-viewport${textSelectMode ? ' terminal-selecting' : ''}`} ref={viewportRef} tabIndex={overlayMode ? -1 : 0} role="region" aria-label="终端画面，可滚动查看" aria-hidden={overlayMode || undefined}><div className="terminal-host" ref={hostRef}/></div>
-      {chatMode && <ChatView key={`${hostID}:${pane.pane_id}`} hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onSwitchToTerminal={() => onViewModeChange?.('terminal')} onPasteImages={onPasteImages} onFocus={onFocus}/>}
+      {chatMode && <ChatView key={`${hostID}:${pane.pane_id}`} hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} onSwitchToTerminal={() => onViewModeChange?.('terminal')} onPasteImages={onPasteImages} onFocus={onFocus}/>}
       {screenMode && <ScreenView key={`${hostID}:${pane.pane_id}`} client={client} pane={pane} compact={compact} active={active} connected={connected} connectionEpoch={connectionEpoch} theme={theme} onSwitchToTerminal={onViewModeChange ? () => onViewModeChange('terminal') : undefined} onFocus={onFocus}/>}
     </div>
     {copyFallback !== null && <Modal title="复制屏幕文本" onClose={() => setCopyFallback(null)}><p>当前页面无法写入剪贴板，请全选下方文本后手动复制。</p><textarea className="input" readOnly value={copyFallback} rows={8} aria-label="屏幕文本" data-initial-focus onFocus={(event) => event.currentTarget.select()}/><div className="modal-actions"><Button className="button-primary" onClick={() => setCopyFallback(null)}>关闭</Button></div></Modal>}

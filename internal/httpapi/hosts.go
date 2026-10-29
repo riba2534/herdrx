@@ -54,6 +54,9 @@ func (a *API) hostRoutes(router chi.Router) {
 		router.With(a.requireCSRF).Delete("/", a.deleteHost)
 		router.With(a.requireCSRF).Post("/panes/{paneID}/paste-image", a.pasteImage)
 		router.Get("/panes/{paneID}/transcript", a.readTranscript)
+		router.With(a.requireCSRF).Post("/panes/{paneID}/prompt", a.panePrompt)
+		router.Get("/panes/{paneID}/dialog", a.paneDialog)
+		router.With(a.requireCSRF).Post("/panes/{paneID}/dialog/answer", a.answerPaneDialog)
 	})
 }
 

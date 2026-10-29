@@ -37,14 +37,16 @@ type hostPool interface {
 }
 
 type API struct {
-	config             config.Config
-	store              *store.Store
-	vault              *secure.Vault
-	assets             fs.FS
-	bootstrapToken     string
-	logger             *slog.Logger
-	hosts              hostPool
-	push               *push.Service
+	config         config.Config
+	store          *store.Store
+	vault          *secure.Vault
+	assets         fs.FS
+	bootstrapToken string
+	logger         *slog.Logger
+	hosts          hostPool
+	push           *push.Service
+	// prompts deduplicates guarded prompt sends by client_msg_id (prompt.go).
+	prompts            promptLog
 	stopBackground     context.CancelFunc
 	bootstrapMu        sync.Mutex
 	limiter            requestLimiter
@@ -184,6 +186,7 @@ func (a *API) Handler() http.Handler {
 			a.registerAuthenticatedMeRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
+			router.Route("/agents", a.agentRoutes)
 			router.Route("/ssh-keys", a.sshKeyRoutes)
 			router.Route("/host-folders", a.hostFolderRoutes)
 			router.Route("/tailcat", a.tailcatRoutes)

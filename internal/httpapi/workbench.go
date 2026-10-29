@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -102,6 +103,7 @@ type workbenchSession struct {
 	controlV2  bool
 	snapshotMu sync.Mutex
 	snapshot   herdr.Snapshot
+	events     *snapshotEvents
 
 	screenMu     sync.Mutex
 	screens      map[string]*screenWatch
@@ -199,7 +201,7 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 	session := &workbenchSession{
 		api: a, hostID: host.ID, owner: userFromContext(request.Context()).ID,
 		browserID: hello.BrowserInstanceID, endpoint: endpoint, writer: socketWriter,
-		ctx: ctx, access: lease, streams: make(map[uint32]*terminalStream),
+		ctx: ctx, access: lease, streams: make(map[uint32]*terminalStream), events: newSnapshotEvents(),
 		controlV2: hello.Capabilities["terminal_control"] == 1 && hello.Capabilities["terminal_resize_v2"] == 1,
 	}
 	defer session.closeStreams()
@@ -214,7 +216,8 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 		if ctx.Err() == nil {
 			session.invalidateEndpoint()
 		}
-		_ = socketWriter.JSON(ctx, map[string]any{"t": "error", "code": "snapshot_failed", "message": err.Error()})
+		// The code stays snapshot_failed: the page offers to start Herdr for it.
+		_ = socketWriter.JSON(ctx, map[string]any{"t": "error", "code": "snapshot_failed", "message": snapshotFailureMessage(err)})
 		return
 	}
 	_ = socketWriter.JSON(ctx, map[string]any{"t": "conn", "state": "ready", "path": host.Transport})
@@ -239,6 +242,14 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 			session.handleBinary(encoded)
 		}
 	}
+}
+
+// snapshotFailureMessage explains a failed first snapshot with the next step.
+func snapshotFailureMessage(err error) string {
+	if detail := hostruntime.DescribeError(err); detail.Code == "herdr_not_running" {
+		return detail.Error()
+	}
+	return "读取 Herdr 工作区失败，请确认远程主机上的 Herdr 正常运行后点“立即重连”：" + err.Error()
 }
 
 func closeAccessWebSocket(conn *websocket.Conn, ctx context.Context) {
@@ -271,6 +282,7 @@ func (s *workbenchSession) sendSnapshot() error {
 		return err
 	}
 	s.updateGeometrySnapshot(snapshot)
+	s.events.observe(snapshot)
 	s.refreshViewports()
 	return s.writer.JSON(s.ctx, map[string]any{"t": "snapshot", "snapshot": snapshot, "at": time.Now().UTC()})
 }
@@ -281,30 +293,197 @@ func (s *workbenchSession) invalidateEndpoint() {
 	}
 }
 
+// Snapshot refresh: Herdr pushes layout and agent changes over events.subscribe,
+// so a snapshot follows each burst of events. Polling remains the fallback while
+// no stream is live (unsupported Herdr, transport without streams, reconnects),
+// and a slow poll still catches anything a live stream missed.
+var (
+	snapshotPollInterval     = 2 * time.Second
+	snapshotFallbackInterval = 10 * time.Second
+	snapshotEventCoalesce    = 50 * time.Millisecond
+	snapshotEventMaxBackoff  = time.Minute
+)
+
+// snapshotLifecycleEvents change which workspaces, tabs and panes exist, their
+// names, focus or layout. Agent status is only published per pane.
+var snapshotLifecycleEvents = []string{
+	"workspace.created", "workspace.updated", "workspace.renamed", "workspace.closed", "workspace.moved", "workspace.focused",
+	"tab.created", "tab.renamed", "tab.closed", "tab.moved", "tab.focused",
+	"pane.created", "pane.closed", "pane.exited", "pane.updated", "pane.moved", "pane.focused", "pane.agent_detected",
+	"layout.updated",
+}
+
+func snapshotSubscriptions(panes []string) []herdr.EventSubscription {
+	subscriptions := make([]herdr.EventSubscription, 0, len(snapshotLifecycleEvents)+len(panes))
+	for _, kind := range snapshotLifecycleEvents {
+		subscriptions = append(subscriptions, herdr.EventSubscription{"type": kind})
+	}
+	for _, pane := range panes {
+		subscriptions = append(subscriptions, herdr.EventSubscription{"type": "pane.agent_status_changed", "pane_id": pane})
+	}
+	return subscriptions
+}
+
+// snapshotAgentPanes lists the panes whose agent status needs a subscription.
+func snapshotAgentPanes(snapshot herdr.Snapshot) []string {
+	panes := make([]string, 0, len(snapshot.Agents))
+	for _, agent := range snapshot.Agents {
+		if agent.PaneID != "" {
+			panes = append(panes, agent.PaneID)
+		}
+	}
+	slices.Sort(panes)
+	return slices.Compact(panes)
+}
+
+// errResubscribe ends a subscription whose agent panes changed.
+var errResubscribe = errors.New("agent panes changed")
+
+type snapshotEvents struct {
+	live atomic.Bool   // a subscription is streaming
+	kick chan struct{} // something changed: take a snapshot (buffered 1)
+
+	mu    sync.Mutex
+	panes []string                // the agent panes of the current subscription
+	resub context.CancelCauseFunc // ends the current subscription for a new pane set
+}
+
+func newSnapshotEvents() *snapshotEvents {
+	return &snapshotEvents{kick: make(chan struct{}, 1)}
+}
+
+func (e *snapshotEvents) poke() {
+	select {
+	case e.kick <- struct{}{}:
+	default:
+	}
+}
+
+// observe restarts the subscription when a snapshot shows agents in panes it
+// does not cover. It only cancels a context; no network call holds the lock.
+func (e *snapshotEvents) observe(snapshot herdr.Snapshot) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.resub == nil {
+		return
+	}
+	if panes := snapshotAgentPanes(snapshot); !slices.Equal(panes, e.panes) {
+		e.panes = panes
+		e.resub(errResubscribe)
+	}
+}
+
+// watchEvents keeps one subscription open while the workbench is connected and
+// reopens it with exponential backoff after Herdr closes it.
+func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
+	e := s.events
+	backoff := time.Second
+	quickRetries := 0
+	for s.ctx.Err() == nil {
+		s.snapshotMu.Lock()
+		panes := snapshotAgentPanes(s.snapshot)
+		s.snapshotMu.Unlock()
+		ctx, cancel := context.WithCancelCause(s.ctx)
+		e.mu.Lock()
+		e.panes, e.resub = panes, cancel
+		e.mu.Unlock()
+		streamed := false
+		err := endpoint.SubscribeEvents(ctx, snapshotSubscriptions(panes), func(herdr.Event) {
+			// The first event is subscription_started: a snapshot covers the gap before it.
+			streamed = true
+			e.live.Store(true)
+			e.poke()
+		})
+		e.mu.Lock()
+		e.resub = nil
+		e.mu.Unlock()
+		resubscribe := context.Cause(ctx) == errResubscribe
+		cancel(nil)
+		if e.live.Swap(false) {
+			// Polling resumes at full speed; refresh now for anything missed.
+			e.poke()
+		}
+		if s.ctx.Err() != nil || errors.Is(err, herdr.ErrEventsUnsupported) {
+			return
+		}
+		if resubscribe {
+			continue
+		}
+		if streamed {
+			// Herdr accepted this subscription: earlier failures are over. A
+			// stream that keeps ending still waits at least the first backoff.
+			backoff, quickRetries = time.Second, 0
+		}
+		var apiError *herdr.APIError
+		if errors.As(err, &apiError) {
+			switch {
+			case strings.HasSuffix(apiError.Code, "_not_found"):
+				// A pane closed before the request reached Herdr, which rejects the
+				// whole subscription. Refresh the pane set and resubscribe at once;
+				// a few quick attempts bound a pane set that keeps changing.
+				if quickRetries < 3 {
+					quickRetries++
+					_ = s.sendSnapshot()
+					continue
+				}
+			case apiError.Code != "events_lost":
+				// This Herdr does not know the method or a subscription type
+				// (older version): stay on polling.
+				backoff = snapshotEventMaxBackoff
+			}
+		}
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, snapshotEventMaxBackoff)
+	}
+}
+
 func (s *workbenchSession) pollSnapshots() {
+	if endpoint, ok := s.endpoint.(herdr.EventEndpoint); ok {
+		go s.watchEvents(endpoint)
+	}
 	failures := 0
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(snapshotPollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
-		case <-ticker.C:
-			if err := s.sendSnapshot(); err != nil {
-				if s.ctx.Err() != nil {
-					return
-				}
-				failures++
-				_ = s.writer.JSON(s.ctx, map[string]any{"t": "conn", "state": "degraded", "message": err.Error()})
-				if failures >= 3 {
-					s.invalidateEndpoint()
-					closeWebSocket(s.writer.conn, websocket.StatusTryAgainLater, "remote host did not respond")
-					return
-				}
-			} else {
-				failures = 0
+		case <-s.events.kick:
+			// Merge a burst (a split emits several events) into one snapshot.
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-time.After(snapshotEventCoalesce):
 			}
+			select {
+			case <-s.events.kick:
+			default:
+			}
+		case <-timer.C:
 		}
+		if err := s.sendSnapshot(); err != nil {
+			if s.ctx.Err() != nil {
+				return
+			}
+			failures++
+			_ = s.writer.JSON(s.ctx, map[string]any{"t": "conn", "state": "degraded", "message": err.Error()})
+			if failures >= 3 {
+				s.invalidateEndpoint()
+				closeWebSocket(s.writer.conn, websocket.StatusTryAgainLater, "remote host did not respond")
+				return
+			}
+		} else {
+			failures = 0
+		}
+		interval := snapshotPollInterval
+		if s.events.live.Load() {
+			interval = snapshotFallbackInterval
+		}
+		timer.Reset(interval)
 	}
 }
 
@@ -443,56 +622,158 @@ func (s *workbenchSession) openTerminal(message workbenchMessage) {
 	go s.forwardTerminal(stream)
 }
 
-func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
-	scanner := bufio.NewScanner(stream.process.Stdout())
-	scanner.Buffer(make([]byte, 64*1024), 16<<20)
-	closedReason := ""
+// terminalOutputGap merges output frames that arrive within this gap of the
+// last frame sent. Herdr emits up to ~60 frames a second for a busy pane (a
+// build log, a full-screen redraw); the first frame after a quiet spell still
+// goes out at once, so typing echoes are never held back. Input is not gated.
+var terminalOutputGap = 30 * time.Millisecond
+
+const terminalMergedLimit = 8 << 20
+
+// terminalOutput is one Herdr output frame, or several merged into one: the
+// diff bytes are VT output applied in order, so they run on, and a full frame
+// replaces everything before it. The merged frame carries the last sequence.
+type terminalOutput struct {
+	seq           uint64
+	width, height uint16
+	full          bool
+	ansi          []byte
+}
+
+func (o *terminalOutput) merge(next terminalOutput) {
+	if next.full {
+		*o = next
+		return
+	}
+	o.ansi = append(o.ansi, next.ansi...)
+	o.seq, o.width, o.height = next.seq, next.width, next.height
+}
+
+// terminalSource is one parsed line of Herdr's observer stream: an output
+// frame, or the reason the stream closed.
+type terminalSource struct {
+	output terminalOutput
+	closed bool
+	reason string
+}
+
+// readTerminalSource parses observer lines and hands them over one at a time,
+// so a send waiting for browser credit stops reading and keeps backpressure on
+// the observer.
+func readTerminalSource(scanner *bufio.Scanner, sources chan<- terminalSource, stop <-chan struct{}) {
+	defer close(sources)
 	installedFull := false
 	for scanner.Scan() {
-		var source struct {
+		var line struct {
 			Type   string `json:"type"`
 			Seq    uint64 `json:"seq"`
 			Width  uint16 `json:"width"`
 			Height uint16 `json:"height"`
 			Full   bool   `json:"full"`
-			Bytes  string `json:"bytes"`
+			Bytes  []byte `json:"bytes"` // base64, decoded by encoding/json
 			Reason string `json:"reason"`
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &source); err != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
 			continue
 		}
-		if source.Type == "terminal.closed" {
-			closedReason = source.Reason
-			break
-		}
-		if source.Type != "terminal.frame" || source.Width == 0 || source.Height == 0 || (!installedFull && !source.Full) {
+		var source terminalSource
+		switch {
+		case line.Type == "terminal.closed":
+			source = terminalSource{closed: true, reason: line.Reason}
+		case line.Type != "terminal.frame" || line.Width == 0 || line.Height == 0 || (!installedFull && !line.Full) || len(line.Bytes) > 8<<20:
 			continue
+		default:
+			installedFull = true
+			source.output = terminalOutput{seq: line.Seq, width: line.Width, height: line.Height, full: line.Full, ansi: line.Bytes}
 		}
-		ansi, err := base64.StdEncoding.DecodeString(source.Bytes)
-		if err != nil || len(ansi) > 8<<20 {
-			continue
+		select {
+		case sources <- source:
+		case <-stop:
+			return
 		}
-		installedFull = true
-		s.geometryObserved(stream, source.Width, source.Height)
-		flags := byte(0)
-		if source.Full {
-			flags |= terminalwire.FlagFull
-		}
-		frame := terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeFrame, Flags: flags, StreamID: stream.id, Seq: source.Seq, Payload: terminalwire.TerminalPayload(source.Width, source.Height, ansi)})
-		if !stream.reserveCredit(s.ctx, source.Seq, len(frame)) {
-			closedReason = "browser is not consuming terminal output"
-			break
-		}
-		if err := s.writer.Binary(s.ctx, frame); err != nil {
-			break
+		if source.closed {
+			return
 		}
 	}
+}
+
+func (s *workbenchSession) forwardTerminal(stream *terminalStream) {
+	scanner := bufio.NewScanner(stream.process.Stdout())
+	scanner.Buffer(make([]byte, 64*1024), 16<<20)
+	sources := make(chan terminalSource)
+	stopReading := make(chan struct{})
+	go readTerminalSource(scanner, sources, stopReading)
+	closedReason := ""
+	var last time.Time
+	var pending *terminalOutput
+	gate := time.NewTimer(time.Hour)
+	gate.Stop()
+	defer gate.Stop()
+	send := func(output terminalOutput) bool {
+		flags := byte(0)
+		if output.full {
+			flags |= terminalwire.FlagFull
+		}
+		frame := terminalwire.Encode(terminalwire.Frame{Opcode: terminalwire.OpcodeFrame, Flags: flags, StreamID: stream.id, Seq: output.seq, Payload: terminalwire.TerminalPayload(output.width, output.height, output.ansi)})
+		// Credit is reserved for the merged frame's size under its last sequence.
+		if !stream.reserveCredit(s.ctx, output.seq, len(frame)) {
+			closedReason = "browser is not consuming terminal output"
+			return false
+		}
+		last = time.Now()
+		return s.writer.Binary(s.ctx, frame) == nil
+	}
+	flush := func() bool {
+		gate.Stop()
+		if pending == nil {
+			return true
+		}
+		merged := *pending
+		pending = nil
+		return send(merged)
+	}
+read:
+	for {
+		var gateC <-chan time.Time
+		if pending != nil {
+			gateC = gate.C
+		}
+		select {
+		case source, ok := <-sources:
+			if !ok || source.closed {
+				closedReason = source.reason
+				// Output held by the gate still belongs before the close notice.
+				flush()
+				break read
+			}
+			s.geometryObserved(stream, source.output.width, source.output.height)
+			switch {
+			case pending != nil:
+				pending.merge(source.output)
+				if len(pending.ansi) >= terminalMergedLimit && !flush() {
+					break read
+				}
+			case time.Since(last) < terminalOutputGap:
+				pending = &source.output
+				gate.Reset(terminalOutputGap - time.Since(last))
+			case !send(source.output):
+				break read
+			}
+		case <-gateC:
+			if !flush() {
+				break read
+			}
+		}
+	}
+	close(stopReading)
 	// A stalled observer must be detached before waiting for its process. Waiting
 	// first can deadlock on a full output pipe and retain an unused remote client.
 	if stream.input != nil {
 		stream.input.Close()
 	}
 	_ = stream.process.Close()
+	for range sources {
+	}
 	if err := scanner.Err(); err != nil && closedReason == "" {
 		closedReason = err.Error()
 	}

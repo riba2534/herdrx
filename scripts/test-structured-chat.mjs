@@ -388,6 +388,8 @@ async function main() {
   // 注入轮与 thinking 都不渲染。
   await expect(chat.getByText('META-INJECTED-MARKER')).toHaveCount(0)
   await expect(chat.getByText(/THINKING-LEAK-MARKER/)).toHaveCount(0)
+  // 第一轮的正文与工具调用在同一条助手记录里，它就是最终回答，之前没有中间过程，不折叠。
+  await expect(chat.locator('.chat-fold')).toHaveCount(0)
   // 工具结果记录是派生角色 tool，不能变成用户气泡。
   const toolMessages = chat.locator('.chat-message[data-role="tool"]')
   assert.equal(await toolMessages.count(), 1, 'the tool-result record must be re-roled to tool')
@@ -615,8 +617,63 @@ async function main() {
   await dshSwitch.click()
   assert.equal(await spawnCount(), beforeDshOpen, 'leaving DSH view reopened the terminal')
 
+  // 16) Herdr 集成上报了 p1 的会话（agent_session kind=id）：不点候选直接打开，标记 verified；
+  //     「重选」带 manual=1 回到候选列表；证据指向候选之外的会话时退回手选。
+  //     这份会话按真实 Claude 的写法一块一行：中间过程折叠，工作中插入的消息单独标出。
+  const VERIFIED_SESSION_ID = 'eeeeeeee-5555-4555-8555-555555555555'
+  const at = (second) => `2026-09-13T06:00:${String(second).padStart(2, '0')}.000Z`
+  await writeFile(join(sessionDir, `${VERIFIED_SESSION_ID}.jsonl`),
+    line({ type: 'user', uuid: uuid(3000), timestamp: at(0), cwd: CWD, message: { role: 'user', content: '<pasted_content id="p1">补齐 example 测试</pasted_content id="p1">' } })
+    + line({ type: 'assistant', uuid: uuid(3001), timestamp: at(2), cwd: CWD, message: { role: 'assistant', content: [{ type: 'text', text: '先看一下现有测试。' }] } })
+    + line({ type: 'assistant', uuid: uuid(3002), timestamp: at(3), cwd: CWD, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_verified', name: 'Bash', input: { command: 'ls' } }] } })
+    + line({ type: 'user', uuid: uuid(3003), timestamp: at(4), cwd: CWD, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_verified', content: 'a.go' }] } })
+    + line({ type: 'attachment', uuid: uuid(3004), timestamp: at(5), cwd: CWD, attachment: { type: 'queued_command', commandMode: 'prompt', prompt: '顺便看看 README', origin: { kind: 'human' } } })
+    + line({ type: 'assistant', uuid: uuid(3005), timestamp: at(42), cwd: CWD, message: { role: 'assistant', content: [{ type: 'text', text: 'VERIFIED-FINAL 测试已补齐。' }] } }))
+  const verifiedSnapshot = snapshotFixture({ width: 160 })
+  verifiedSnapshot.panes[0].agent_session = { source: 'herdr:claude', agent: 'claude', kind: 'id', value: VERIFIED_SESSION_ID }
+  await writeFile(snapshotPath, JSON.stringify(verifiedSnapshot))
+  const verifiedPage = await api.get(`/api/hosts/${host.id}/panes/p1/transcript`)
+  assert.equal(verifiedPage.status, 200)
+  assert.equal(verifiedPage.body.binding, 'verified')
+  assert.equal(verifiedPage.body.session_id, VERIFIED_SESSION_ID)
+  assert.ok(verifiedPage.body.session && verifiedPage.body.messages.length > 0, 'a verified page must carry its candidate id and records')
+  const manualPage = await api.get(`/api/hosts/${host.id}/panes/p1/transcript?manual=1`)
+  assert.equal(manualPage.body.binding, undefined)
+  assert.deepEqual(manualPage.body.messages, [])
+  const browserSnapshot = await page.evaluate(async (hostID) => (await fetch(`/api/hosts/${hostID}/snapshot`, { credentials: 'same-origin' })).text(), host.id)
+  assert.ok(browserSnapshot.includes('"pane_id"') && !browserSnapshot.includes('agent_session'), 'the browser snapshot must not carry agent_session')
+  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear() })
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.goto(`${base}/h/${host.id}`)
+  const verifiedSwitch = page.getByRole('switch', { name: '对话视图' }).first()
+  await expect(verifiedSwitch).toBeVisible()
+  await verifiedSwitch.click()
+  const verifiedChat = page.getByRole('region', { name: '对话视图' }).first()
+  await expect(verifiedChat.locator('.chat-head-verified')).toHaveText('已确认')
+  await expect(verifiedChat.locator('.chat-message-user').first()).toHaveText(/^补齐 example 测试/)
+  await expect(verifiedChat.locator('.chat-candidate')).toHaveCount(0)
+  const verifiedFold = verifiedChat.locator('.chat-fold')
+  await expect(verifiedFold).toHaveText('工具 1 · 用时 42 秒')
+  await expect(verifiedChat.locator('.chat-message[data-role="tool"]')).toHaveCount(0)
+  await expect(verifiedChat.getByText('VERIFIED-FINAL 测试已补齐。')).toBeVisible()
+  await expect(verifiedChat.locator('.chat-queued')).toHaveText('工作中插入')
+  await screenshot(page, '11-chat-verified-folded')
+  await verifiedFold.click()
+  await expect(verifiedChat.locator('.chat-message[data-role="tool"]')).toHaveCount(1)
+  await expect(verifiedChat.getByText('先看一下现有测试。')).toBeVisible()
+  await screenshot(page, '12-chat-verified-expanded')
+  await verifiedChat.getByRole('button', { name: '重新选择会话记录' }).click()
+  await expect(verifiedChat.locator('.chat-candidate')).toHaveCount(3)
+  await page.waitForTimeout(2500)
+  await expect(verifiedChat.locator('.chat-candidate')).toHaveCount(3)
+  verifiedSnapshot.panes[0].agent_session.value = FOREIGN_SESSION_ID
+  await writeFile(snapshotPath, JSON.stringify(verifiedSnapshot))
+  const foreignEvidence = await api.get(`/api/hosts/${host.id}/panes/p1/transcript`)
+  assert.equal(foreignEvidence.body.binding, undefined, 'evidence outside the candidate set must not bind')
+  assert.deepEqual(foreignEvidence.body.messages, [])
+
   assert.deepEqual(pageErrors, [], 'the page logged uncaught errors')
-  console.log(`structured chat end-to-end passed: candidates=2 rounds=3 paging=${page1.body.messages.length}+ messages, DSH zstd source selection, screenshots in ${artifacts}`)
+  console.log(`structured chat end-to-end passed: candidates=2 rounds=3 paging=${page1.body.messages.length}+ messages, DSH zstd source selection, verified binding, screenshots in ${artifacts}`)
 
   /** 走真实 HTTP（浏览器 cookie + CSRF 由同源请求携带）读一页结构化记录。 */
   async function transcriptAPI(targetPage, hostID) {

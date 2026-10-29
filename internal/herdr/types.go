@@ -63,6 +63,8 @@ type Pane struct {
 	Revision              int64   `json:"revision"`
 	RightClickPassthrough bool    `json:"right_click_passthrough"`
 	Scroll                *Scroll `json:"scroll,omitempty"`
+	// AgentSession 只供服务端核对结构化会话归属，序列化给浏览器时省略（见 MarshalJSON）。
+	AgentSession *AgentSession `json:"agent_session,omitempty"`
 }
 
 type Agent struct {
@@ -75,6 +77,38 @@ type Agent struct {
 	CWD            string `json:"cwd,omitempty"`
 	Focused        bool   `json:"focused"`
 	StateChangeSeq int64  `json:"state_change_seq,omitempty"`
+	// AgentSession 同 Pane.AgentSession：只在服务端使用，不下发浏览器。
+	AgentSession *AgentSession `json:"agent_session,omitempty"`
+}
+
+// AgentSession 是 Herdr 集成上报的 provider 会话引用（Herdr `agent_session`）。
+//
+// Source 形如 `herdr:claude`，由 Herdr 自带的 Agent 集成 hook 上报；Kind 是 `id` 或 `path`。
+// 它只是"这个 pane 正在写哪个会话"的证据，不是路径许可：服务端只用它在自己已按 cwd
+// 核对过的候选里挑出同一份文件，从不按 Value 打开任意路径。
+type AgentSession struct {
+	Source string `json:"source"`
+	Agent  string `json:"agent"`
+	Kind   string `json:"kind"`
+	Value  string `json:"value"`
+}
+
+// Agent 会话引用可能带远端绝对路径，浏览器也用不到它；下发 snapshot 时去掉。
+// 外层同名字段的 JSON 深度更浅，会遮蔽内嵌结构体里的 agent_session。
+func (p Pane) MarshalJSON() ([]byte, error) {
+	type plain Pane
+	return json.Marshal(struct {
+		plain
+		AgentSession *AgentSession `json:"agent_session,omitempty"`
+	}{plain: plain(p)})
+}
+
+func (a Agent) MarshalJSON() ([]byte, error) {
+	type plain Agent
+	return json.Marshal(struct {
+		plain
+		AgentSession *AgentSession `json:"agent_session,omitempty"`
+	}{plain: plain(a)})
 }
 
 type Rect struct {

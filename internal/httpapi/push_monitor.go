@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"github.com/riba2534/herdrx/internal/agentstate"
 	"github.com/riba2534/herdrx/internal/herdr"
 	pushmessage "github.com/riba2534/herdrx/internal/push"
 	"github.com/riba2534/herdrx/internal/store"
@@ -14,10 +17,24 @@ import (
 
 const pushWorkers = 4
 
+// A finished round is announced only after it stayed finished and unread for
+// this long, so a short pause between steps or a glance at the pane stays quiet.
+const pushDoneDelay = 60 * time.Second
+
 type pushPollState struct {
 	mu       sync.Mutex
 	previous map[string]string
+	// seqs holds the last state_change_seq per key, so a whole round finishing
+	// between two polls (same status, new sequence) still counts as a change.
+	seqs     map[string]int64
 	failures map[string]pushFailure
+	// pending holds done rounds waiting for pushDoneDelay; every key is also in previous.
+	pending map[string]pushPendingDone
+	now     func() time.Time
+}
+type pushPendingDone struct {
+	seq int64
+	due time.Time
 }
 type pushFailure struct {
 	attempts int
@@ -36,7 +53,7 @@ func newPushPollState(previous map[string]string) *pushPollState {
 	if previous == nil {
 		previous = make(map[string]string)
 	}
-	return &pushPollState{previous: previous, failures: make(map[string]pushFailure)}
+	return &pushPollState{previous: previous, failures: make(map[string]pushFailure), seqs: make(map[string]int64), pending: make(map[string]pushPendingDone), now: time.Now}
 }
 func pushHostPrefix(host store.Host) string { return host.OwnerID + ":" + host.ID + ":" }
 
@@ -88,6 +105,8 @@ func (a *API) collectPushHosts(ctx context.Context, state *pushPollState) {
 		}
 		if last < 0 || !live[key[:last+1]] {
 			delete(state.previous, key)
+			delete(state.seqs, key)
+			delete(state.pending, key)
 		}
 	}
 	for prefix := range state.failures {
@@ -114,7 +133,7 @@ func (a *API) pollPushUser(ctx context.Context, userID string, subscriptions []s
 // cannot monopolize host snapshot workers. No network operation holds state.mu.
 func (a *API) runPushJobs(ctx context.Context, jobs []pushHostJob, state *pushPollState) {
 	state.mu.Lock()
-	now := time.Now()
+	now := state.now()
 	eligible := jobs[:0]
 	for _, job := range jobs {
 		if !now.Before(state.failures[pushHostPrefix(job.host)].until) {
@@ -209,7 +228,7 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 			state.mu.Lock()
 			failure := state.failures[prefix]
 			failure.attempts = min(failure.attempts+1, 4)
-			failure.until = time.Now().Add(min(time.Duration(1<<failure.attempts)*5*time.Second, time.Minute))
+			failure.until = state.now().Add(min(time.Duration(1<<failure.attempts)*5*time.Second, time.Minute))
 			state.failures[prefix] = failure
 			state.mu.Unlock()
 		}
@@ -218,11 +237,20 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 	if lease.check() != nil {
 		return nil
 	}
+	now := state.now()
+	// Labels are only needed when something is sent, which most polls do not.
+	var describer func(herdr.Agent) (string, string)
+	describe := func(agent herdr.Agent) (string, string) {
+		if describer == nil {
+			describer = pushDescriber(job.host, snapshot)
+		}
+		return describer(agent)
+	}
+	var notifications []pushmessage.Notification
+	var due []herdr.Agent
 	state.mu.Lock()
-	defer state.mu.Unlock()
 	delete(state.failures, prefix)
 	seen := make(map[string]bool)
-	var notifications []pushmessage.Notification
 	for _, agent := range snapshot.Agents {
 		// Bound history independently of the number of transient panes ever seen.
 		if len(seen) >= 8192 {
@@ -231,28 +259,114 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 		key := prefix + agent.PaneID
 		seen[key] = true
 		old, exists := state.previous[key]
+		oldSeq, hasSeq := state.seqs[key]
 		if exists || len(state.previous) < 65536 {
 			state.previous[key] = agent.AgentStatus
+			state.seqs[key] = agent.StateChangeSeq
 		}
-		if !exists || old == agent.AgentStatus || (agent.AgentStatus != "blocked" && agent.AgentStatus != "done") {
-			continue
+		if agent.AgentStatus != "done" {
+			// Working again, blocked or gone idle cancels a waiting done round.
+			delete(state.pending, key)
 		}
-		name := agent.Name
-		if name == "" {
-			name = agent.Agent
+		changed := exists && (old != agent.AgentStatus || (hasSeq && oldSeq != agent.StateChangeSeq))
+		switch {
+		case changed && agent.AgentStatus == "blocked":
+			title, body := describe(agent)
+			notifications = append(notifications, pushNotification(job.host, agent, title+" 需要你", body))
+		case changed && agent.AgentStatus == "done":
+			// A new round, including one that ran and finished between polls, starts its own delay.
+			state.pending[key] = pushPendingDone{seq: agent.StateChangeSeq, due: now.Add(pushDoneDelay)}
+		case agent.AgentStatus == "done":
+			if pending, ok := state.pending[key]; ok && !now.Before(pending.due) {
+				delete(state.pending, key)
+				due = append(due, agent)
+			}
 		}
-		title, body := name+" finished", "Agent 已完成后台工作。"
-		if agent.AgentStatus == "blocked" {
-			title, body = name+" needs attention", "Agent 正在等待你的输入。"
-		}
-		notifications = append(notifications, pushmessage.Notification{Title: title, Body: body, Tag: key, Data: map[string]any{"url": "/h/" + job.host.ID, "host_id": job.host.ID, "pane_id": agent.PaneID}})
 	}
 	for key := range state.previous {
 		if strings.HasPrefix(key, prefix) && !seen[key] {
 			delete(state.previous, key)
+			delete(state.seqs, key)
+			delete(state.pending, key)
 		}
 	}
+	state.mu.Unlock()
+	if len(due) == 0 {
+		return notifications
+	}
+	// Read markers come from the database, so they are checked outside state.mu.
+	markers, err := a.store.AgentSeenForUser(ctx, job.host.OwnerID)
+	if err != nil {
+		// Keep the rounds for the next poll instead of guessing they were unread.
+		state.mu.Lock()
+		for _, agent := range due {
+			key := prefix + agent.PaneID
+			if _, ok := state.pending[key]; !ok && state.previous[key] == "done" {
+				state.pending[key] = pushPendingDone{seq: agent.StateChangeSeq, due: now}
+			}
+		}
+		state.mu.Unlock()
+		return notifications
+	}
+	for _, agent := range due {
+		seenSeq := int64(-1)
+		if marker, ok := markers[store.AgentSeenKey(job.host.ID, agent.PaneID)]; ok {
+			seenSeq = marker.StateChangeSeq
+		}
+		if agentstate.Classify(agent.AgentStatus, agent.StateChangeSeq, seenSeq) != agentstate.UnseenDone {
+			continue
+		}
+		title, body := describe(agent)
+		notifications = append(notifications, pushNotification(job.host, agent, title+" 已完成", body))
+	}
 	return notifications
+}
+
+// pushDescriber returns the agent name and the "<pane title>\n<host> · <workspace> › <tab>"
+// body. Every part is bounded: Web Push payloads are limited to about 4 KiB.
+func pushDescriber(host store.Host, snapshot herdr.Snapshot) func(herdr.Agent) (string, string) {
+	workspaces := make(map[string]string, len(snapshot.Workspaces))
+	for _, workspace := range snapshot.Workspaces {
+		workspaces[workspace.ID] = workspace.Label
+	}
+	tabs := make(map[string]string, len(snapshot.Tabs))
+	for _, tab := range snapshot.Tabs {
+		tabs[tab.ID] = tab.Label
+	}
+	titles := make(map[string]string, len(snapshot.Panes))
+	for _, pane := range snapshot.Panes {
+		titles[pane.ID] = strings.TrimSpace(pane.TerminalTitleStripped)
+	}
+	hostName := pushTruncate(host.Name, 60)
+	return func(agent herdr.Agent) (string, string) {
+		name := pushTruncate(firstNonEmpty(agent.Name, agent.Agent, "Agent"), 60)
+		location := hostName
+		if label := pushTruncate(workspaces[agent.WorkspaceID], 60); label != "" {
+			location += " · " + label
+			if tab := pushTruncate(tabs[agent.TabID], 60); tab != "" {
+				location += " › " + tab
+			}
+		}
+		if title := pushTruncate(titles[agent.PaneID], 120); title != "" {
+			return name, title + "\n" + location
+		}
+		return name, location
+	}
+}
+
+func pushNotification(host store.Host, agent herdr.Agent, title, body string) pushmessage.Notification {
+	return pushmessage.Notification{Title: title, Body: body, Tag: pushHostPrefix(host) + agent.PaneID, Data: map[string]any{
+		"url": "/h/" + url.PathEscape(host.ID) + "?pane=" + url.QueryEscape(agent.PaneID), "host_id": host.ID, "pane_id": agent.PaneID, "status": agent.AgentStatus,
+	}}
+}
+
+func pushTruncate(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:limit-1]) + "…"
 }
 func (a *API) deliverPushHost(ctx context.Context, delivery pushDelivery) {
 	job := delivery.job

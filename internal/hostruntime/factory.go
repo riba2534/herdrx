@@ -271,6 +271,7 @@ func (h *sharedHandle) Call(ctx context.Context, method string, params any) (jso
 	}
 	return value, err
 }
+
 // StartHerdr is available only on transports that can run a remote shell.
 func (h *sharedHandle) StartHerdr(ctx context.Context) (herdr.HerdrStartResult, error) {
 	endpoint, ok := h.entry.endpoint.(interface {
@@ -313,6 +314,17 @@ func (h *sharedHandle) OpenTerminalSocket(ctx context.Context) (net.Conn, error)
 		h.invalidate()
 	}
 	return value, err
+}
+
+// SubscribeEvents forwards the optional event stream. A stream that ends is
+// not a transport failure by itself: Herdr drops slow subscribers and restarts
+// independently, so the snapshot health check decides about invalidation.
+func (h *sharedHandle) SubscribeEvents(ctx context.Context, subscriptions []herdr.EventSubscription, onEvent func(herdr.Event)) error {
+	endpoint, ok := h.entry.endpoint.(herdr.EventEndpoint)
+	if !ok {
+		return herdr.ErrEventsUnsupported
+	}
+	return endpoint.SubscribeEvents(ctx, subscriptions, onEvent)
 }
 
 // Transcript forwards the optional structured-transcript capability through the shared

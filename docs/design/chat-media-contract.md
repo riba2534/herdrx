@@ -189,7 +189,7 @@ herdrx → 浏览器：
 1. **写草稿的只有用户自己的话。** 只有 `transcript`（`final: true`）经
    `appendVoiceTranscript` 追加进当前 pane 草稿，且只调用 `writeComposerDraft`。
 2. **绝不自动发送。** VoiceInput 不存在任何发送路径：不发 `pane.send_input`、不发 `keys`、
-   不调用 `runComposerSend`。发送永远由用户点发送按钮触发。
+   不调用 `runComposerPrompt`。发送永远由用户点发送按钮触发。
 3. **语音模型的回答不是终端 Agent 的话。** `assistantText` 只交给 `onAssistantText` 由调用方
    单独渲染（建议标签"语音助手（非终端 Agent）"），**绝不**写入草稿、聊天记录或终端。
 4. **语音模型不碰终端。** 中继不暴露任何 `pane.*`、`agent.*` 或 `terminal.*` 方法；上游即使
@@ -246,8 +246,8 @@ herdrx → 浏览器：
 | 服务端上限：整体 multipart 25MB、单图 20MB，允许 png/jpeg/webp/gif（按魔数嗅探） | `internal/httpapi/paste.go` |
 | 前端 `api.pasteImage(hostID, paneID, file, inject = true)` | `web/src/lib/api.ts:118` |
 | 前端已有限制 `MAX_IMAGE_SIZE = 20MB`、`clipboardImages`、`ownsImagePaste` | `web/src/lib/imagePaste.ts` |
-| **单次输入接口**：WS `client.call('pane.send_input', composerSubmitParams(paneID, text))`，即 `{pane_id, text, keys:['Enter']}` | `web/src/lib/composerDrafts.ts`、`web/src/lib/workbench.ts:184` |
-| 草稿事务：`writeComposerDraft` 按 session/host/pane 隔离并持久化；`runComposerSend` 整段提交**一次**，仅在 revision 未变时清空草稿；登录失效时 `clearComposerDrafts` | `web/src/lib/composerDrafts.ts` |
+| **单次输入接口**：`api.panePrompt(hostID, paneID, {text, submit:true, client_msg_id})`，服务端读屏防护后两腿送入（`internal/httpapi/prompt.go`） | `web/src/lib/composerDrafts.ts` |
+| 草稿事务：`writeComposerDraft` 按 session/host/pane 隔离并持久化；`runComposerPrompt` 整段提交**一次**，仅在 revision 未变时清空草稿；登录失效时 `clearComposerDrafts` | `web/src/lib/composerDrafts.ts` |
 
 **结论**：`inject=false` 的 stage-only 路径**已经存在且返回远端路径**，不需要新的服务端上传接口；
 图片能力的缺口全在前端（占位、引用合成、仅图片可发）。
@@ -298,11 +298,11 @@ herdrx → 浏览器：
 
 1. `sendNow()`：空草稿判定由 `!value.trim()` 改为 `!value.trim() && !mediaHost?.canSend()`；
    真正发送前 `const composed = mediaHost ? mediaHost.compose(readComposerDraft(hostID, paneID)) : current`，
-   为 `null` 则放弃；否则 `writeComposerDraft(hostID, paneID, composed)` 后照旧 `runComposerSend`。
+   为 `null` 则放弃；否则 `writeComposerDraft(hostID, paneID, composed)` 后照旧 `runComposerPrompt`。
 2. 发送按钮 `disabled`：`empty` 改为 `empty && !mediaHost?.canSend()`。
 3. `onPaste`：有 `mediaHost` 时把图片文件交给 `mediaHost.onFiles`，否则沿用 `onPasteImages`。
-4. 渲染 `mediaHost.tray` 于 textarea 上方；`runComposerSend` 结束后调用
-   `mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status)`（需要把 `void runComposerSend(...)`
+4. 渲染 `mediaHost.tray` 于 textarea 上方；`runComposerPrompt` 结束后调用
+   `mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status)`（需要把 `void runComposerPrompt(...)`
    改成 `.then(...)` 链，一行）。
 
 ### 8.4 `web/src/components/ChatView.tsx`
@@ -316,7 +316,7 @@ herdrx → 浏览器：
 - `pasteImagesTo` / `pasteImages` 现有实现是 `api.pasteImage(..., true)`（**会往终端打字**）。
   附件路径**不得**复用它；`ChatMediaComposer` 用自己注入的 `stageImage`（`inject=false`）。
   若保留旧的整页拖放入口，两条路径必须**分开命名**，避免误用。
-- `submit` 与 `onPasteImages` 的既有传参保持不变。
+- `onPasteImages` 的既有传参保持不变；发送不再经调用方传入的 `submit`，统一走 `runComposerPrompt`。
 
 ---
 

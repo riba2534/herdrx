@@ -5,7 +5,7 @@ import { WorkbenchClient, type TerminalControlState } from '../lib/workbench'
 import type { Pane } from '../types'
 import { TerminalPane } from './TerminalPane'
 
-const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], focuses: 0, searches: [] as Array<{ dir: string; query: string }>, last: null as { options: { disableStdin: boolean; macOptionIsMeta?: boolean; screenReaderMode?: boolean; minimumContrastRatio?: number }, cols: number, rows: number, focus: () => void } | null }))
+const terminalHarness = vi.hoisted(() => ({ linkHandler: null as null | ((event: MouseEvent, uri: string) => void), keyHandler: null as null | ((event: KeyboardEvent) => boolean), dataHandler: null as null | ((data: string) => void), scrolls: [] as number[], fontWrites: [] as number[], instances: 0, resets: 0, writes: [] as Array<string | Uint8Array>, deferWrites: false, writeCallbacks: [] as Array<() => void>, scrollbackDuringWrite: [] as number[], disposals: 0, disposalsWhileWrites: [] as number[], focuses: 0, searches: [] as Array<{ dir: string; query: string }>, last: null as { options: { disableStdin: boolean; macOptionIsMeta?: boolean; screenReaderMode?: boolean; minimumContrastRatio?: number }, cols: number, rows: number, focus: () => void } | null }))
 
 vi.mock('@xterm/xterm', () => {
   return {
@@ -66,7 +66,8 @@ vi.mock('@xterm/xterm', () => {
       selectAll() { this.selection = 'all' }
       clearSelection() { this.selection = '' }
       attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) { terminalHarness.keyHandler = handler }
-      onData() {
+      onData(handler: (data: string) => void) {
+        terminalHarness.dataHandler = handler
         return { dispose: () => {} }
       }
     },
@@ -227,6 +228,45 @@ describe('TerminalPane paste interception', () => {
     expect(screen.getByRole('button', { name: '聚焦终端输入' })).toBeVisible()
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
+  })
+  it('passes typed input through transformInput and sends nothing when it returns an empty string', async () => {
+    const client = new WorkbenchClient('hst_test')
+    vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    // 键栏粘滞修饰键的替身：a 变成 Ctrl+A，回车改走 Herdr 按键接口（返回空串）。
+    const transformInput = (data: string) => data === 'a' ? '\x01' : data === '\r' ? '' : data
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} transformInput={transformInput}/>)
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    act(() => { terminalHarness.dataHandler!('a'); terminalHarness.dataHandler!('\r'); terminalHarness.dataHandler!('b') })
+    expect(input.mock.calls).toEqual([[7, '\x01'], [7, 'b']])
+  })
+  it('sends keybar Herdr keys through the hardware Shift+Enter path, only on a live stream', async () => {
+    const client = new WorkbenchClient('hst_test')
+    let resolveOpen: (id: number) => void = () => {}
+    vi.spyOn(client, 'openTerminal').mockImplementation(() => new Promise<number>((resolve) => { resolveOpen = resolve }))
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const call = vi.spyOn(client, 'call').mockResolvedValue({})
+    let sendKey: ((key: string) => void) | undefined
+    render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} onControlReady={(_send, key) => { sendKey = key }} theme={{}} enhancedContrast={false}/>)
+    await waitFor(() => expect(sendKey).toBeDefined())
+    // 终端流还没连上：不发送，避免排到待发正文之前，并提示用户。
+    act(() => sendKey!('shift+enter'))
+    expect(call).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Shift+Enter 未发送')
+    // 其他按键的提示按实际按键描述。
+    act(() => sendKey!('ctrl+c'))
+    expect(screen.getByRole('alert')).toHaveTextContent('Ctrl+C 未发送')
+    await act(async () => { resolveOpen(7) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    act(() => sendKey!('shift+enter'))
+    expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: mockPane.pane_id, keys: ['shift+enter'] })
+    // 流失败后同样不发送。
+    act(() => frames.mock.calls[0][2]!('stream lost'))
+    call.mockClear()
+    act(() => sendKey!('shift+enter'))
+    expect(call).not.toHaveBeenCalled()
   })
   it('keeps xterm stdin disabled in composer mode so local typing is not sent as keystrokes', async () => {
     const client = new WorkbenchClient('hst_test')
@@ -1311,7 +1351,10 @@ describe('TerminalPane chat view', () => {
     fireEvent.click(await within(chatRegion).findByRole('button', { name: /aaaa1111/ }))
     expect(await within(chatRegion).findByText('把 header 高度改成 44')).toBeInTheDocument()
     expect(within(chatRegion).getByText('已改成 44 并补了测试。')).toBeInTheDocument()
-    // 工具调用与工具结果以真实工具名 + call id 折叠呈现，且工具结果不会被当成用户问题。
+    // 已完成的一轮把中间过程收成一行；展开后工具调用与结果以真实工具名 + call id 呈现，
+    // 且工具结果不会被当成用户问题。
+    expect(within(chatRegion).queryByText('Edit')).toBeNull()
+    fireEvent.click(within(chatRegion).getByRole('button', { name: '工具 1' }))
     expect(within(chatRegion).getAllByText('Edit')).toHaveLength(2)
     expect(within(chatRegion).getAllByText('call-1')).toHaveLength(2)
     expect(within(chatRegion).getByText('updated')).toBeInTheDocument()

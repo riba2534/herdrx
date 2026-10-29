@@ -15,6 +15,8 @@ assert.equal(manifest.id, '/'); assert.equal(manifest.scope, '/'); assert.equal(
 assert.equal(manifest.orientation, 'any')
 assert.ok(manifest.icons.some(icon => icon.sizes === '192x192' && icon.purpose === 'maskable'))
 for (const icon of manifest.icons) assert.ok((await readFile(join(dist, icon.src))).length > 0)
+assert.deepEqual(manifest.shortcuts.map(shortcut => [shortcut.name, shortcut.url]), [['Agent 总览', '/agents'], ['主机列表', '/']])
+for (const icon of manifest.shortcuts.flatMap(shortcut => shortcut.icons)) assert.ok((await readFile(join(dist, icon.src))).length > 0)
 const html = await readFile(join(dist, 'index.html'), 'utf8')
 assert.ok(html.includes('apple-mobile-web-app-title'), 'PWA title meta')
 assert.ok(html.includes('interactive-widget=resizes-content'), 'viewport keyboard widget')

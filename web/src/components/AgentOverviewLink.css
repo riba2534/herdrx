@@ -1,0 +1,13 @@
+.agent-overview-link { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 8px; border-radius: 6px; color: var(--ui-muted); text-decoration: none; font-size: 14px; }
+.agent-overview-link:hover { background: var(--ui-raised); color: var(--ui-text); }
+.agent-overview-link:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.agent-overview-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--ui-danger); color: var(--ui-background); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.agent-overview-compact { padding: 0 8px; min-height: 26px; }
+.agent-overview-compact .agent-overview-count { position: absolute; top: -4px; right: -4px; }
+@media (max-width: 640px) {
+  .agent-overview-link .nav-action-label { display: none; }
+  .agent-overview-link:not(.agent-overview-compact) .agent-overview-count { position: absolute; top: 0; right: 0; }
+}
+@media (max-width: 767px), (pointer: coarse) {
+  .agent-overview-link:not(.agent-overview-compact) { min-width: 44px; min-height: 44px; justify-content: center; }
+}

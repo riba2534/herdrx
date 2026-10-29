@@ -39,6 +39,7 @@ export function ChatMessage({ record, tools }: { record: ChatRecord; tools?: Cha
   const copyText = recordCopyText(record)
   if (record.role === 'user') {
     return <article className="chat-message chat-message-user" data-role="user" data-record-id={record.id}>
+      {record.queued && <small className="chat-queued">工作中插入</small>}
       <p className="chat-bubble">{recordText(record)}</p>
       <MessageCopy text={copyText} label="复制这条用户消息"/>
     </article>

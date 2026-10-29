@@ -175,7 +175,7 @@ func fakeHerdrSocket(t *testing.T) *atomic.Int32 {
 				if json.NewDecoder(conn).Decode(&request) != nil {
 					return
 				}
-				if request.Method != "session.snapshot" && request.Method != "ping" && request.Method != "pane.read" && request.Method != "pane.process_info" {
+				if request.Method != "session.snapshot" && request.Method != "ping" && request.Method != "pane.read" && request.Method != "pane.process_info" && request.Method != "events.subscribe" {
 					calls.Add(1)
 				}
 				_ = json.NewEncoder(conn).Encode(map[string]any{"id": "herdrx", "result": map[string]any{"type": "ok", "snapshot": map[string]any{"version": "0.9.1", "protocol": 22, "panes": []map[string]any{{"pane_id": "p_fixture", "terminal_id": "term_fixture"}}}}})

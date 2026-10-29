@@ -117,6 +117,8 @@ export type Agent = {
   tab_id: string
   cwd?: string
   focused: boolean
+  // Omitted by Herdr when 0.
+  state_change_seq?: number
 }
 
 export type Rect = { x: number; y: number; width: number; height: number }
@@ -148,3 +150,34 @@ export type AdminUser = User & { disabled: boolean; created_at: string; active_s
 export type LoginSession = { id: string; user_id: string; user_agent: string; remote_ip: string; created_at: string; expires_at: string }
 export type Invite = { id: string; created_by: string; created_at: string; expires_at: string; used_by?: string; used_at?: string; revoked_by?: string; revoked_at?: string; status: 'active' | 'used' | 'expired' | 'revoked' }
 export type AuditEntry = { id: number; user_id: string; action: string; target_type: string; target_id: string; remote_ip: string; created_at: string; details: Record<string, unknown> }
+
+// Agent overview (GET /api/agents). Attention comes from Herdr status plus the
+// user's Web read marker; see internal/agentstate.
+export type AgentAttention = 'needs_you' | 'unseen_done' | 'working' | 'seen' | 'unknown'
+export type AgentOverviewItem = {
+  host_id: string
+  host_name: string
+  pane_id: string
+  workspace_id: string
+  tab_id: string
+  workspace_label?: string
+  tab_label?: string
+  agent: string
+  name?: string
+  title?: string
+  agent_status: AgentStatus
+  attention: AgentAttention
+  state_change_seq: number
+  cwd?: string
+}
+export type AgentOverviewHost = { host_id: string; host_name: string; status: 'ok' | 'error'; error?: string }
+export type AgentOverview = { agents: AgentOverviewItem[]; hosts: AgentOverviewHost[]; attention_count: number }
+
+// Guarded prompt delivery (POST /api/hosts/{id}/panes/{pane}/prompt).
+export type PanePromptInput = { text: string; submit: boolean; client_msg_id: string; force?: boolean }
+export type PanePromptResult = { delivered: 'sent' | 'duplicate' }
+
+// A dialog parsed from the pane screen (GET .../dialog). fingerprint pins the
+// exact dialog the user saw; answers against another dialog are rejected.
+export type PaneDialogOption = { index: number; label: string; selected: boolean }
+export type PaneDialog = { fingerprint: string; title?: string; lines: string[]; options: PaneDialogOption[] }

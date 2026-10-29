@@ -16,5 +16,9 @@
     { "src": "/brand/v2/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
     { "src": "/brand/v2/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "/brand/v2/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Agent 总览", "short_name": "Agent", "description": "查看所有主机上需要你处理的 Agent", "url": "/agents", "icons": [{ "src": "/brand/v2/icon-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "主机列表", "short_name": "主机", "description": "打开主机列表", "url": "/", "icons": [{ "src": "/brand/v2/icon-192.png", "sizes": "192x192", "type": "image/png" }] }
   ]
 }

@@ -3,7 +3,7 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
@@ -12,16 +12,19 @@ import { PaneViewToggle } from '../components/PaneViewToggle'
 import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems } from '../lib/keymap'
 import { ratioFromPointer, resizeModeBarItems, RESIZE_DIRECTIONS, splitHandleStyle, splitPathFromId, type LayoutSplit } from '../lib/layoutSplit'
 import { Composer } from '../components/Composer'
+import { DialogCard } from '../components/DialogCard'
 import { StartHerdrButton, type HerdrStartFeedback } from '../components/StartHerdr'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
+import { AgentOverviewLink } from '../components/AgentOverviewLink'
+import { useAgentSeen } from '../lib/useAgentSeen'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
-import { composerSubmitParams } from '../lib/composerDrafts'
-import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, pasteTextTooLarge, sanitizePasteText, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS } from '../lib/terminalKeys'
+import { applyModifiers, hasModifiers, herdrKeyFor, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
+import { usePaneDeepLink, workbenchPaneURL } from '../lib/workbenchDeepLink'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel, workspaceSwitcherDetail } from '../lib/labels'
 import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
@@ -164,14 +167,18 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
   const { gitWorkspaces, workspaceBranches, refreshWorkspaceBranches } = useWorkspaceBranches(client, connection, snapshot?.workspaces || [])
   const previousStatuses = useRef(new Map<string, string>())
+  const pushStatusRef = useRef<PushStatusCache['current']>(null)
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
   // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
+  // 当前 pane 的 Herdr 按键通道，与硬件 Shift+Enter 同一段逻辑（断流不发、先回到实时画面）。
+  const terminalKeyRef = useRef<((key: string) => void) | null>(null)
   const repeatTimersRef = useRef<{ delay: number; tick: number } | null>(null)
-  const handleControlReady = useCallback((send: ((data: string) => void) | null) => {
+  const handleControlReady = useCallback((send: ((data: string) => void) | null, sendKey?: (key: string) => void) => {
     // `send` 是函数，直接塞进 state 会被 React 当成 updater 调用，所以 state 里存一层包装；
     // ref 存的必须是 `send` 本身，长按重复和键盘激活都直接调用它。
     terminalInputRef.current = send
+    terminalKeyRef.current = send ? sendKey ?? null : null
     setTerminalInput(send ? () => send : null)
   }, [])
   const stopKeyRepeat = useCallback(() => {
@@ -181,12 +188,28 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     window.clearInterval(timers.tick)
     repeatTimersRef.current = null
   }, [])
+  // 粘滞修饰键：按下后作用于下一个键（键栏或软键盘），生效后释放。ref 供定时器和 xterm 回调读取。
+  const [stickyModifiers, setStickyModifiers] = useState<StickyModifiers>(NO_MODIFIERS)
+  const stickyModifiersRef = useRef(NO_MODIFIERS)
+  const updateStickyModifiers = useCallback((next: StickyModifiers) => { stickyModifiersRef.current = next; setStickyModifiers(next) }, [])
+  // 返回要写入终端的字节；Shift+Enter 与硬件一样走 Herdr 按键接口，此时返回空串。
+  const consumeModifiers = useCallback((data: string) => {
+    const modifiers = stickyModifiersRef.current
+    if (!hasModifiers(modifiers) || !isModifiableKey(data)) return data
+    updateStickyModifiers(NO_MODIFIERS)
+    const herdrKey = herdrKeyFor(data, modifiers)
+    if (!herdrKey) return applyModifiers(data, modifiers)
+    terminalKeyRef.current?.(herdrKey)
+    return ''
+  }, [updateStickyModifiers])
   // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
-  const repeatOnHold = (data: string) => ({
+  const repeatOnHold = (key: string) => ({
     onPointerDown: () => {
       const send = terminalInputRef.current
       if (!send) return
       stopKeyRepeat()
+      // 长按期间连发的是带修饰的同一个键，例如按住 Ctrl+← 连续按词左移。
+      const data = consumeModifiers(key)
       send(data)
       const delay = window.setTimeout(() => {
         const tick = window.setInterval(() => terminalInputRef.current?.(data), KEY_REPEAT_INTERVAL_MS)
@@ -202,7 +225,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
-      terminalInputRef.current?.(data)
+      terminalInputRef.current?.(consumeModifiers(key))
     },
   })
   useEffect(() => stopKeyRepeat, [stopKeyRepeat])
@@ -359,7 +382,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       for (const agent of nextSnapshot.agents) {
         const previous = previousStatuses.current.get(agent.pane_id)
         if (previous && previous !== agent.agent_status && (agent.agent_status === 'blocked' || agent.agent_status === 'done') && document.visibilityState !== 'visible') {
-          void showAgentNotification(agent.name || agent.agent, agent.agent_status, hostID, agent.pane_id)
+          void showAgentNotification(agent.name || agent.agent, agent.agent_status, hostID, agent.pane_id, pushStatusRef)
         }
         previousStatuses.current.set(agent.pane_id, agent.agent_status)
       }
@@ -467,6 +490,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
   }, [snapshot, workspaceID, tabID, paneID, restore])
+  // 深链与通知点名的 pane 算作用户选择，上次位置的恢复随之让位。
+  usePaneDeepLink(snapshot, (target) => {
+    userPickedLocation.current = true
+    setWorkspaceID(target.workspaceID)
+    setTabID(target.tabID)
+    setPaneID(target.paneID)
+  }, () => setNotice({ tone: 'warn', text: '该 Agent 所在的 pane 已关闭' }))
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -872,6 +902,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   // shows only the selected pane, across the whole tab, as a phone always does.
   const zoomed = !mobile && Boolean(layout?.zoomed)
   const visiblePanes = mobile || zoomed ? panes?.filter((pane) => pane.pane_id === paneID) : panes
+  useAgentSeen(hostID, visiblePanes?.map((pane) => pane.pane_id), snapshot?.agents)
   // Take over the pane Herdr zooms, also when its zoom moves to another pane;
   // picking a pane afterwards stays local, like every other selection here.
   const zoomTarget = layout?.zoomed ? layout.focused_pane_id : ''
@@ -936,6 +967,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return next
       })}><Keyboard size={18}/></Button>
       <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
+      <AgentOverviewLink compact className="tool-button"/>
       <Button className="tool-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={18}/></Button>
     </header> : <header className="hostbar" aria-label="主机导航">
       <button className="hostbar-home" aria-label="返回主机列表" data-tooltip="管理主机" onClick={() => navigate('/')}><BrandIcon/><span>herdrx</span></button>
@@ -949,6 +981,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       </nav>
       <Button className="tool-button" aria-label="重命名当前主机" data-tooltip="重命名当前主机" disabled={!host} onClick={() => { if (host) openPrompt({ title: '重命名主机', label: '主机名称', value: host.name, submitLabel: '保存名称', onSubmit: async (name) => { const result = await api.renameHost(hostID, name); setHost(result.host); setAvailableHosts((current) => current.map((item) => item.id === hostID ? result.host : item)) } }) }}><Pencil size={13}/></Button>
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostConnectionText(connection, host?.transport, hostListError)}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => client.retryNow()}><RefreshCw size={13}/></Button></div>
+      <AgentOverviewLink compact className="hostbar-agents"/>
     </header>}
     {mobile && (panes?.length || 0) > 1 && <nav className="mobile-pane-chips" aria-label="切换终端">{panes!.map((pane) => <button type="button" key={pane.pane_id} className={`mobile-pane-chip${pane.pane_id === paneID ? ' mobile-pane-chip-active' : ''}`} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); afterSelectLocation() }}><StatusDot status={pane.agent_status || 'unknown'}/>{paneDisplayName(pane)}</button>)}</nav>}
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>
@@ -987,7 +1020,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           // picked here keeps its split size.
           const sourceRect = zoomed && pane.pane_id === layout?.focused_pane_id ? layout.area : layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
-            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} hostID={hostID} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} connected={connection === 'ready'} viewMode={paneModeFor(pane.pane_id)} onViewModeChange={(mode) => togglePaneMode(pane.pane_id, mode)} onPasteImages={(files) => void pasteImagesTo(pane.pane_id, files)} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} onDisplayChange={updateDisplay} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput} keyboardInset={keyboardInset}/>
+            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} hostID={hostID} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} connected={connection === 'ready'} viewMode={paneModeFor(pane.pane_id)} onViewModeChange={(mode) => togglePaneMode(pane.pane_id, mode)} onPasteImages={(files) => void pasteImagesTo(pane.pane_id, files)} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} onDisplayChange={updateDisplay} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput} keyboardInset={keyboardInset} transformInput={touchKeys && pane.pane_id === paneID ? consumeModifiers : undefined}/>
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
@@ -998,10 +1031,15 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {notice && !actionError && !switcherOpen && <div className={`action-toast action-toast-${notice.tone}`} role="status"><span>{notice.text}</span><button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={14}/></button></div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
+      {/* 当前 pane 的 Agent 在等选择时，浮出对话框答题卡片（认不出的对话框不出卡片）。 */}
+      {snapshot?.panes.find((pane) => pane.pane_id === paneID)?.agent_status === 'blocked' && connection === 'ready' && <div className="workbench-dialog-card"><DialogCard key={`${hostID}\n${paneID}`} primary hostID={hostID} paneID={paneID}/></div>}
       {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
-      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
+      {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
-        {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <button key={key.id} aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(key.bytes)} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>)}
+        {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <Fragment key={key.id}>
+          {key.id === 'ctrlC' && STICKY_MODIFIER_KEYS.map((modifier) => <button key={modifier.id} className={stickyModifiers[modifier.id] ? 'key-active' : undefined} aria-label={modifier.aria} aria-pressed={stickyModifiers[modifier.id]} disabled={!terminalInput} onClick={() => updateStickyModifiers({ ...stickyModifiersRef.current, [modifier.id]: !stickyModifiersRef.current[modifier.id] })}>{modifier.label}</button>)}
+          <button aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => { const data = consumeModifiers(key.bytes); if (data) terminalInput?.(data) }} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>
+        </Fragment>)}
         <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button>
       </div>}
       </div>}
@@ -1017,7 +1055,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SwitcherGroup title="操作">{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{paneID && <button aria-pressed={paneModeFor(paneID) === 'screen'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'screen' ? 'terminal' : 'screen'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'screen' ? <SquareTerminal size={16}/> : <ScrollText size={16}/>}<span><strong>{paneModeFor(paneID) === 'screen' ? '切换到终端视图' : '切换到画面视图'}</strong><small>{paneModeFor(paneID) === 'screen' ? '回到完整终端' : '按屏幕宽度重排终端文字，不改远端尺寸'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
-    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
+    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => { setNotificationPermission(await enablePushNotifications()); pushStatusRef.current = null }}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {helpOpen && <Modal title="快捷键" className="keymap-modal" closeLabel="关闭快捷键" onClose={() => setHelpOpen(false)}><div className="keymap-help">{keymapHelpGroups().map((group) => <section key={group.id} className="keymap-group"><h3>{group.title}</h3><ul>{group.entries.map((entry) => <li key={entry.chord} className={entry.implemented ? undefined : 'keymap-unimplemented'}><kbd>{entry.chord}</kbd><span>{entry.label}</span></li>)}</ul></section>)}</div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenuLabel(contextMenu.target.kind)} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
@@ -1085,16 +1123,34 @@ function paneStyle(layout: Layout, paneID: string) {
   }
 }
 
-async function showAgentNotification(name: string, status: string, hostID: string, paneID: string) {
+async function showAgentNotification(name: string, status: string, hostID: string, paneID: string, pushStatus: PushStatusCache) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return
   const title = agentNotificationTitle(name, status)
-  const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: `/h/${hostID}` } }
+  const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: workbenchPaneURL(hostID, paneID) } }
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready
+    // 服务端确认本浏览器的订阅仍属于当前用户时，由推送发同一条通知（有 60 秒完成延迟和
+    // 已读判断），页内再发只会重复；换了用户、订阅已过期或被删除时页面自己兜底。
+    if (await pushDeliversForThisUser(registration, pushStatus)) return
     await registration.showNotification(title, options)
   } else {
     new Notification(title, options)
   }
+}
+
+// 订阅状态按 endpoint 缓存 60 秒；读取失败当作未订阅，宁可重复也不漏通知。缓存属于
+// 工作台实例，换登录会重新挂载工作台，不会把上一个用户的结果带过去。
+const PUSH_STATUS_TTL_MS = 60_000
+type PushStatusCache = { current: { endpoint: string; subscribed: boolean; at: number } | null }
+async function pushDeliversForThisUser(registration: ServiceWorkerRegistration, cache: PushStatusCache) {
+  const subscription = await registration.pushManager?.getSubscription().catch(() => null)
+  if (!subscription) return false
+  const { endpoint } = subscription
+  const cached = cache.current
+  if (cached?.endpoint === endpoint && Date.now() - cached.at < PUSH_STATUS_TTL_MS) return cached.subscribed
+  const subscribed = await api.pushSubscriptionStatus(endpoint).then((result) => result.subscribed === true, () => false)
+  cache.current = { endpoint, subscribed, at: Date.now() }
+  return subscribed
 }
 
 async function enablePushNotifications(): Promise<NotificationPermission> {
