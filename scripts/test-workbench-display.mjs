@@ -400,7 +400,10 @@ try {
         await restored.page.reload()
         await expect(restored.page.locator('.terminal-pane').first()).toHaveAttribute('data-terminal-status', '可输入')
         assert.equal(restored.messages.slice(beforeReload).some(m => m.responsive || m.resize_remote || m.op === 4 || m.t === 'terminal.control.acquire' || m.t === 'terminal.resize_v2'), false, 'reload silently resumed remote resize')
-        assert.deepEqual(restored.errors, [])
+        // The reload aborts the Agent overview badge poll; WebKit reports that
+        // same-origin abort as a pageerror "due to access control checks" (see
+        // test-terminal-control.mjs). Other errors still fail.
+        assert.deepEqual(restored.errors.filter((message) => name !== 'webkit' || !/\/api\/agents due to access control checks\.?$/.test(message)), [])
         await restored.context.close()
       }
       const labels = structuredClone(snapshot)

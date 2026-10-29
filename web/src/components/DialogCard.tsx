@@ -163,7 +163,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
           <button
             type="button"
             className={`dialog-card-option${option.selected ? ' dialog-card-option-selected' : ''}`}
-            title={option.label}
+            data-tooltip={option.label}
             disabled={answering !== null}
             aria-busy={answering === option.index || undefined}
             aria-describedby={option.selected ? `${titleID}-current` : undefined}

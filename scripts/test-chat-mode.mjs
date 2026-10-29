@@ -268,7 +268,8 @@ try {
         await expect(chat.locator('.chat-turn')).toHaveCount(1)
         await expect(chat.locator('.chat-message-user .chat-bubble')).toHaveText('把 header 高度改成 44')
         await expect(chat.getByText('已改成 44 并补了测试。')).toBeVisible()
-        // 真实工具调用与结果：折叠分区里显示真实工具名和 call id。
+        // 已结束的一轮把工具过程折叠成一行；展开后显示真实工具名和 call id。
+        await chat.getByRole('button', { name: /^工具 1 · 用时/ }).click()
         const toolCall = chat.locator('.chat-tool-call').first()
         await expect(toolCall.locator('summary')).toContainText('Edit')
         await expect(toolCall.locator('summary')).toContainText('call-1')
