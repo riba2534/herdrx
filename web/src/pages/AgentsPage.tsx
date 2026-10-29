@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useState } from 'react'
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, LoaderCircle, RefreshCw, Server, TriangleAlert } from 'lucide-react'
 import { AppearanceToggle } from '../components/AppearanceToggle'
 import { BrandLogo } from '../components/Brand'
-import { syncAppBadge } from '../components/AgentOverviewLink'
+import { followLink, syncAppBadge } from '../components/AgentOverviewLink'
 import { Button, EmptyState, StatusDot } from '../components/ui'
 import { api } from '../lib/api'
 import { navigate } from '../lib/navigation'
+import { useVisiblePoll } from '../lib/useVisiblePoll'
 import type { AgentAttention, AgentOverview, AgentOverviewItem } from '../types'
 import './AgentsPage.css'
 
@@ -24,16 +25,7 @@ export function agentPaneURL(hostID: string, paneID: string) {
 }
 
 function lastPathSegment(path?: string) {
-  const trimmed = path?.replace(/\/+$/, '') || ''
-  return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed || ''
-}
-
-function openLink(url: string) {
-  return (event: ReactMouseEvent<HTMLAnchorElement>) => {
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-    event.preventDefault()
-    navigate(url)
-  }
+  return path?.replace(/\/+$/, '').split('/').pop() || ''
 }
 
 function AgentRow({ agent }: { agent: AgentOverviewItem }) {
@@ -42,7 +34,7 @@ function AgentRow({ agent }: { agent: AgentOverviewItem }) {
   const folder = lastPathSegment(agent.cwd)
   const url = agentPaneURL(agent.host_id, agent.pane_id)
   return <li>
-    <a className={`agent-item agent-item-${agent.attention}`} href={url} onClick={openLink(url)}>
+    <a className={`agent-item agent-item-${agent.attention}`} href={url} onClick={followLink(url)}>
       <StatusDot status={agent.agent_status}/>
       <span className="agent-item-main">
         <span className="agent-item-heading"><strong>{name}</strong>{agent.title && agent.title !== name && <span className="agent-item-title">{agent.title}</span>}</span>
@@ -53,44 +45,35 @@ function AgentRow({ agent }: { agent: AgentOverviewItem }) {
   </li>
 }
 
+const agentKey = (agent: AgentOverviewItem) => `${agent.host_id}:${agent.pane_id}`
+
+function AgentSection({ id, title, agents, className = '' }: { id: string; title: string; agents: AgentOverviewItem[]; className?: string }) {
+  if (agents.length === 0) return null
+  return <section className={`agents-section ${className}`} aria-labelledby={id}>
+    <h2 id={id}>{title} <span className="agents-count">{agents.length}</span></h2>
+    <ul className="agent-list">{agents.map((agent) => <AgentRow key={agentKey(agent)} agent={agent}/>)}</ul>
+  </section>
+}
+
 export function AgentsPage() {
   const [overview, setOverview] = useState<AgentOverview | null>(null)
   const [error, setError] = useState('')
   const [manualRefresh, setManualRefresh] = useState(false)
   const [showIdle, setShowIdle] = useState(false)
-  const inFlight = useRef<AbortController | null>(null)
 
-  const load = useCallback(async () => {
-    if (inFlight.current) return
-    const controller = new AbortController()
-    inFlight.current = controller
+  // Refresh only while the page is in front; a hidden tab or a closed phone
+  // screen stops polling and catches up as soon as it is visible again.
+  const load = useVisiblePoll(async (signal) => {
     try {
-      const result = await api.agents({ signal: controller.signal })
+      const result = await api.agents({ signal })
       setOverview(result)
       setError('')
       syncAppBadge(result.attention_count)
     } catch (reason) {
-      if (controller.signal.aborted) return
+      if (signal.aborted) return
       setError(reason instanceof Error ? reason.message : '无法读取 Agent 状态')
-    } finally {
-      if (inFlight.current === controller) inFlight.current = null
     }
-  }, [])
-
-  // Refresh only while the page is in front; a hidden tab or a closed phone
-  // screen stops polling and catches up as soon as it is visible again.
-  useEffect(() => {
-    const refresh = () => { if (document.visibilityState === 'visible') void load() }
-    refresh()
-    const timer = window.setInterval(refresh, REFRESH_MS)
-    document.addEventListener('visibilitychange', refresh)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', refresh)
-      inFlight.current?.abort()
-      inFlight.current = null
-    }
-  }, [load])
+  }, REFRESH_MS)
 
   const agents = overview?.agents || []
   const attention = agents.filter((agent) => agent.attention === 'needs_you' || agent.attention === 'unseen_done')
@@ -108,20 +91,14 @@ export function AgentsPage() {
   } else {
     content = <>
       {error && <div className="notice notice-error" role="alert">刷新失败：{error}。显示的是上一次读取的状态。</div>}
-      {attention.length > 0 && <section className="agents-section agents-section-attention" aria-labelledby="agents-attention">
-        <h2 id="agents-attention">需要你 <span className="agents-count">{attention.length}</span></h2>
-        <ul className="agent-list">{attention.map((agent) => <AgentRow key={`${agent.host_id}:${agent.pane_id}`} agent={agent}/>)}</ul>
-      </section>}
-      {working.length > 0 && <section className="agents-section" aria-labelledby="agents-working">
-        <h2 id="agents-working">工作中 <span className="agents-count">{working.length}</span></h2>
-        <ul className="agent-list">{working.map((agent) => <AgentRow key={`${agent.host_id}:${agent.pane_id}`} agent={agent}/>)}</ul>
-      </section>}
+      <AgentSection id="agents-attention" title="需要你" agents={attention} className="agents-section-attention"/>
+      <AgentSection id="agents-working" title="工作中" agents={working}/>
       {idle.length > 0 && <section className="agents-section" aria-label="已看或空闲">
         <button type="button" className="agents-idle-toggle" aria-expanded={showIdle} aria-controls="agents-idle-list" onClick={() => setShowIdle((value) => !value)}>
           {showIdle ? <ChevronDown size={16} aria-hidden="true"/> : <ChevronRight size={16} aria-hidden="true"/>}
           {showIdle ? `已看或空闲 · ${idle.length}` : `还有 ${idle.length} 个空闲`}
         </button>
-        {showIdle && <ul id="agents-idle-list" className="agent-list">{idle.map((agent) => <AgentRow key={`${agent.host_id}:${agent.pane_id}`} agent={agent}/>)}</ul>}
+        {showIdle && <ul id="agents-idle-list" className="agent-list">{idle.map((agent) => <AgentRow key={agentKey(agent)} agent={agent}/>)}</ul>}
       </section>}
       {agents.length === 0 && <EmptyState icon={<Bot size={32}/>} title="还没有 Agent" detail={failedHosts.length === overview.hosts.length ? '暂时无法读取任何主机，请查看下方原因。' : '各主机的 Herdr 里还没有识别到 Agent。在终端里启动 Claude Code、Codex 等 Agent 后会显示在这里。'}/>}
       {failedHosts.length > 0 && <section className="agents-section" aria-labelledby="agents-failed">
@@ -137,7 +114,7 @@ export function AgentsPage() {
 
   return <div className="app-shell">
     <header className="topbar">
-      <a className="brand" href="/" onClick={openLink('/')}><BrandLogo/></a>
+      <a className="brand" href="/" onClick={followLink('/')}><BrandLogo/></a>
       <div className="topbar-actions"><AppearanceToggle/><Button className="button-ghost" onClick={() => navigate('/')}><ArrowLeft size={16}/>返回主机</Button></div>
     </header>
     <main className="page page-agents">

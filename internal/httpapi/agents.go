@@ -1,10 +1,11 @@
 package httpapi
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -119,13 +120,23 @@ func (a *API) collectHostAgents(ctx context.Context, userID string, host store.H
 		}
 		return result, nil
 	}
-	live := make(map[string]bool, len(snapshot.Panes))
+	panes := make(map[string]herdr.Pane, len(snapshot.Panes))
 	for _, pane := range snapshot.Panes {
-		live[pane.ID] = true
+		panes[pane.ID] = pane
 	}
+	// Markers were loaded already; only touch the database when one is stale.
 	// Failing to prune only leaves stale rows behind; the overview is still right.
-	_ = a.store.PruneAgentSeen(ctx, userID, host.ID, live)
-	return result, hostAgentItems(host, snapshot, seen)
+	for _, marker := range seen {
+		if _, ok := panes[marker.PaneID]; marker.HostID == host.ID && !ok {
+			live := make(map[string]bool, len(panes))
+			for paneID := range panes {
+				live[paneID] = true
+			}
+			_ = a.store.PruneAgentSeen(ctx, userID, host.ID, live)
+			break
+		}
+	}
+	return result, hostAgentItems(host, snapshot, panes, seen)
 }
 
 func agentOverviewConnectError(ctx context.Context, err error) string {
@@ -142,7 +153,7 @@ func agentOverviewConnectError(ctx context.Context, err error) string {
 	}
 }
 
-func hostAgentItems(host store.Host, snapshot herdr.Snapshot, seen map[string]store.AgentSeen) []agentOverviewItem {
+func hostAgentItems(host store.Host, snapshot herdr.Snapshot, panes map[string]herdr.Pane, seen map[string]store.AgentSeen) []agentOverviewItem {
 	workspaces := make(map[string]herdr.Workspace, len(snapshot.Workspaces))
 	for _, workspace := range snapshot.Workspaces {
 		workspaces[workspace.ID] = workspace
@@ -150,10 +161,6 @@ func hostAgentItems(host store.Host, snapshot herdr.Snapshot, seen map[string]st
 	tabs := make(map[string]herdr.Tab, len(snapshot.Tabs))
 	for _, tab := range snapshot.Tabs {
 		tabs[tab.ID] = tab
-	}
-	panes := make(map[string]herdr.Pane, len(snapshot.Panes))
-	for _, pane := range snapshot.Panes {
-		panes[pane.ID] = pane
 	}
 	items := make([]agentOverviewItem, 0, len(snapshot.Agents))
 	for _, agent := range snapshot.Agents {
@@ -183,24 +190,15 @@ func hostAgentItems(host store.Host, snapshot herdr.Snapshot, seen map[string]st
 // sortAgentOverview orders by attention rank, then host name, then the
 // workspace and tab order Herdr shows.
 func sortAgentOverview(items []agentOverviewItem) {
-	sort.SliceStable(items, func(i, j int) bool {
-		left, right := items[i], items[j]
-		if rank, other := agentstate.Rank(left.Attention), agentstate.Rank(right.Attention); rank != other {
-			return rank < other
-		}
-		if left.HostName != right.HostName {
-			return left.HostName < right.HostName
-		}
-		if left.HostID != right.HostID {
-			return left.HostID < right.HostID
-		}
-		if left.workspaceNumber != right.workspaceNumber {
-			return left.workspaceNumber < right.workspaceNumber
-		}
-		if left.tabNumber != right.tabNumber {
-			return left.tabNumber < right.tabNumber
-		}
-		return left.PaneID < right.PaneID
+	slices.SortStableFunc(items, func(left, right agentOverviewItem) int {
+		return cmp.Or(
+			cmp.Compare(agentstate.Rank(left.Attention), agentstate.Rank(right.Attention)),
+			cmp.Compare(left.HostName, right.HostName),
+			cmp.Compare(left.HostID, right.HostID),
+			cmp.Compare(left.workspaceNumber, right.workspaceNumber),
+			cmp.Compare(left.tabNumber, right.tabNumber),
+			cmp.Compare(left.PaneID, right.PaneID),
+		)
 	})
 }
 

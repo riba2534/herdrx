@@ -23,24 +23,23 @@ export function useAgentSeen(hostID: string, visiblePaneIDs: readonly string[] |
   const visible = useDocumentVisible()
   const sent = useRef(new Map<string, number>())
   const onScreen = new Set(visiblePaneIDs)
-  const targets = (agents || []).filter((agent) => onScreen.has(agent.pane_id)).map((agent) => `${agent.pane_id}\u0000${agent.state_change_seq || 0}`)
-  // A stable string key keeps snapshot updates that change nothing relevant
-  // from restarting the debounce.
-  const key = targets.sort().join('\u0001')
+  const targets = (agents || []).filter((agent) => onScreen.has(agent.pane_id)).map((agent) => ({ paneID: agent.pane_id, seq: agent.state_change_seq || 0 }))
+  const latest = useRef(targets)
+  latest.current = targets
+  // Snapshots arrive often; restart the debounce only when a pane or round changes.
+  const key = targets.map((target) => `${target.paneID}:${target.seq}`).sort().join(' ')
   useEffect(() => {
     if (!visible || !key) return
     const timer = window.setTimeout(() => {
-      if (document.visibilityState !== 'visible') return
-      for (const target of key.split('\u0001')) {
-        const [paneID, rawSeq] = target.split('\u0000')
-        const seq = Number(rawSeq)
+      for (const { paneID, seq } of latest.current) {
         const sentKey = `${hostID}\u0000${paneID}`
         if ((sent.current.get(sentKey) ?? -1) >= seq) continue
         sent.current.set(sentKey, seq)
         // Best effort: a failed mark is retried the next time the pane is seen.
-        Promise.resolve().then(() => api.markAgentSeen(hostID, paneID, seq)).catch(() => {
-          if (sent.current.get(sentKey) === seq) sent.current.delete(sentKey)
-        })
+        void (async () => {
+          try { await api.markAgentSeen(hostID, paneID, seq) }
+          catch { if (sent.current.get(sentKey) === seq) sent.current.delete(sentKey) }
+        })()
       }
     }, SEEN_DEBOUNCE_MS)
     return () => window.clearTimeout(timer)
