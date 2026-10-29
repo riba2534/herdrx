@@ -15,6 +15,8 @@ import { Composer } from '../components/Composer'
 import { StartHerdrButton, type HerdrStartFeedback } from '../components/StartHerdr'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
+import { AgentOverviewLink } from '../components/AgentOverviewLink'
+import { useAgentSeen } from '../lib/useAgentSeen'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
@@ -892,6 +894,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   // shows only the selected pane, across the whole tab, as a phone always does.
   const zoomed = !mobile && Boolean(layout?.zoomed)
   const visiblePanes = mobile || zoomed ? panes?.filter((pane) => pane.pane_id === paneID) : panes
+  useAgentSeen(hostID, visiblePanes?.map((pane) => pane.pane_id), snapshot?.agents)
   // Take over the pane Herdr zooms, also when its zoom moves to another pane;
   // picking a pane afterwards stays local, like every other selection here.
   const zoomTarget = layout?.zoomed ? layout.focused_pane_id : ''
@@ -956,6 +959,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         return next
       })}><Keyboard size={18}/></Button>
       <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
+      <AgentOverviewLink compact className="tool-button"/>
       <Button className="tool-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={18}/></Button>
     </header> : <header className="hostbar" aria-label="主机导航">
       <button className="hostbar-home" aria-label="返回主机列表" data-tooltip="管理主机" onClick={() => navigate('/')}><BrandIcon/><span>herdrx</span></button>
@@ -969,6 +973,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       </nav>
       <Button className="tool-button" aria-label="重命名当前主机" data-tooltip="重命名当前主机" disabled={!host} onClick={() => { if (host) openPrompt({ title: '重命名主机', label: '主机名称', value: host.name, submitLabel: '保存名称', onSubmit: async (name) => { const result = await api.renameHost(hostID, name); setHost(result.host); setAvailableHosts((current) => current.map((item) => item.id === hostID ? result.host : item)) } }) }}><Pencil size={13}/></Button>
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostConnectionText(connection, host?.transport, hostListError)}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => client.retryNow()}><RefreshCw size={13}/></Button></div>
+      <AgentOverviewLink compact className="hostbar-agents"/>
     </header>}
     {mobile && (panes?.length || 0) > 1 && <nav className="mobile-pane-chips" aria-label="切换终端">{panes!.map((pane) => <button type="button" key={pane.pane_id} className={`mobile-pane-chip${pane.pane_id === paneID ? ' mobile-pane-chip-active' : ''}`} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); afterSelectLocation() }}><StatusDot status={pane.agent_status || 'unknown'}/>{paneDisplayName(pane)}</button>)}</nav>}
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>

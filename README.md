@@ -40,6 +40,7 @@ herdrx 是 [Herdr](https://herdr.dev/) 的 Web 客户端，适合个人和可信
 |---|---|
 | 管理多台主机 | 使用 SSH 或 Tailcat 接入，按名称和地址搜索，通过文件夹分组 |
 | 操作终端 | 切换工作区、标签页与终端，使用分屏、历史滚动、中文输入和 Shift+Enter；手机上点终端直接逐键输入（Tab 补全、方向键、Ctrl 组合键），点输入框则本地编辑、整段发送 |
+| 跨主机查看 Agent | Agent 总览汇总所有主机的 Agent，等待你处理和完成未看的排在最前，点一下进入对应终端 |
 | 向 Agent 传图片 | 粘贴、拖入或上传 PNG/JPEG/WebP/GIF，单张最大 20 MB |
 | 在手机上继续任务 | 单终端视图、本地输入框、辅助键条；终端按屏幕自动选择完整显示、铺满宽度或可读字号，双指捏合调整字号，弹出键盘不改变远端尺寸 |
 | 用画面视图阅读 | 读取 Herdr 已渲染的画面，按手机宽度折行、可直接选中复制，不改变远端尺寸；输入用本地输入框 |
@@ -203,6 +204,7 @@ docker start herdrx                                # 启动网站
 
 - [安装与兼容要求](docs/install.md) · [Tailcat 接入教程](docs/tailcat-quickstart.md)
 - [SSH 密钥与文件夹](docs/ssh-keys-and-folders.md)
+- [Agent 总览与已读标记](docs/agents-overview.md)
 - [运维与备份](docs/operations.md) · [更新与恢复](docs/update-and-recovery.md)
 - [版本与发布说明](https://github.com/riba2534/herdrx/releases) · [反馈问题](https://github.com/riba2534/herdrx/issues)
 
