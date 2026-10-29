@@ -46,7 +46,7 @@ func TestHomeSymlinkReadsLogsAndMatchesBothSpellings(t *testing.T) {
 
 	fromLink := TranscriptScope{
 		PaneID: "p", Agent: agentlog.AgentClaude, CWD: linkCwd,
-		Evidence: &AgentSession{Source: "hook", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-real"},
+		Evidence: &AgentSession{Source: "herdr:test", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-real"},
 	}
 	page := readTranscript(context.Background(), files, codec, fromLink, TranscriptRequest{})
 	if page.Binding != ChatBindingVerified || len(page.Messages) != 1 || page.Messages[0].Blocks[0].Text != "真实家目录" {
@@ -54,7 +54,7 @@ func TestHomeSymlinkReadsLogsAndMatchesBothSpellings(t *testing.T) {
 	}
 	fromReal := TranscriptScope{
 		PaneID: "p", Agent: agentlog.AgentClaude, CWD: realCwd,
-		Evidence: &AgentSession{Source: "hook", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-link"},
+		Evidence: &AgentSession{Source: "herdr:test", Agent: agentlog.AgentClaude, Kind: "id", Value: "sess-link"},
 	}
 	page = readTranscript(context.Background(), files, codec, fromReal, TranscriptRequest{})
 	if page.Binding != ChatBindingVerified || len(page.Messages) != 1 || page.Messages[0].Blocks[0].Text != "链接家目录" {
@@ -368,7 +368,7 @@ func TestIdentifiedCursorSessionReadsTheTail(t *testing.T) {
 	codec := newTranscriptCodecForTest(t)
 	scope := TranscriptScope{
 		PaneID: "p", Agent: agentlog.AgentCursor, CWD: cwd,
-		Evidence: &AgentSession{Source: "hook", Agent: "cursor", Kind: "id", Value: "sess-long"},
+		Evidence: &AgentSession{Source: "herdr:test", Agent: "cursor", Kind: "id", Value: "sess-long"},
 	}
 	page := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{})
 	if page.Reason == ChatReasonReadLimitExceeded || page.Binding != ChatBindingVerified || !page.HasMore || page.PrevCursor == "" {
