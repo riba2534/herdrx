@@ -303,8 +303,18 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    Codex 只收 `sessions` 下的 `rollout-*.jsonl`。DSH 只收
    `<projectKey>/<encodedSessionID>/session.v3.jsonl[.zstd]`；header 的版本、id、绝对 cwd
    必须匹配。目录名只用于缩小搜索范围，不做递归通配。
-   Gemini 只看 `~/.gemini/tmp/<sha256(pane cwd)>/chats/session-*.json[l]` 这一个目录，并要求
-   会话头的 `projectHash` 等于目录名（家目录两种写法各算一次）；不从正文推断工作目录。
+   Gemini 的项目目录有两代，来源是 Gemini CLI（google-gemini/gemini-cli main）：
+   `packages/core/src/utils/paths.ts` 的 `getProjectHash(projectRoot)` = `sha256(projectRoot)`
+   十六进制，会话头 `projectHash` 按它写（`services/chatRecordingService.ts`）；
+   `packages/core/src/config/storage.ts` 的 `getProjectTempDir()` 是 `~/.gemini/tmp/<shortId>`，
+   shortId 由 `config/projectRegistry.ts` 的注册表 `~/.gemini/projects.json` 分配（项目目录名
+   slugify，冲突加 `-1`、`-2`），slug 目录里的 `.project_root` 记着项目根；旧的
+   `tmp/<sha256>` 目录会被迁移成 slug 目录。工作台的候选目录 = `tmp/<sha256(pane cwd)>`（旧版）
+   ∪ `.project_root` 内容与 pane cwd 精确相等的 `tmp/<slug>`（家目录两种写法各算一次；标记按 64 个
+   一批读）。`projects.json` 可能过期，不读也不作信任依据。两代都要求会话头 `projectHash` 等于
+   sha256(pane cwd)，读取已绑定会话时再核对一次目录归属；不从正文推断工作目录。会话在
+   `<目录>/chats/` 或 `<目录>/chats/<parentId>/` 下。macOS seatbelt 沙箱下 Gemini 的根是
+   `~/.cache/.gemini`，不在固定根内，不支持。
    单个文件读不了只跳过该文件。agy 的库由 sqlite 按路径名打开：调用方先按 fd 逐段核对出
    inode，打开前 `lstat` 比对同一 inode，查询结束、连接还开着时再确认本进程有 fd 指向这个
    inode（`/proc/self/fd`，macOS 用 `/dev/fd`），否则丢弃结果。sqlite 用 `mode=ro` +
@@ -395,9 +405,8 @@ pane 处于 working / blocked 时最新一轮不折叠。打开会话仍然滚�
    **未强制**。不得声称该不变式已完整验证。
 10. **Cursor Composer 的 `state.vscdb` 与其它未落地 connector**——Cursor 只读取
    `agent-transcripts/<sid>/<sid>.jsonl`，工作区只认 `.workspace-trusted` 的
-   `workspacePath`。Gemini 只读取 `session-*.json[l]`，归属见 §8.4：projectHash 规则
-   （`sha256(项目根绝对路径)` 十六进制）取自 Gemini CLI `getProjectHash`，本轮无法联网复核源码，
-   也没有真实样本；新版 CLI 若改用别的目录名（例如短 id），这些会话会显示为没有候选，不会误认。
+   `workspacePath`。Gemini 只读取 `session-*.json[l]`，归属见 §8.4（hash 与 slug 规则
+   已对照 Gemini CLI 源码，测试只用合成样本，未对真实会话复核）。
    没有 id 的消息按行的绝对字节位置命名，工具结果按在消息里的位置命名，`thought: true` 的
    part 丢弃；整份文档的游标身份是会话 id + `startTime`，文件增长或被重写都不会 reset。
    Antigravity CLI（`agy`）读取 `conversations/<uuid>.db` 的 `steps.step_payload`

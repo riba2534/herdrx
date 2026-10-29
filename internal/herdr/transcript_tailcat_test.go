@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -175,6 +176,67 @@ func TestTailcatFirstReadMatchesTheOtherHomeSpelling(t *testing.T) {
 	page, err := endpoint.Transcript(context.Background(), claudeScope(link+"/proj"), TranscriptRequest{})
 	if err != nil || len(page.Candidates) != 1 || page.Candidates[0].SessionID != "sess-real" {
 		t.Fatalf("first read: %+v %v", page, err)
+	}
+}
+
+// 远端 python 读取器同样能列出 slug 目录、读 `.project_root` 与 `chats/<parentId>/` 下的会话。
+func TestPythonReaderReadsGeminiSlugProjects(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gemini", "tmp", "proj", "chats", "parent-1")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".gemini", "tmp", "proj", ".project_root"), []byte("/srv/proj"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session-c.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(request transcriptRemoteRequest) transcriptRemoteResponse {
+		t.Helper()
+		payload, _ := json.Marshal(request)
+		var response transcriptRemoteResponse
+		if err := json.Unmarshal(runPythonTranscript(t, home, payload), &response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	listed := run(transcriptRemoteRequest{Op: "list", Agent: "gemini", Rel: "proj/chats", Depth: 2})
+	found := false
+	for _, entry := range listed.Entries {
+		found = found || entry.Rel == "proj/chats/parent-1/session-c.json"
+	}
+	read := run(transcriptRemoteRequest{Op: "read", Agent: "gemini", Reads: []transcriptRemoteRead{{Rel: "proj/.project_root", Length: 64}}})
+	if !listed.OK || !found || !read.OK || len(read.Reads) != 1 || !read.Reads[0].Exists {
+		t.Fatalf("list = %+v read = %+v", listed, read)
+	}
+}
+
+// Gemini 的 slug 目录与 `.project_root` 标记经受控端读取器同样可读（固定根内、逐段 O_NOFOLLOW）。
+func TestTailcatReadsGeminiSlugProjects(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := "/srv/proj"
+	dir := filepath.Join(home, ".gemini", "tmp", "proj")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".project_root"), []byte(cwd), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeGeminiSession(t, home, "proj", "session-a.json", `{"sessionId":"a","projectHash":"`+agentlog.GeminiProjectHash(cwd)+`","messages":[{"type":"user","content":"经受控端"}]}`)
+	endpoint := &SSHEndpoint{host: store.Host{Transport: "tailcat"}, client: &tailcatLiveTransport{}}
+	scope := TranscriptScope{PaneID: "p", Agent: agentlog.AgentGemini, CWD: cwd}
+	page, err := endpoint.Transcript(context.Background(), scope, TranscriptRequest{})
+	if err != nil || len(page.Candidates) != 1 {
+		t.Fatalf("candidates = %+v %v", page, err)
+	}
+	bound, err := endpoint.Transcript(context.Background(), scope, TranscriptRequest{Session: page.Candidates[0].ID})
+	if err != nil || len(bound.Messages) != 1 || bound.Messages[0].Blocks[0].Text != "经受控端" {
+		t.Fatalf("bound = %+v %v", bound, err)
 	}
 }
 

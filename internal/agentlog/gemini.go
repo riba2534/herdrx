@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// Gemini CLI 的会话文件是 `~/.gemini/tmp/<projectHash>/chats/session-*.json`（整份文档）
-// 或 `session-*.jsonl`（事件回放）。消息字段来自 connector_gemini.rs 与 gemini.rs：
+// Gemini CLI 的会话文件是 `~/.gemini/tmp/<项目目录>/chats/session-*.json`（整份文档）
+// 或 `session-*.jsonl`（事件回放）；项目目录是旧版的 sha256 或新版的 slug。消息字段来自 connector_gemini.rs 与 gemini.rs：
 // `type` 为 user / model / gemini，`content` 是字符串或 `{text}` 数组。
 //
-// 归属只认 projectHash：Gemini CLI 的 `getProjectHash(projectRoot)` 是项目根绝对路径的
-// SHA-256 十六进制，会话头里同样记着它。工作台只看 pane cwd 对应的那一个 hash 目录，
-// 并要求会话头的 projectHash 与它相等；不从正文里猜工作目录。
+// 归属认 projectHash：Gemini CLI 的 `getProjectHash(projectRoot)`（utils/paths.ts）是项目根
+// 绝对路径的 SHA-256 十六进制，会话头里同样记着它（chatRecordingService.ts）。不从正文里猜
+// 工作目录。项目目录的认定见 herdr/transcript_gemini_projects.go。
 
 // GeminiProjectHash 是 Gemini CLI 对项目根绝对路径算的目录名。
 func GeminiProjectHash(cwd string) string {
@@ -31,13 +31,29 @@ type GeminiDocument struct {
 	Records     []Record
 }
 
-// GeminiSessionRel 报告相对路径是不是 `<hash>/chats/session-*.json[l]`。
+// GeminiSessionRel 报告相对路径是不是 `<项目目录>/chats/[<parentId>/]session-*.json[l]`。
 func GeminiSessionRel(rel string) bool {
 	parts := strings.Split(rel, "/")
-	if len(parts) != 3 || parts[1] != "chats" || !safePathSegment(parts[0]) {
+	if len(parts) < 3 || len(parts) > 4 || parts[1] != "chats" || !safePathSegment(parts[0]) {
 		return false
 	}
-	return GeminiSessionFile(parts[2])
+	if len(parts) == 4 && !safePathSegment(parts[2]) {
+		return false
+	}
+	return GeminiSessionFile(parts[len(parts)-1])
+}
+
+// GeminiProjectSlug 报告目录名是否符合 Gemini CLI 项目注册表分配的 slug 形状（`[a-z0-9-]+`）。
+func GeminiProjectSlug(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	for _, character := range name {
+		if !(character >= 'a' && character <= 'z' || character >= '0' && character <= '9' || character == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // GeminiSessionFile 报告文件名是不是 Gemini 会话文件。

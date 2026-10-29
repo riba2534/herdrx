@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	"strings"
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
@@ -70,7 +69,7 @@ func transcriptGeminiMessages(ctx context.Context, files transcriptFS, codec tra
 	if err != nil {
 		return transcriptDegradeFromError(err, agent)
 	}
-	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || !geminiOwned(files, document.ProjectHash, rel, cwd) {
+	if document.SessionID == "" || (sessionID != "" && document.SessionID != sessionID) || !geminiOwned(ctx, files, document.ProjectHash, rel, cwd) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	sessionID = document.SessionID
@@ -265,7 +264,7 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 		sessionID = document.SessionID
 	}
 	// 归属只认文件头的 projectHash；窗口里的正文不参与判断。
-	if sessionID == "" || !geminiOwned(files, headDoc.ProjectHash, rel, cwd) {
+	if sessionID == "" || !geminiOwned(ctx, files, headDoc.ProjectHash, rel, cwd) {
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	pageRecords, first := tailGeminiRecords(document.Records)
@@ -294,27 +293,6 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 		page.PrevCursor = previous
 	}
 	return page
-}
-
-// geminiOwned 报告会话是否属于 pane cwd：会话头的 projectHash 必须等于它所在的 hash 目录，
-// 并且等于 pane cwd（或家目录的另一种写法）的 SHA-256。
-func geminiOwned(files transcriptFS, projectHash, rel, cwd string) bool {
-	if projectHash == "" || !strings.HasPrefix(rel, projectHash+"/") {
-		return false
-	}
-	for _, spelling := range cwdSpellings(files, cwd) {
-		if agentlog.GeminiProjectHash(spelling) == projectHash {
-			return true
-		}
-	}
-	return false
-}
-
-func geminiProject(cwd string) (string, bool) {
-	if !strings.HasPrefix(cwd, "/") {
-		return "", false
-	}
-	return agentlog.GeminiProjectHash(cwd), true
 }
 
 func geminiPrefix(ctx context.Context, files transcriptFS, rel string, size int64) (agentlog.GeminiDocument, error) {

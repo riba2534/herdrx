@@ -81,10 +81,6 @@ func TestGeminiTranscriptOwnershipIsTheProjectHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o600) })
-	// 令牌层同样只认 sha256(cwd) 目录：别的 hash 目录不是这个 pane 的会话路径。
-	if transcriptRelAllowed(agentlog.AgentGemini, cwd, "", otherHash+"/chats/session-other.json") || !transcriptRelAllowed(agentlog.AgentGemini, cwd, "", hash+"/chats/session-doc.json") {
-		t.Fatal("gemini rel check does not pin the project hash directory")
-	}
 
 	files := &localTranscriptFS{home: home}
 	codec := newTranscriptCodecForTest(t)
@@ -134,6 +130,79 @@ func TestGeminiTranscriptOwnershipIsTheProjectHash(t *testing.T) {
 	grown := readTranscript(context.Background(), files, codec, TranscriptScope{PaneID: "p", Agent: agentlog.AgentGemini, CWD: cwd}, TranscriptRequest{Session: token, Cursor: bound.NextCursor})
 	if grown.Reset || len(grown.Messages) != 1 || grown.Messages[0].ID != "m3" {
 		t.Fatalf("grown = %+v", grown)
+	}
+}
+
+// 新版 Gemini CLI 的项目目录是注册表分配的 slug，`.project_root` 记着项目根。只有标记与
+// pane cwd 精确相等的 slug 目录才算；会话头 projectHash 仍须是 sha256(cwd)。
+// 会话可能在 `chats/<parentId>/` 子目录里；旧版 hash 目录同时保留。
+func TestGeminiSlugDirectoriesNeedAMatchingProjectRoot(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/srv/proj"
+	hash := agentlog.GeminiProjectHash(cwd)
+	tmp := filepath.Join(home, ".gemini", "tmp")
+	writeMarker := func(slug, root string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(tmp, slug), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, slug, ".project_root"), []byte(root), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session := func(id, projectHash, text string) string {
+		return `{"sessionId":"` + id + `","projectHash":"` + projectHash + `","messages":[{"type":"user","content":"` + text + `"}]}`
+	}
+	writeMarker("proj", cwd+"\n")
+	writeGeminiSession(t, home, "proj", "session-slug.json", session("slug", hash, "slug 会话"))
+	if err := os.MkdirAll(filepath.Join(tmp, "proj", "chats", "parent-1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "proj", "chats", "parent-1", "session-child.json"), []byte(session("child", hash, "子会话")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeGeminiSession(t, home, hash, "session-legacy.json", session("legacy", hash, "旧 hash 目录"))
+	// 同名项目的另一份 slug：标记指向别处，即使会话头冒充本项目的 hash 也不认。
+	writeMarker("proj-1", "/srv/other/proj")
+	writeGeminiSession(t, home, "proj-1", "session-foreign.json", session("foreign", hash, "FOREIGN_SECRET"))
+	// 标记是 pane cwd 的子目录或父目录，都不是精确相等。
+	writeMarker("proj-2", cwd+"/sub")
+	writeGeminiSession(t, home, "proj-2", "session-sub.json", session("sub", hash, "SUB_SECRET"))
+	writeMarker("srv", "/srv")
+	writeGeminiSession(t, home, "srv", "session-parent.json", session("parent", hash, "PARENT_SECRET"))
+	// 没有标记的 slug 目录不认。
+	writeGeminiSession(t, home, "unmarked", "session-unmarked.json", session("unmarked", hash, "UNMARKED_SECRET"))
+	// 标记对上，但会话头的 projectHash 不是本项目。
+	writeGeminiSession(t, home, "proj", "session-wronghash.json", session("wronghash", agentlog.GeminiProjectHash("/srv/other/proj"), "WRONGHASH_SECRET"))
+
+	files := &localTranscriptFS{home: home}
+	codec := newTranscriptCodecForTest(t)
+	scope := TranscriptScope{PaneID: "p", Agent: agentlog.AgentGemini, CWD: cwd}
+	page := mustCandidates(t, readTranscript(context.Background(), files, codec, scope, TranscriptRequest{}), 3)
+	byID := map[string]string{}
+	for _, candidate := range page.Candidates {
+		byID[candidate.SessionID] = candidate.ID
+	}
+	for _, want := range []string{"slug", "child", "legacy"} {
+		if byID[want] == "" {
+			t.Fatalf("missing %s in %+v", want, page.Candidates)
+		}
+	}
+	bound := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{Session: byID["child"]})
+	if bound.Binding != ChatBindingSelected || len(bound.Messages) != 1 || bound.Messages[0].Blocks[0].Text != "子会话" {
+		t.Fatalf("child = %+v", bound)
+	}
+	// 服务端自己封的令牌指向标记不符或没有标记的目录，读取时同样被拒。
+	for _, rel := range []string{"proj-1/chats/session-foreign.json", "unmarked/chats/session-unmarked.json"} {
+		token, err := codec.seal(agentlog.AgentGemini, strings.TrimSuffix(strings.TrimPrefix(rel[strings.LastIndex(rel, "/")+1:], "session-"), ".json"), rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lost := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{Session: token})
+		encoded, _ := json.Marshal(lost)
+		if lost.Reason != ChatReasonSessionUnavailable || bytes.Contains(encoded, []byte("_SECRET")) {
+			t.Fatalf("%s = %+v", rel, lost)
+		}
 	}
 }
 

@@ -330,7 +330,8 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	case agentlog.AgentCursor:
 		return agentlog.CursorTranscriptRel(rel) && agentlog.CursorSessionID(rel) == sessionID
 	case agentlog.AgentGemini:
-		return agentlog.GeminiSessionRel(rel) && parts[0] == agentlog.GeminiProjectHash(cwd)
+		// 项目目录可能是 slug，归属要读 `.project_root` 才能确定，读取时由 geminiOwned 核对。
+		return agentlog.GeminiSessionRel(rel)
 	case agentlog.AgentAgy:
 		return agentlog.AgyDBRel(rel) && agentlog.AgySessionID(rel) == sessionID
 	case agentlog.AgentPi:
@@ -651,8 +652,8 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 			return nil, false, nil
 		}
 	case agentlog.AgentGemini:
-		// 只列 pane cwd 的 projectHash 目录（`<hash>/chats/...` 两层），不扫整个 ~/.gemini/tmp。
-		entries, err = listCWDProjects(ctx, files, root, cwd, geminiProject, 2)
+		// 只列属于 pane cwd 的项目目录（旧版 hash 目录或 `.project_root` 对上的 slug 目录）。
+		entries, err = listGeminiProjects(ctx, files, cwd)
 		if errors.Is(err, errTranscriptNotFound) {
 			return nil, false, nil
 		}
@@ -747,7 +748,7 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 			if agent == agentlog.AgentGemini {
 				// 单个文件读不了（过大、正在被替换）只跳过它，不中止整次扫描。
 				document, err := readGeminiDocument(ctx, files, entry.Rel, result.Size)
-				if err != nil || !geminiOwned(files, document.ProjectHash, entry.Rel, cwd) {
+				if err != nil || !geminiHeaderOwned(files, document.ProjectHash, cwd) {
 					continue
 				}
 				shape.CWD = cwd
