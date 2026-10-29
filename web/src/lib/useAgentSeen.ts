@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import type { Agent } from '../types'
 
-// Herdr's snapshot carries state_change_seq on each agent; it is omitted when 0.
-type SeenAgent = { pane_id: string; state_change_seq?: number }
+type SeenAgent = Pick<Agent, 'pane_id' | 'state_change_seq'>
 
 const SEEN_DEBOUNCE_MS = 1000
 

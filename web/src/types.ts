@@ -117,6 +117,8 @@ export type Agent = {
   tab_id: string
   cwd?: string
   focused: boolean
+  // Omitted by Herdr when 0.
+  state_change_seq?: number
 }
 
 export type Rect = { x: number; y: number; width: number; height: number }
