@@ -65,6 +65,7 @@ self.addEventListener('fetch', (event) => {
 
 // Notifications only open a workbench (optionally one pane in it) or the host
 // list. Every other query parameter, fragment and path is dropped.
+// Keep in step with PANE_PARAM_LIMIT in src/lib/workbenchDeepLink.ts (checked by sw.test.ts).
 const PANE_PARAM_LIMIT = 256
 function notificationTarget(value) {
   try {

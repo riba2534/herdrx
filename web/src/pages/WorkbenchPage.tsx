@@ -22,7 +22,7 @@ import { composerSubmitParams } from '../lib/composerDrafts'
 import { applyModifiers, hasModifiers, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
-import { usePaneDeepLink } from '../lib/workbenchDeepLink'
+import { usePaneDeepLink, workbenchPaneURL } from '../lib/workbenchDeepLink'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel, workspaceSwitcherDetail } from '../lib/labels'
 import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
@@ -185,14 +185,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   // 粘滞修饰键：按下后作用于下一个键（键栏或软键盘），生效后释放。ref 供定时器和 xterm 回调读取。
   const [stickyModifiers, setStickyModifiers] = useState<StickyModifiers>(NO_MODIFIERS)
   const stickyModifiersRef = useRef(NO_MODIFIERS)
-  const updateStickyModifiers = (next: StickyModifiers) => { stickyModifiersRef.current = next; setStickyModifiers(next) }
+  const updateStickyModifiers = useCallback((next: StickyModifiers) => { stickyModifiersRef.current = next; setStickyModifiers(next) }, [])
   const consumeModifiers = useCallback((data: string) => {
     const modifiers = stickyModifiersRef.current
     if (!hasModifiers(modifiers) || !isModifiableKey(data)) return data
-    stickyModifiersRef.current = NO_MODIFIERS
-    setStickyModifiers(NO_MODIFIERS)
+    updateStickyModifiers(NO_MODIFIERS)
     return applyModifiers(data, modifiers)
-  }, [])
+  }, [updateStickyModifiers])
   // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
   const repeatOnHold = (key: string) => ({
     onPointerDown: () => {
@@ -1112,7 +1111,7 @@ function paneStyle(layout: Layout, paneID: string) {
 async function showAgentNotification(name: string, status: string, hostID: string, paneID: string) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return
   const title = agentNotificationTitle(name, status)
-  const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: `/h/${hostID}` } }
+  const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: workbenchPaneURL(hostID, paneID) } }
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready
     await registration.showNotification(title, options)

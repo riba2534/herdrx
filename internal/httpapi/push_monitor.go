@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/riba2534/herdrx/internal/agentstate"
 	"github.com/riba2534/herdrx/internal/herdr"
 	pushmessage "github.com/riba2534/herdrx/internal/push"
 	"github.com/riba2534/herdrx/internal/store"
@@ -233,7 +234,14 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 		return nil
 	}
 	now := state.now()
-	describe := pushDescriber(job.host, snapshot)
+	// Labels are only needed when something is sent, which most polls do not.
+	var describer func(herdr.Agent) (string, string)
+	describe := func(agent herdr.Agent) (string, string) {
+		if describer == nil {
+			describer = pushDescriber(job.host, snapshot)
+		}
+		return describer(agent)
+	}
 	var notifications []pushmessage.Notification
 	var due []herdr.Agent
 	state.mu.Lock()
@@ -300,7 +308,11 @@ func (a *API) collectPushHost(ctx context.Context, job pushHostJob, state *pushP
 		return notifications
 	}
 	for _, agent := range due {
-		if marker, ok := markers[store.AgentSeenKey(job.host.ID, agent.PaneID)]; ok && marker.StateChangeSeq >= agent.StateChangeSeq {
+		seenSeq := int64(-1)
+		if marker, ok := markers[store.AgentSeenKey(job.host.ID, agent.PaneID)]; ok {
+			seenSeq = marker.StateChangeSeq
+		}
+		if agentstate.Classify(agent.AgentStatus, agent.StateChangeSeq, seenSeq) != agentstate.UnseenDone {
 			continue
 		}
 		title, body := describe(agent)
@@ -324,9 +336,10 @@ func pushDescriber(host store.Host, snapshot herdr.Snapshot) func(herdr.Agent) (
 	for _, pane := range snapshot.Panes {
 		titles[pane.ID] = strings.TrimSpace(pane.TerminalTitleStripped)
 	}
+	hostName := pushTruncate(host.Name, 60)
 	return func(agent herdr.Agent) (string, string) {
-		name := firstNonEmpty(agent.Name, agent.Agent, "Agent")
-		location := pushTruncate(host.Name, 60)
+		name := pushTruncate(firstNonEmpty(agent.Name, agent.Agent, "Agent"), 60)
+		location := hostName
 		if label := pushTruncate(workspaces[agent.WorkspaceID], 60); label != "" {
 			location += " · " + label
 			if tab := pushTruncate(tabs[agent.TabID], 60); tab != "" {
@@ -334,15 +347,15 @@ func pushDescriber(host store.Host, snapshot herdr.Snapshot) func(herdr.Agent) (
 			}
 		}
 		if title := pushTruncate(titles[agent.PaneID], 120); title != "" {
-			return pushTruncate(name, 60), title + "\n" + location
+			return name, title + "\n" + location
 		}
-		return pushTruncate(name, 60), location
+		return name, location
 	}
 }
 
 func pushNotification(host store.Host, agent herdr.Agent, title, body string) pushmessage.Notification {
 	return pushmessage.Notification{Title: title, Body: body, Tag: pushHostPrefix(host) + agent.PaneID, Data: map[string]any{
-		"url": "/h/" + host.ID + "?pane=" + url.QueryEscape(agent.PaneID), "host_id": host.ID, "pane_id": agent.PaneID, "status": agent.AgentStatus,
+		"url": "/h/" + url.PathEscape(host.ID) + "?pane=" + url.QueryEscape(agent.PaneID), "host_id": host.ID, "pane_id": agent.PaneID, "status": agent.AgentStatus,
 	}}
 }
 

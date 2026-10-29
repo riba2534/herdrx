@@ -695,7 +695,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     writeSessionRef.current = { pending: 0, waiters: [], pumping: false, closed: false }
     fontMeasureRef.current = createFontMeasure(hostRef.current, terminal.options.fontFamily!)
     searchRef.current = search
-    const inputDisposable = terminal.onData((data) => requestInputRef.current(transformInputRef.current ? transformInputRef.current(data) : data))
+    const inputDisposable = terminal.onData((data) => requestInputRef.current(transformInputRef.current?.(data) ?? data))
     const host = hostRef.current
     const revealCursor = () => revealCursorRef.current()
     // Scroll gestures use the outer viewport and the public terminal APIs.

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
+import { PANE_PARAM_LIMIT } from './workbenchDeepLink'
 
 type Listener = (event: Record<string, unknown>) => void
 
@@ -40,7 +41,8 @@ describe('service worker notifications', () => {
       ['/h/host-1?pane=w1%3Ap1', '/h/host-1?pane=w1%3Ap1'],
       ['/h/host-1?pane=w1%3Ap1&next=https://evil.example&x=1#frag', '/h/host-1?pane=w1%3Ap1'],
       ['/h/host-1?other=1', '/h/host-1'],
-      [`/h/host-1?pane=${'p'.repeat(257)}`, '/h/host-1'],
+      [`/h/host-1?pane=${'p'.repeat(PANE_PARAM_LIMIT)}`, `/h/host-1?pane=${'p'.repeat(PANE_PARAM_LIMIT)}`],
+      [`/h/host-1?pane=${'p'.repeat(PANE_PARAM_LIMIT + 1)}`, '/h/host-1'],
       ['https://evil.example/h/host-1?pane=p1', '/'],
       ['/h/host-1/extra?pane=p1', '/'],
       ['/admin?pane=p1', '/'],
