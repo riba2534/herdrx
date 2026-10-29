@@ -30,9 +30,12 @@ type realtimeEndpoint struct {
 	reads     atomic.Int32
 	mutations atomic.Int32
 
-	subscribeErr  error
-	subscriptions chan []herdr.EventSubscription
-	push          chan herdr.Event
+	subscribeErr error
+	attempts     atomic.Int32
+	// rejectSubscribe, when set, may refuse one subscription like Herdr does.
+	rejectSubscribe func([]herdr.EventSubscription) error
+	subscriptions   chan []herdr.EventSubscription
+	push            chan herdr.Event
 
 	opens     chan herdr.TerminalOpen
 	processes chan *realtimeProcess
@@ -69,8 +72,14 @@ func (e *realtimeEndpoint) Call(_ context.Context, method string, _ any) (json.R
 }
 
 func (e *realtimeEndpoint) SubscribeEvents(ctx context.Context, subscriptions []herdr.EventSubscription, onEvent func(herdr.Event)) error {
+	e.attempts.Add(1)
 	if e.subscribeErr != nil {
 		return e.subscribeErr
+	}
+	if e.rejectSubscribe != nil {
+		if err := e.rejectSubscribe(subscriptions); err != nil {
+			return err
+		}
 	}
 	e.subscriptions <- subscriptions
 	onEvent(herdr.Event{Event: herdr.EventSubscriptionStarted})
@@ -304,6 +313,34 @@ func TestSnapshotPollsWhenHerdrRejectsEvents(t *testing.T) {
 	endpoint.subscribeErr = &herdr.APIError{Code: "invalid_request", Message: "unknown method"}
 	browser := newRealtimeBrowser(t, srv, client, "realtime-browser-polling")
 	browser.must("snapshot", snapshotPollInterval+time.Second)
+	// An unknown method waits the long backoff instead of retrying.
+	if got := endpoint.attempts.Load(); got != 1 {
+		t.Fatalf("subscribe attempts = %d", got)
+	}
+}
+
+func TestSubscriptionRecoversFromAPaneClosedBeforeSubscribing(t *testing.T) {
+	endpoint, srv, client := realtimeFixture(t)
+	endpoint.agents = []herdr.Agent{{PaneID: "p_gone", Agent: "claude"}}
+	endpoint.rejectSubscribe = func(subscriptions []herdr.EventSubscription) error {
+		if !slices.ContainsFunc(subscriptions, func(s herdr.EventSubscription) bool { return s["pane_id"] == "p_gone" }) {
+			return nil
+		}
+		// The pane closed between the snapshot and the subscription.
+		endpoint.mu.Lock()
+		endpoint.agents = []herdr.Agent{{PaneID: "p_live", Agent: "codex"}}
+		endpoint.mu.Unlock()
+		return &herdr.APIError{Code: "pane_not_found", Message: "pane p_gone not found"}
+	}
+	started := time.Now()
+	newRealtimeBrowser(t, srv, client, "realtime-browser-pane-gone")
+	subscription := receive(t, endpoint.subscriptions, "the renewed subscription")
+	if elapsed := time.Since(started); elapsed > 900*time.Millisecond {
+		t.Fatalf("resubscribed after %v, expected no backoff", elapsed)
+	}
+	if !slices.ContainsFunc(subscription, func(s herdr.EventSubscription) bool { return s["pane_id"] == "p_live" }) {
+		t.Fatalf("renewed subscription %v", subscription)
+	}
 }
 
 func TestTerminalOutputMergesBurstsAndKeepsEchoesImmediate(t *testing.T) {

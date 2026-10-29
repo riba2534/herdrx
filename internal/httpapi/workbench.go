@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -377,6 +378,7 @@ func (e *snapshotEvents) observe(snapshot herdr.Snapshot) {
 func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 	e := s.events
 	backoff := time.Second
+	quickRetries := 0
 	for s.ctx.Err() == nil {
 		s.snapshotMu.Lock()
 		panes := snapshotAgentPanes(s.snapshot)
@@ -407,12 +409,25 @@ func (s *workbenchSession) watchEvents(endpoint herdr.EventEndpoint) {
 			continue
 		}
 		if time.Since(started) > time.Minute {
-			backoff = time.Second
+			backoff, quickRetries = time.Second, 0
 		}
 		var apiError *herdr.APIError
-		if errors.As(err, &apiError) && apiError.Code != "events_lost" {
-			// This Herdr rejects the request (older version): stay on polling.
-			backoff = snapshotEventMaxBackoff
+		if errors.As(err, &apiError) {
+			switch {
+			case strings.HasSuffix(apiError.Code, "_not_found"):
+				// A pane closed before the request reached Herdr, which rejects the
+				// whole subscription. Refresh the pane set and resubscribe at once;
+				// a few quick attempts bound a pane set that keeps changing.
+				if quickRetries < 3 {
+					quickRetries++
+					_ = s.sendSnapshot()
+					continue
+				}
+			case apiError.Code != "events_lost":
+				// This Herdr does not know the method or a subscription type
+				// (older version): stay on polling.
+				backoff = snapshotEventMaxBackoff
+			}
 		}
 		select {
 		case <-s.ctx.Done():
