@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -42,15 +43,23 @@ type promptTestEndpoint struct {
 	sendErrors []error
 	keysErr    error
 	beforeSend func()
+	beforeKeys func()
 }
 
 func (e *promptTestEndpoint) Snapshot(context.Context) (herdr.Snapshot, error) {
 	return herdr.Snapshot{}, nil
 }
 
-func (e *promptTestEndpoint) Call(_ context.Context, method string, params any) (json.RawMessage, error) {
+func (e *promptTestEndpoint) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if method == "pane.send_input" && e.beforeSend != nil {
 		e.beforeSend()
+	}
+	if method == "pane.send_keys" && e.beforeKeys != nil {
+		e.beforeKeys()
+	}
+	// 像真实连接一样：context 已取消的输入不会到达终端。
+	if (method == "pane.send_input" || method == "pane.send_keys") && ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -129,6 +138,15 @@ type promptFixture struct {
 	csrf     string
 	endpoint *promptTestEndpoint
 	pool     *promptTestPool
+	owner    string
+}
+
+// revoke 撤销该用户的全部 Web 访问（与禁用用户、退出登录走同一条路径）。
+func (f *promptFixture) revoke(t *testing.T) {
+	t.Helper()
+	if err := f.api.access.change(f.owner, "", true, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func newPromptFixture(t *testing.T, screen string) *promptFixture {
@@ -143,7 +161,7 @@ func newPromptFixture(t *testing.T, screen string) *promptFixture {
 	endpoint := &promptTestEndpoint{screen: screen}
 	pool := &promptTestPool{endpoint: endpoint}
 	value.hosts = pool
-	return &promptFixture{api: value, db: db, server: server.URL, client: client, csrf: info["csrf_token"].(string), endpoint: endpoint, pool: pool}
+	return &promptFixture{api: value, db: db, server: server.URL, client: client, csrf: info["csrf_token"].(string), endpoint: endpoint, pool: pool, owner: owner}
 }
 
 func (f *promptFixture) url(suffix string) string {
@@ -371,26 +389,138 @@ func TestPromptValidatesInputAndOwnership(t *testing.T) {
 	}
 }
 
-func TestPromptLogIsBoundedAndExpires(t *testing.T) {
+func TestPromptLogIsBoundedPerUserAndExpires(t *testing.T) {
 	log := &promptLog{}
 	start := time.Now()
-	for i := 0; i < promptLogCapacity+10; i++ {
-		entry, fresh := log.begin(promptKey{id: string(rune('a' + i%26)), pane: string(rune(i))}, start.Add(time.Duration(i)*time.Millisecond))
-		if !fresh {
-			t.Fatalf("entry %d was not fresh", i)
+	key := func(user string, i int) promptKey { return promptKey{user: user, host: "h", pane: "p", id: strconv.Itoa(i)} }
+	// 另一个用户进行中与结果未知的记录。
+	pending, _, _ := log.begin(key("bob", 0), start)
+	uncertain, _, _ := log.begin(key("bob", 1), start)
+	log.finish(key("bob", 1), uncertain, promptUnknown)
+	// 一个用户发很多条：只挤掉自己最早的已结束记录。
+	for i := 0; i < promptUserCapacity+50; i++ {
+		entry, fresh, err := log.begin(key("alice", i), start.Add(time.Duration(i)*time.Millisecond))
+		if err != nil || !fresh {
+			t.Fatalf("entry %d fresh=%v err=%v", i, fresh, err)
 		}
-		log.finish(promptKey{id: string(rune('a' + i%26)), pane: string(rune(i))}, entry, promptSent)
+		log.finish(key("alice", i), entry, promptSent)
 	}
-	if len(log.entries) > promptLogCapacity {
-		t.Fatalf("log grew to %d", len(log.entries))
+	if n := len(log.users["alice"]); n > promptUserCapacity {
+		t.Fatalf("alice grew to %d", n)
 	}
-	key := promptKey{id: "late"}
-	entry, _ := log.begin(key, start)
-	log.finish(key, entry, promptSent)
-	if _, fresh := log.begin(key, start.Add(promptTTL-time.Second)); fresh {
+	if _, fresh, _ := log.begin(key("bob", 0), start); fresh {
+		t.Fatal("another user's in-flight send was evicted")
+	}
+	if _, fresh, _ := log.begin(key("bob", 1), start); fresh {
+		t.Fatal("another user's uncertain send was evicted")
+	}
+	if _, fresh, _ := log.begin(key("alice", 0), start); !fresh {
+		t.Fatal("the oldest settled entry should have been evicted")
+	}
+	// 进行中的记录永不淘汰：全在进行中时拒绝新的发送。
+	busy := &promptLog{}
+	for i := 0; i < promptUserCapacity; i++ {
+		if _, _, err := busy.begin(key("carol", i), start); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := busy.begin(key("carol", -1), start); !errors.Is(err, errPromptBusy) {
+		t.Fatalf("err=%v", err)
+	}
+	// TTL：已结束的记录 10 分钟内记得，之后忘掉；进行中的不过期。
+	late := key("dave", 0)
+	entry, _, _ := log.begin(late, start)
+	log.finish(late, entry, promptSent)
+	if _, fresh, _ := log.begin(late, start.Add(promptTTL-time.Second)); fresh {
 		t.Fatal("a sent id must be remembered within the TTL")
 	}
-	if _, fresh := log.begin(key, start.Add(promptTTL+time.Minute)); !fresh {
+	if _, fresh, _ := log.begin(late, start.Add(promptTTL+time.Minute)); !fresh {
 		t.Fatal("an id must be forgotten after the TTL")
+	}
+	if _, fresh, _ := log.begin(key("bob", 0), start.Add(promptTTL+time.Hour)); fresh {
+		t.Fatal("an in-flight send must not expire")
+	}
+	_ = pending
+}
+
+// 光标停在“Type something.”上：文字进入对话框自己的输入框，照常发送。
+func TestPromptAllowsTextIntoAFreeTextOption(t *testing.T) {
+	f := newPromptFixture(t, promptScreen(promptRule, " Which color?", "", "  1. Red", "  2. Blue", "❯ 3. Type something.", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"))
+	f.prompt(t, map[string]any{"text": "teal", "submit": true, "client_msg_id": "m1"}, 200)
+	if got := sentTexts(f.endpoint); strings.Join(got, ",") != `teal|[],|["Enter"]` {
+		t.Fatalf("sends=%q", got)
+	}
+}
+
+// 多选题：发送照样拒绝，但不带卡片；卡片接口不出卡，回答被拒绝。
+func TestPromptAndDialogRefuseMultiSelect(t *testing.T) {
+	f := newPromptFixture(t, promptScreen(promptRule, " Which toppings?", " ❯ 1. [ ] Cheese", "   2. [x] Basil", "", " Enter to select · Space to toggle · Esc to cancel"))
+	result := f.prompt(t, map[string]any{"text": "1", "submit": true, "client_msg_id": "m1", "force": true}, 409)
+	if _, present := result["dialog"]; result["code"] != "pane_dialog" || present || !strings.Contains(result["error"].(string), "请在终端里操作") {
+		t.Fatalf("result=%v", result)
+	}
+	if dialog := requestJSON(t, f.client, "GET", f.url("/dialog"), "", nil, 200)["dialog"]; dialog != nil {
+		t.Fatalf("dialog=%v", dialog)
+	}
+	if len(f.endpoint.callsOf("pane.send_input")) != 0 {
+		t.Fatal("text was typed into a multi-select dialog")
+	}
+}
+
+// 正文送出后访问被撤销：回车不再打进终端，结果如实报不确定。
+func TestPromptStopsTypingWhenAccessIsRevoked(t *testing.T) {
+	f := newPromptFixture(t, idleScreen)
+	calls := 0
+	f.endpoint.beforeSend = func() {
+		calls++
+		if calls == 2 {
+			f.revoke(t)
+		}
+	}
+	result := postJSON(t, f.client, f.url("/prompt"), f.csrf, map[string]any{"text": "half", "submit": true, "client_msg_id": "m1"}, 502)
+	if result["code"] != "delivery_unknown" {
+		t.Fatalf("result=%v", result)
+	}
+	if got := sentTexts(f.endpoint); strings.Join(got, ",") != "half|[]" {
+		t.Fatalf("the Enter was typed after revocation: %q", got)
+	}
+}
+
+// 浏览器在两腿之间断开：发送不被截断，正文与回车都送到。
+func TestPromptCompletesWhenTheBrowserLeaves(t *testing.T) {
+	f := newPromptFixture(t, idleScreen)
+	ctx, cancel := context.WithCancel(t.Context())
+	f.endpoint.beforeSend = func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	}
+	encoded, _ := json.Marshal(map[string]any{"text": "keep going", "submit": true, "client_msg_id": "m1"})
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.url("/prompt"), strings.NewReader(string(encoded)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://example.test")
+	request.Header.Set("X-CSRF-Token", f.csrf)
+	if response, err := f.client.Do(request); err == nil {
+		response.Body.Close()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(f.endpoint.callsOf("pane.send_input")) < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := sentTexts(f.endpoint); strings.Join(got, ",") != `keep going|[],|["Enter"]` {
+		t.Fatalf("a browser disconnect truncated the send: %q", got)
+	}
+}
+
+// 成功发送记审计：只记 pane、长度与 force，不记正文。
+func TestPromptAuditsWithoutContent(t *testing.T) {
+	f := newPromptFixture(t, draftScreen)
+	f.prompt(t, map[string]any{"text": "秘密口令 secret", "submit": true, "client_msg_id": "m1", "force": true}, 200)
+	entries, err := f.db.ListAudit(context.Background(), store.AuditFilter{Page: store.Page{Limit: 10}, Action: "pane.prompt"})
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%+v err=%v", entries, err)
+	}
+	details := string(entries[0].Details)
+	if entries[0].TargetID != "prompt-host" || !strings.Contains(details, `"pane_id":"w1:p1"`) || !strings.Contains(details, `"chars":11`) || !strings.Contains(details, `"force":true`) || strings.Contains(details, "secret") || strings.Contains(details, "秘密") {
+		t.Fatalf("audit=%+v details=%s", entries[0], details)
 	}
 }

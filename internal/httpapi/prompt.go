@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/riba2534/herdrx/internal/herdr"
 	"github.com/riba2534/herdrx/internal/screenparse"
@@ -23,8 +24,9 @@ import (
 var clientMessageID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const (
-	promptTTL         = 10 * time.Minute
-	promptLogCapacity = 4096
+	promptTTL = 10 * time.Minute
+	// 每个用户最多记住这么多条；满了只淘汰该用户最早的已结束记录，进行中的不淘汰。
+	promptUserCapacity = 256
 	// 读屏与连接的预算；开始打字后改用独立的发送预算，浏览器断开也不会把发送截在半路。
 	promptCheckTimeout = 15 * time.Second
 	promptSendTimeout  = 10 * time.Second
@@ -45,53 +47,81 @@ type promptKey struct{ user, host, pane, id string }
 type promptEntry struct {
 	at      time.Time
 	done    chan struct{}
-	outcome promptOutcome
+	outcome promptOutcome // 0 表示进行中
 }
 
-// promptLog 是内存里的幂等表，容量有界；只在增删查时持锁，网络调用不持锁。
+// promptLog 是内存里的幂等表，按用户分开、每个用户容量有界；只在增删查时持锁，网络调用不持锁。
 type promptLog struct {
-	mu      sync.Mutex
-	entries map[promptKey]*promptEntry
+	mu    sync.Mutex
+	users map[string]map[promptKey]*promptEntry
 }
 
-// begin 登记一次发送；同一个 key 已有记录时返回那条记录与 false。
-func (l *promptLog) begin(key promptKey, now time.Time) (*promptEntry, bool) {
+var errPromptBusy = errors.New("too many prompts in flight")
+
+// begin 登记一次发送；同一个 key 已有记录时返回那条记录与 false。该用户的记录满了且全在进行中时
+// 返回 errPromptBusy。
+func (l *promptLog) begin(key promptKey, now time.Time) (*promptEntry, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.entries == nil {
-		l.entries = make(map[promptKey]*promptEntry)
+	if l.users == nil {
+		l.users = make(map[string]map[promptKey]*promptEntry)
 	}
-	for other, entry := range l.entries {
-		if now.Sub(entry.at) > promptTTL {
-			delete(l.entries, other)
+	entries := l.users[key.user]
+	if entries == nil {
+		entries = make(map[promptKey]*promptEntry)
+		l.users[key.user] = entries
+	}
+	for other, entry := range entries {
+		if entry.outcome != 0 && now.Sub(entry.at) > promptTTL {
+			delete(entries, other)
 		}
 	}
-	if entry := l.entries[key]; entry != nil {
-		return entry, false
+	if entry := entries[key]; entry != nil {
+		return entry, false, nil
 	}
-	if len(l.entries) >= promptLogCapacity {
-		var oldest promptKey
+	if len(entries) >= promptUserCapacity {
+		var oldest *promptKey
 		var oldestAt time.Time
-		for other, entry := range l.entries {
-			if oldestAt.IsZero() || entry.at.Before(oldestAt) {
-				oldest, oldestAt = other, entry.at
+		for other, entry := range entries {
+			if entry.outcome != 0 && (oldest == nil || entry.at.Before(oldestAt)) {
+				other := other
+				oldest, oldestAt = &other, entry.at
 			}
 		}
-		delete(l.entries, oldest)
+		if oldest == nil {
+			return nil, false, errPromptBusy
+		}
+		delete(entries, *oldest)
 	}
 	entry := &promptEntry{at: now, done: make(chan struct{})}
-	l.entries[key] = entry
-	return entry, true
+	entries[key] = entry
+	return entry, true, nil
 }
 
 func (l *promptLog) finish(key promptKey, entry *promptEntry, outcome promptOutcome) {
 	l.mu.Lock()
 	entry.outcome = outcome
-	if outcome == promptForgotten && l.entries[key] == entry {
-		delete(l.entries, key)
+	if entries := l.users[key.user]; outcome == promptForgotten && entries[key] == entry {
+		delete(entries, key)
+		if len(entries) == 0 {
+			delete(l.users, key.user)
+		}
 	}
 	l.mu.Unlock()
 	close(entry.done)
+}
+
+// inputContext 是往终端里打字用的 context：不随浏览器断开而取消（免得把按键序列截在半路），
+// 但随这次登录的访问授权撤销（退出、过期、禁用、主机移除）而取消。
+func (a *API) inputContext(request *http.Request, hostID string, timeout time.Duration) (context.Context, func(), error) {
+	ctx := request.Context()
+	lease, err := a.access.attach(context.WithoutCancel(ctx), userFromContext(ctx).ID, sessionFromContext(ctx).ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	lease.hostID.Store(&hostID)
+	inputCtx, cancel := context.WithTimeout(lease.ctx, timeout)
+	return inputCtx, func() { cancel(); lease.release() }, nil
 }
 
 func writeDeliveryUnknown(writer http.ResponseWriter, status int) {
@@ -126,7 +156,11 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 	key := promptKey{user: userFromContext(request.Context()).ID, host: host.ID, pane: paneID, id: input.ClientMsgID}
 	var entry *promptEntry
 	for {
-		current, fresh := log.begin(key, time.Now())
+		current, fresh, err := log.begin(key, time.Now())
+		if err != nil {
+			writeError(writer, http.StatusTooManyRequests, "prompt_busy", "同时进行中的发送太多，什么都没有发送。请等前面的发送结束后再试")
+			return
+		}
 		if fresh {
 			entry = current
 			break
@@ -156,8 +190,15 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer endpoint.Close()
-	if dialog := screenparse.ParseDialog(text); dialog != nil {
-		writeJSON(writer, http.StatusConflict, map[string]any{"code": "pane_dialog", "error": "终端正弹着一个选择对话框，这段文字没有发出去，免得被当成选项。请先回答对话框再发送", "dialog": dialog})
+	// 光标停在“Type something”之类的自由输入项上时，文字正是要进对话框自己的输入框，照常发送。
+	if dialog := screenparse.ParseDialog(text); dialog != nil && !dialog.FreeText {
+		payload := map[string]any{"code": "pane_dialog", "error": "终端正弹着一个选择对话框，这段文字没有发出去，免得被当成选项。请先回答对话框再发送"}
+		if dialog.Multiple {
+			payload["error"] = "终端正弹着一个多选对话框，这段文字没有发出去。请在终端里操作"
+		} else {
+			payload["dialog"] = dialog
+		}
+		writeJSON(writer, http.StatusConflict, payload)
 		return
 	}
 	if !input.Force && screenparse.HasDraft(text) {
@@ -165,9 +206,13 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// 从这里起开始往终端里打字：脱离浏览器请求的取消，两腿按自己的预算走完。
-	sendCtx, cancelSend := context.WithTimeout(context.WithoutCancel(request.Context()), promptSendTimeout)
-	defer cancelSend()
+	// 从这里起开始往终端里打字：两腿不随浏览器断开截断，但随访问授权撤销停止。
+	sendCtx, releaseSend, err := a.inputContext(request, host.ID, promptSendTimeout)
+	if err != nil {
+		a.authenticationError(writer, err)
+		return
+	}
+	defer releaseSend()
 	if input.Text != "" {
 		if _, err := endpoint.Call(sendCtx, "pane.send_input", map[string]any{"pane_id": paneID, "text": input.Text, "keys": []string{}}); err != nil {
 			var rejected *herdr.APIError
@@ -192,5 +237,6 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	outcome = promptSent
+	a.audit(request.WithContext(sendCtx), "pane.prompt", "host", host.ID, map[string]any{"pane_id": paneID, "chars": utf8.RuneCountInString(input.Text), "submit": input.Submit, "force": input.Force})
 	writeJSON(writer, http.StatusOK, map[string]any{"delivered": "sent"})
 }

@@ -140,7 +140,7 @@ func TestParseDialogRecognizesKnownDialogs(t *testing.T) {
 		{"boxed", boxedPrompt, "Do you want to make this edit?", []string{"Edit file", "src/app.ts"}, []Option{
 			{1, "Yes", true}, {2, "No, and tell Claude what to do", false},
 		}, true},
-		{"codex", codexApproval, "Allow command?", []string{"• Running cargo test", "$ cargo test --workspace"}, []Option{
+		{"codex", codexApproval, "Allow command?", []string{"$ cargo test --workspace"}, []Option{
 			{1, "Yes, proceed", true}, {2, "Yes, and don't ask again for this command", false}, {3, "No, and tell Codex what to do differently", false},
 		}, true},
 	}
@@ -194,6 +194,22 @@ func TestParseDialogRejectsWhatItCannotRecognize(t *testing.T) {
 		// 不编号列表必须有按键提示页脚。
 		"unnumbered without footer": screen(rule, " Pick one", " ❯ No, exit", "   Yes, I trust this folder"),
 		"unnumbered single row":     screen(rule, " Trust?", " ❯ Yes", "", " Enter to confirm · Esc to cancel"),
+		// 没有页脚时，编号选项上方必须有对话框顶边。
+		"numbered without footer or edge": screen("● Steps:", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"),
+		// Codex 历史里回显的用户消息 `› 1. …`，底部是 Codex 自己的输入框。
+		"codex history echo": screen("› 1. fix the parser", "› 2. add tests", "", "• Working (3s)", "", "› ", "", "  ⏎ send   ⇧⏎ newline   ⌃C quit"),
+		// 输入框里的编号草稿。
+		"numbered draft": inputBox("❯ 1. first step", "  2. second step"),
+		// Shell 里 cat 出来的同形文本：页脚下面还有提示符。
+		"cat output": screen("$ cat notes.txt", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Enter to confirm · Esc to cancel", "$ "),
+		// Claude 工作中的状态行不是对话框页脚。
+		"working status": screen("● Plan:", " ❯ 1. Parse", "   2. Route", "", "✻ Thinking… (esc to interrupt)"),
+		// 选项之间隔着空段：不是同一组选项。
+		"options split by blank": screen(rule, " Proceed?", " ❯ 1. Yes", "", "   2. No", "", " Esc to cancel"),
+		// 不编号选项折行：续行与下一个选项对齐在同一列，无法区分。
+		"wrapped unnumbered option": screen(rule, " Trust?", " ❯ Yes, I trust this folder and every project below it too", "   and its subfolders", "   No, exit", "", " Enter to confirm · Esc to cancel"),
+		// 页脚上方紧挨的不是选项。
+		"footer under prose": screen(rule, " Some help text", "", " Esc to cancel"),
 	}
 	for name, text := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -323,5 +339,46 @@ func TestParseDialogJoinsWrappedLines(t *testing.T) {
 	}
 	if dialog.Title != "This folder is new to the agent. Do you trust it?" || !reflect.DeepEqual(dialog.Lines, []string{"这个目录里的文件会被读取编辑和执行请先确认来源。"}) {
 		t.Fatalf("title=%q lines=%q", dialog.Title, dialog.Lines)
+	}
+}
+
+// 助手回复里的编号列表在对话框正上方（没有顶边）：选项只收紧挨页脚的那一组，说明不越过回复标记。
+func TestParseDialogDoesNotPullAgentListsIntoTheDialog(t *testing.T) {
+	for name, text := range map[string]string{
+		"unbounded": screen("● Steps:", "  1. Read the config", "  2. Write the parser", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"),
+		"edge":      screen("● Steps:", "  1. Read the config", "  2. Write the parser", "▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔", "  3. Extra", " ❯ 1. Yes", "   2. No", "", " Esc to cancel"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dialog := ParseDialog(text)
+			if dialog == nil {
+				t.Fatal("dialog not recognized")
+			}
+			if want := []Option{{1, "Yes", true}, {2, "No", false}}; !reflect.DeepEqual(dialog.Options, want) {
+				t.Fatalf("options=%+v", dialog.Options)
+			}
+			for _, line := range append([]string{dialog.Title}, dialog.Lines...) {
+				if strings.Contains(line, "Read the config") || strings.Contains(line, "Steps") {
+					t.Fatalf("agent text leaked into the dialog: %+v", dialog)
+				}
+			}
+		})
+	}
+}
+
+// 多选题不能用一次按键作答；光标停在自由输入项上时，键入的文字进入对话框自己的输入框。
+func TestParseDialogMarksMultiSelectAndFreeText(t *testing.T) {
+	multi := ParseDialog(screen(rule, " Which toppings?", " ❯ 1. [ ] Cheese", "   2. [x] Basil", "   3. [ ] Olives", "", " Enter to select · Space to toggle · Esc to cancel"))
+	if multi == nil || !multi.Multiple {
+		t.Fatalf("multi-select not marked: %+v", multi)
+	}
+	if single := ParseDialog(planPrompt(1)); single == nil || single.Multiple || single.FreeText {
+		t.Fatalf("plain dialog marked: %+v", single)
+	}
+	free := ParseDialog(strings.Replace(strings.Replace(askQuestion, "❯ 2. Dark", "  2. Dark", 1), "  3. Type something.", "❯ 3. Type something.", 1))
+	if free == nil || !free.FreeText || free.Selected() != 2 {
+		t.Fatalf("free-text cursor not marked: %+v", free)
+	}
+	if ParseDialog(askQuestion).FreeText {
+		t.Fatal("cursor on a regular option must not be free text")
 	}
 }
