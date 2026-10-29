@@ -314,10 +314,11 @@ try {
       })
 
       // Bottom-following must survive same-ID reply growth and composer resizing.
+      // The growing reply is the final answer (a2): a1 sits in the folded steps of the finished turn.
       await withFixture(browser, desktop, {}, async ({ page }) => {
-        const original = QA[1].blocks[0].text
+        const original = QA[3].blocks[0].text
         try {
-          QA[1].blocks[0].text = Array.from({ length: 80 }, (_, i) => `Reply line ${i}`).join('\n\n')
+          QA[3].blocks[0].text = Array.from({ length: 80 }, (_, i) => `Reply line ${i}`).join('\n\n')
           await page.getByRole('switch', { name: '对话视图' }).first().click()
           const chat = page.getByRole('region', { name: '对话视图' })
           await chat.getByRole('button', { name: /aaaa1111/ }).click()
@@ -343,7 +344,7 @@ try {
           await expect.poll(gap).toBeGreaterThan(10)
           await expect(jump).toHaveCount(0)
           const nearBottomTop = await log.evaluate((node) => node.scrollTop)
-          QA[1].blocks[0].text += '\n\n' + 'Growing same reply.\n\n'.repeat(40)
+          QA[3].blocks[0].text += '\n\n' + 'Growing same reply.\n\n'.repeat(40)
           await chat.getByRole('button', { name: '刷新会话记录' }).click()
           await expect(log).toContainText('Growing same reply.')
           assert.ok(Math.abs(await log.evaluate((node) => node.scrollTop) - nearBottomTop) < 2, 'small upward wheel was undone by polling')
@@ -356,7 +357,7 @@ try {
           await log.evaluate((node) => { node.scrollTop -= 300 })
           await expect(jump).toBeVisible()
           const previousTop = await log.evaluate((node) => node.scrollTop)
-          QA[1].blocks[0].text += '\n\nWhile reading history.\n\n'.repeat(20)
+          QA[3].blocks[0].text += '\n\nWhile reading history.\n\n'.repeat(20)
           await chat.getByRole('button', { name: '刷新会话记录' }).click()
           await expect(log).toContainText('While reading history.')
           assert.ok(Math.abs(await log.evaluate((node) => node.scrollTop) - previousTop) < 2, 'reply update pulled reader away from history')
@@ -364,7 +365,7 @@ try {
           await expect.poll(gap).toBeLessThan(2)
           await expect(jump).toHaveCount(0)
         } finally {
-          QA[1].blocks[0].text = original
+          QA[3].blocks[0].text = original
         }
       })
 
