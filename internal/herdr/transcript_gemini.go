@@ -3,8 +3,11 @@ package herdr
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
@@ -81,21 +84,21 @@ func transcriptGeminiMessages(ctx context.Context, files transcriptFS, codec tra
 	start := 0
 	switch {
 	case request.Before != "":
-		offset, ok := transcriptCursorOffset(codec, request.Before, token)
-		if !ok || offset <= 0 || offset > int64(len(document.Records)) {
+		offset, ok := geminiRecordCursor(codec, request.Before, token, document.Records)
+		if !ok || offset <= 0 {
 			reset = true
 			start = len(document.Records)
 			break
 		}
-		start = int(offset)
+		start = offset
 	case request.Cursor != "":
-		offset, ok := transcriptCursorOffset(codec, request.Cursor, token)
-		if !ok || offset < 0 || offset > int64(len(document.Records)) {
+		offset, ok := geminiRecordCursor(codec, request.Cursor, token, document.Records)
+		if !ok {
 			reset = true
 			start = len(document.Records)
 			break
 		}
-		start = int(offset)
+		start = offset
 	default:
 		start = len(document.Records)
 	}
@@ -134,13 +137,13 @@ func transcriptGeminiMessages(ctx context.Context, files transcriptFS, codec tra
 	if !backward && next == len(records) {
 		consumed = int64(len(records))
 	}
-	sealed, err := codec.seal(document.SessionID, rel, identity, formatInt(consumed))
+	sealed, err := codec.seal(document.SessionID, rel, identity, geminiRecordPosition(records, int(consumed)))
 	if err != nil {
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
 	page.NextCursor = sealed
 	if backward && first > 0 && len(pageRecords) > 0 {
-		previous, err := codec.seal(document.SessionID, rel, identity, formatInt(int64(first)))
+		previous, err := codec.seal(document.SessionID, rel, identity, geminiRecordPosition(records, first))
 		if err != nil {
 			return transcriptDegrade(ChatReasonInternalError, agent)
 		}
@@ -214,22 +217,25 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 	reset := false
 	switch {
 	case request.Before != "":
-		offset, ok := transcriptCursorOffset(codec, request.Before, token)
-		if !ok || offset <= 0 || offset > head.Size {
+		offset, ok, err := geminiByteCursor(ctx, files, codec, request.Before, token, rel, head)
+		if err != nil {
+			return transcriptDegradeFromError(err, agent)
+		}
+		if !ok || offset <= 0 {
 			reset = true
 		} else {
 			end = offset
 		}
 	case request.Cursor != "":
-		offset, ok := transcriptCursorOffset(codec, request.Cursor, token)
-		if !ok || offset < 0 || offset > head.Size {
+		offset, ok, err := geminiByteCursor(ctx, files, codec, request.Cursor, token, rel, head)
+		if err != nil {
+			return transcriptDegradeFromError(err, agent)
+		}
+		if !ok {
 			reset = true
 		} else if offset == head.Size {
-			next, err := codec.seal(sessionID, rel, identity, formatInt(head.Size))
-			if err != nil {
-				return transcriptDegrade(ChatReasonInternalError, agent)
-			}
-			return TranscriptPage{Supported: true, Agent: agent, SessionID: sessionID, Messages: []agentlog.Record{}, NextCursor: next, Binding: ChatBindingSelected}
+			// 没有新字节：原样交回同一个游标（锚点已经核对过）。
+			return TranscriptPage{Supported: true, Agent: agent, SessionID: sessionID, Messages: []agentlog.Record{}, NextCursor: request.Cursor, Binding: ChatBindingSelected}
 		} else {
 			end = head.Size
 		}
@@ -280,19 +286,103 @@ func transcriptGeminiTail(ctx context.Context, files transcriptFS, codec transcr
 	if page.Messages == nil {
 		page.Messages = []agentlog.Record{}
 	}
-	next, err := codec.seal(sessionID, rel, identity, formatInt(end))
+	next, err := codec.seal(sessionID, rel, identity, geminiBytePosition(part.Data, start, end))
 	if err != nil {
 		return transcriptDegrade(ChatReasonInternalError, agent)
 	}
 	page.NextCursor = next
 	if alignedStart > 0 {
-		previous, err := codec.seal(sessionID, rel, identity, formatInt(alignedStart))
+		previous, err := codec.seal(sessionID, rel, identity, geminiBytePosition(part.Data, start, alignedStart))
 		if err != nil {
 			return transcriptDegrade(ChatReasonInternalError, agent)
 		}
 		page.PrevCursor = previous
 	}
 	return page
+}
+
+// 游标位置带一个锚点，防止「同一会话被截短后又长回来」时按旧位置续读：
+//   - 整份文档模式：位置是记录下标，锚点是它前一条记录 id 的摘要。/rewind 或压缩后，
+//     同一下标前面已经不是原来那条记录，对不上就 reset。
+//   - 尾部窗口模式：位置是字节偏移，锚点是偏移前最多 64 字节的摘要。原地重写会让这几个
+//     字节变掉；单纯在末尾追加不会。
+const geminiAnchorBytes = 64
+
+func geminiDigest(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
+func geminiRecordPosition(records []agentlog.Record, index int) string {
+	anchor := "-"
+	if index > 0 && index <= len(records) {
+		anchor = geminiDigest([]byte(records[index-1].ID))
+	}
+	return formatInt(int64(index)) + "." + anchor
+}
+
+func geminiRecordCursor(codec transcriptCodec, token string, expect []string, records []agentlog.Record) (int, bool) {
+	position, ok := geminiCursorPosition(codec, token, expect)
+	if !ok {
+		return 0, false
+	}
+	index, _, _ := strings.Cut(position, ".")
+	value, err := strconv.Atoi(index)
+	if err != nil || value < 0 || value > len(records) || geminiRecordPosition(records, value) != position {
+		return 0, false
+	}
+	return value, true
+}
+
+// geminiBytePosition 用手里这段 data（从文件偏移 base 开始）给 offset 生成带锚点的位置。
+func geminiBytePosition(data []byte, base, offset int64) string {
+	size := min(int64(geminiAnchorBytes), offset-base)
+	if size < 0 {
+		size = 0
+	}
+	window := data[offset-base-size : offset-base]
+	return formatInt(offset) + "." + formatInt(size) + "." + geminiDigest(window)
+}
+
+// geminiByteCursor 解开尾部窗口游标，并重读偏移前的锚点字节核对。
+func geminiByteCursor(ctx context.Context, files transcriptFS, codec transcriptCodec, token string, expect []string, rel string, head transcriptReadResult) (int64, bool, error) {
+	position, ok := geminiCursorPosition(codec, token, expect)
+	if !ok {
+		return 0, false, nil
+	}
+	fields := strings.Split(position, ".")
+	if len(fields) != 3 {
+		return 0, false, nil
+	}
+	offset, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil || offset < 0 || offset > head.Size {
+		return 0, false, nil
+	}
+	size, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || size < 0 || size > geminiAnchorBytes || size > offset {
+		return 0, false, nil
+	}
+	part, err := transcriptReadOne(ctx, files, transcriptRootGemini, rel, offset-size, size)
+	if err != nil {
+		return 0, false, err
+	}
+	if part.Err != nil || !part.Exists || part.Identity != head.Identity || int64(len(part.Data)) != size {
+		return 0, false, nil
+	}
+	return offset, geminiDigest(part.Data) == fields[2], nil
+}
+
+func geminiCursorPosition(codec transcriptCodec, token string, expect []string) (string, bool) {
+	parts, ok := codec.open(token, 4)
+	if !ok {
+		return "", false
+	}
+	for index, value := range expect {
+		if parts[index] != value {
+			return "", false
+		}
+	}
+	return parts[3], true
 }
 
 func geminiPrefix(ctx context.Context, files transcriptFS, rel string, size int64) (agentlog.GeminiDocument, error) {

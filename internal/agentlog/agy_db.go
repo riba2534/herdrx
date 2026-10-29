@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"syscall"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,8 +20,10 @@ import (
 // （mode=ro + query_only）。
 //
 // sqlite 只能按路径名打开文件，而调用方是按 fd 逐段核对过的。为了不让「核对之后把中间目录
-// 换成符号链接」的竞态生效，查询结束、连接还开着时确认本进程确实有一个 fd 指向核对过的
-// inode（/proc/self/fd 或 /dev/fd），否则丢弃结果。
+// 换成符号链接」的竞态生效，打开前记下本进程的 fd 表（/proc/self/fd 或 /dev/fd），查询结束、
+// 连接还开着时，要求**这次新增**的 fd 里有一个指向核对过的 inode，否则丢弃结果。长驻进程里
+// 别处已经打开的同 inode fd 不算数；带核对的查询互斥执行，新增的同 inode fd 只可能来自本次
+// sqlite。读不到 fd 表时一律拒绝。
 
 const (
 	agyDefaultLimit     = 64
@@ -87,6 +91,14 @@ func QueryAgyDB(ctx context.Context, path string, verified os.FileInfo, bounds A
 	maxTotal := bounds.MaxTotalBytes
 	if maxTotal <= 0 {
 		maxTotal = agyDefaultTotal
+	}
+	var before map[string]agyFD
+	if verified != nil {
+		agyQueryMu.Lock()
+		defer agyQueryMu.Unlock()
+		if before, err = agyOpenFDs(); err != nil {
+			return nil, false, ErrAgyDenied
+		}
 	}
 	agyBeforeOpen(path)
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String()
@@ -156,27 +168,62 @@ ORDER BY idx `+direction+` LIMIT ?`,
 	if err := rows.Err(); err != nil {
 		return nil, false, err
 	}
-	if verified != nil && !agyOpenedInode(verified) {
+	if verified != nil && !agyOpenedInode(before, verified) {
 		return nil, false, ErrAgyDenied
 	}
 	return out, !stopped && scanned < limit, nil
 }
 
-// agyOpenedInode 报告本进程是否有 fd 指向 verified 那个 inode。sqlite 在连接关闭前一直持有
-// 库文件的 fd；调用方核对用的 fd 在查询前已经关闭，不会自我匹配。
-func agyOpenedInode(verified os.FileInfo) bool {
+// agyQueryMu 让带核对的查询一次只有一个，新增 fd 才能归到本次 sqlite 打开。
+var agyQueryMu sync.Mutex
+
+type agyFD struct {
+	dev, ino uint64
+}
+
+// agyOpenFDs 返回本进程当前的 fd 表：fd 号到它指向的文件。
+func agyOpenFDs() (map[string]agyFD, error) {
 	for _, base := range []string{"/proc/self/fd", "/dev/fd"} {
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			continue
 		}
+		fds := make(map[string]agyFD, len(entries))
 		for _, entry := range entries {
-			info, err := os.Stat(base + "/" + entry.Name())
-			if err == nil && os.SameFile(info, verified) {
-				return true
+			if info, err := os.Stat(base + "/" + entry.Name()); err == nil {
+				fds[entry.Name()] = agyFileID(info)
 			}
 		}
+		return fds, nil
+	}
+	return nil, errors.New("fd table unavailable")
+}
+
+func agyFileID(info os.FileInfo) agyFD {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		return agyFD{dev: uint64(stat.Dev), ino: uint64(stat.Ino)}
+	}
+	return agyFD{}
+}
+
+// agyOpenedInode 报告 before 之后新出现的 fd（新号码，或号码被复用后指向别的文件）里是否有
+// 一个指向 verified。调用方核对用的 fd 在 before 之前就已关闭。
+func agyOpenedInode(before map[string]agyFD, verified os.FileInfo) bool {
+	after, err := agyOpenFDs()
+	if err != nil {
 		return false
+	}
+	want := agyFileID(verified)
+	if want == (agyFD{}) {
+		return false
+	}
+	for name, id := range after {
+		if old, existed := before[name]; existed && old == id {
+			continue
+		}
+		if id == want {
+			return true
+		}
 	}
 	return false
 }

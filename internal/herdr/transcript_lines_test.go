@@ -60,8 +60,8 @@ func TestTraexOversizedLineHonorsThePageLimit(t *testing.T) {
 	scope := TranscriptScope{PaneID: "p", Agent: agentlog.AgentTraex, CWD: cwd,
 		Evidence: &AgentSession{Source: "herdr:codex", Agent: "codex", Kind: "id", Value: sessionID}}
 	page := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{})
-	if page.Binding != ChatBindingVerified || len(page.Messages) != transcriptPageRecords || page.Skipped < 40 {
-		t.Fatalf("messages %d skipped %d binding %q reason %q", len(page.Messages), page.Skipped, page.Binding, page.Reason)
+	if page.Binding != ChatBindingVerified || len(page.Messages) != transcriptPageRecords || page.Truncated != 40 || page.Skipped != 0 {
+		t.Fatalf("messages %d truncated %d skipped %d binding %q reason %q", len(page.Messages), page.Truncated, page.Skipped, page.Binding, page.Reason)
 	}
 	next := readTranscript(context.Background(), files, codec, scope, TranscriptRequest{Session: page.Session, Cursor: page.NextCursor})
 	if len(next.Messages) != 0 {

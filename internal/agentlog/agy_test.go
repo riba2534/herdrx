@@ -272,21 +272,61 @@ func TestQueryAgyDBRejectsAPathToAnotherOpenInode(t *testing.T) {
 	}
 }
 
-func TestAgyOpenedInodeSeesOnlyOpenFiles(t *testing.T) {
+// 只认快照之后新打开的 fd：快照前就开着的同 inode fd（长驻进程里别的连接）不算。
+func TestAgyOpenedInodeCountsOnlyNewFDs(t *testing.T) {
 	dir := t.TempDir()
-	open, err := os.Create(filepath.Join(dir, "open"))
+	path := filepath.Join(dir, "db")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(path)
+	held, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer open.Close()
-	openInfo, _ := open.Stat()
-	closed := filepath.Join(dir, "closed")
-	if err := os.WriteFile(closed, nil, 0o600); err != nil {
+	defer held.Close()
+	before, err := agyOpenFDs()
+	if err != nil {
 		t.Fatal(err)
 	}
-	closedInfo, _ := os.Stat(closed)
-	if !agyOpenedInode(openInfo) || agyOpenedInode(closedInfo) {
-		t.Fatal("fd scan did not tell an open inode from a closed one")
+	if agyOpenedInode(before, info) {
+		t.Fatal("an fd opened before the snapshot was counted")
+	}
+	fresh, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if !agyOpenedInode(before, info) {
+		t.Fatal("a new fd on the verified inode was missed")
+	}
+}
+
+// 长驻进程里另一个连接一直开着核对过的那个库：sqlite 这次打开的却是换上来的文件，必须拒绝。
+func TestQueryAgyDBIgnoresAnotherHolderOfTheVerifiedInode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conv.db")
+	writeAgyDB(t, path, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "ORIGINAL"))}})
+	swap := filepath.Join(dir, "swap.db")
+	writeAgyDB(t, swap, []agyDBStep{{Idx: 1, StepType: 14, Payload: pbBytesField(19, pbStringField(1, "SWAPPED_SECRET"))}})
+	verified, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holder, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	agyBeforeOpen = func(target string) {
+		if err := os.Rename(swap, target); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { agyBeforeOpen = func(string) {} }()
+	rows, _, err := QueryAgyDB(context.Background(), path, verified, AgyBounds{Limit: 10})
+	if !errors.Is(err, ErrAgyDenied) || len(rows) != 0 {
+		t.Fatalf("rows=%d err=%v", len(rows), err)
 	}
 }
 

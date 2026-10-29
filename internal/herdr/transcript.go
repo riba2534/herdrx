@@ -114,6 +114,9 @@ type TranscriptPage struct {
 	HasMore    bool
 	Skipped    int
 	Binding    string
+	// Truncated 是因单独一行超过页上限而没有返回的记录数（行已整体算作读过）。
+	// 它不是格式问题，单独计数，前端提示去终端查看。
+	Truncated int
 	// Session 只在 verified 绑定时给出：服务端认领的那个候选 id，客户端之后带它续读。
 	Session string
 }
@@ -347,6 +350,7 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 // readTranscript 是共用引擎：判定 agent / cwd → 解析候选或会话 → 按游标切片 → 返回记录。
 // 它从不返回 Go 错误：所有失败都表达成契约里的降级形状，客户端才能渲染诚实的空态。
 func readTranscript(ctx context.Context, files transcriptFS, codec transcriptCodec, scope TranscriptScope, request TranscriptRequest) TranscriptPage {
+	ctx = withGeminiDirCache(ctx)
 	reported := strings.TrimSpace(scope.Agent)
 	agent := agentlog.TranscriptFormat(reported)
 	if agent == "" {
@@ -1152,7 +1156,8 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		Messages:  agentlog.UpsertEntries(records[first:keep]),
 		Binding:   ChatBindingSelected,
 		Reset:     reset,
-		Skipped:   decoded.Skipped + last - keep,
+		Skipped:   decoded.Skipped,
+		Truncated: last - keep,
 	}
 	consumed := decoded.Consumed
 	if last > first {
@@ -1199,7 +1204,7 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 
 // wholeLinePage 不把同一行里的多条记录拆到两页：游标是字节位置，拆开的行会在下一页重复或丢失。
 // traex 的 append 把多个 item 写在一行。页边界先向内收到整行；收完为空（单独一行就超过
-// 记录数或字节上限）时整行算作已读，只返回上限之内的前几条，其余记入 skipped。
+// 记录数或字节上限）时整行算作已读，只返回上限之内的前几条，其余记入 Truncated。
 // 返回的 records[first:keep] 是本页消息，records[first:last] 是本页消费掉的行。
 func wholeLinePage(records []agentlog.RangeEntry, sizes []int, first, last int, backward bool) (int, int, int) {
 	if first >= last {

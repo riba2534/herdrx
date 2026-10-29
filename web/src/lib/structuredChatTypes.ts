@@ -255,6 +255,11 @@ export type StructuredChatResponse = {
    * 被省略的 reasoning 记录**不**计入这里。
    */
   skipped?: number
+  /**
+   * 因单独一行超过页上限而没有返回的记录数（例如一行里追加了几百条）。服务端已把整行算作读过，
+   * 这些记录不会在后续页里出现；与格式无关，不计入 `skipped`。
+   */
+  truncated?: number
   /** 绑定来源。 */
   binding?: ChatBinding
   /** 仅 `binding: 'verified'` 时出现：服务端认领的候选 id，客户端之后作为 `session` 回传。 */
@@ -294,13 +299,15 @@ export type StructuredChatState = {
   previousCursor?: string
   hasMore: boolean
   skipped: number
+  truncated: number
 }
 
 export const EMPTY_STRUCTURED_CHAT_STATE: StructuredChatState = {
   status: 'idle',
   messages: [],
   hasMore: false,
-  skipped: 0
+  skipped: 0,
+  truncated: 0
 }
 
 /**

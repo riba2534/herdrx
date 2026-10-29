@@ -276,6 +276,7 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
         {!error && bound && <>
           {state.previousCursor && <div className="chat-earlier"><Button className="button-secondary chat-load-earlier" onClick={() => session.loadEarlier()}>加载更早的记录</Button></div>}
           {state.skipped > 0 && <p className="chat-skipped" role="note">有 {state.skipped} 条记录格式无法识别，可能未完整显示。</p>}
+          {state.truncated > 0 && <p className="chat-truncated" role="note">这一行记录过大，部分内容未显示，可在终端查看。</p>}
           {/* 受限读取超限：说清楚"读不下"，而不是让下面的空态冒充"这个会话没有记录"。 */}
           {state.reason === 'read_limit_exceeded' && <p className="chat-limit" role="alert">{reasonText('read_limit_exceeded', pane.agent, state.source)}</p>}
           {pane.agent && status === 'working' && <p className="chat-waiting" role="status">Agent 正在工作（{agentStatusLabel(status)}），本轮写盘后会自动出现在下方。</p>}

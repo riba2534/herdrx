@@ -155,6 +155,7 @@ export function normalizeStructuredChatResponse(value: unknown): StructuredChatR
     reset: optionalBoolean(raw.reset),
     has_more: optionalBoolean(raw.has_more),
     skipped: optionalNumber(raw.skipped),
+    truncated: optionalNumber(raw.truncated),
     binding: raw.binding === 'selected' || raw.binding === 'verified' ? (raw.binding as ChatBinding) : undefined,
     session: raw.binding === 'verified' ? optionalText(raw.session) : undefined,
   }
@@ -243,6 +244,7 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
       previousCursor: undefined,
       hasMore: false,
       skipped: 0,
+      truncated: 0,
     }
   }
   if (page.reason === 'session_unavailable') {
@@ -260,6 +262,7 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
       previousCursor: undefined,
       hasMore: false,
       skipped: 0,
+      truncated: 0,
     }
   }
   // 只有用户显式选择过候选（`state.session`），或服务端用 Herdr 证据 verified 认领并给出候选 id，
@@ -305,6 +308,7 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
     previousCursor: page.previous_cursor ?? (direction === 'earlier' || page.reset ? undefined : state.previousCursor),
     hasMore: page.has_more === true,
     skipped: (page.reset ? 0 : state.skipped || 0) + (page.skipped || 0),
+    truncated: (page.reset ? 0 : state.truncated || 0) + (page.truncated || 0),
   }
 }
 

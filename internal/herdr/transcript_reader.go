@@ -187,20 +187,33 @@ def op_read(root_fd, request):
     return {"ok": True, "reads": results}
 
 
-def opened_inode(verified):
+def open_fds():
     for base in ("/proc/self/fd", "/dev/fd"):
         try:
             names = os.listdir(base)
         except OSError:
             continue
+        fds = {}
         for name in names:
             try:
                 info = os.stat(base + "/" + name)
             except OSError:
                 continue
-            if (info.st_dev, info.st_ino) == verified:
-                return True
+            fds[name] = (info.st_dev, info.st_ino)
+        return fds
+    return None
+
+
+def opened_inode(before, verified):
+    # 只认打开 sqlite 之后新出现的 fd；读不到 fd 表一律拒绝。
+    after = open_fds()
+    if before is None or after is None:
         return False
+    for name, ident in after.items():
+        if before.get(name) == ident:
+            continue
+        if ident == verified:
+            return True
     return False
 
 
@@ -248,6 +261,7 @@ def op_agy(home, root_fd, request):
         return {"ok": False, "error": classify(exc)}
     if not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != verified:
         return {"ok": False, "error": "denied"}
+    fds_before = open_fds()
     try:
         conn = sqlite3.connect("file:%s?mode=ro" % quote(path, safe="/"), uri=True)
     except sqlite3.Error:
@@ -265,8 +279,8 @@ def op_agy(home, root_fd, request):
         except sqlite3.Error:
             return {"ok": False, "error": "unrecognized"}
         # sqlite 按路径名重新打开。中间目录可能在核对之后被换成符号链接，所以查询完、连接还开着时
-        # 确认本进程确实有一个 fd 指向刚才逐段核对过的那个 inode，否则丢弃结果。
-        if not opened_inode(verified):
+        # 确认这次新开的 fd 里有一个指向刚才逐段核对过的那个 inode，否则丢弃结果。
+        if not opened_inode(fds_before, verified):
             return {"ok": False, "error": "denied"}
     finally:
         conn.close()

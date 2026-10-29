@@ -399,10 +399,11 @@ func TestPythonAgyRejectsAnotherInodeAfterOpen(t *testing.T) {
 	writeAgySteps(t, filepath.Join(dir, uuid+".db"), step)
 	other := filepath.Join(t.TempDir(), "other.db")
 	writeAgySteps(t, other, step)
-	prelude := "import os, sqlite3\n_connect = sqlite3.connect\nsqlite3.connect = lambda target, **kw: _connect('file:' + os.environ['OTHER_DB'] + '?mode=ro', uri=True)\n"
+	// 进程里另有一个 fd 一直开着核对过的那份库（长驻进程的另一个连接），它不能替 sqlite 作证。
+	prelude := "import os, sqlite3\n_held = open(os.environ['REAL_DB'], 'rb')\n_connect = sqlite3.connect\nsqlite3.connect = lambda target, **kw: _connect('file:' + os.environ['OTHER_DB'] + '?mode=ro', uri=True)\n"
 	payload, _ := json.Marshal(transcriptRemoteRequest{Op: "agy", Agent: "agy", Rel: uuid + ".db", AgyLimit: 10})
 	cmd := exec.Command("python3", "-c", prelude+transcriptReaderSource)
-	cmd.Env = append(os.Environ(), "HOME="+home, "OTHER_DB="+other)
+	cmd.Env = append(os.Environ(), "HOME="+home, "OTHER_DB="+other, "REAL_DB="+filepath.Join(dir, uuid+".db"))
 	cmd.Stdin = strings.NewReader(string(payload))
 	output, err := cmd.Output()
 	if err != nil {

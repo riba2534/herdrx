@@ -276,6 +276,17 @@ describe('page merging', () => {
     expect(empty.status).toBe('ready')
     expect(empty.skipped).toBe(3)
   })
+
+  it('counts truncated records apart from skipped ones and clears them on reset', () => {
+    const cut = applyStructuredChatPage(state({ session: 'c1' }), page({ messages: [textRecord('a', 'user', '问')], binding: 'selected', truncated: 40 }))
+    expect(cut.truncated).toBe(40)
+    expect(cut.skipped).toBe(0)
+    const more = applyStructuredChatPage(cut, page({ messages: [], binding: 'selected', truncated: 2 }))
+    expect(more.truncated).toBe(42)
+    const rebuilt = applyStructuredChatPage(more, page({ messages: [textRecord('b', 'user', '新')], binding: 'selected', reset: true }))
+    expect(rebuilt.truncated).toBe(0)
+    expect(normalizeStructuredChatResponse({ supported: true, messages: [], truncated: 'x' }).truncated).toBeUndefined()
+  })
 })
 
 describe('turn grouping', () => {

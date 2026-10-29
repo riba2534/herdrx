@@ -38,7 +38,8 @@ func geminiProjectDirs(ctx context.Context, files transcriptFS, cwd string) ([]s
 			dirs = append(dirs, entry.Rel)
 			continue
 		}
-		if agentlog.GeminiProjectSlug(entry.Rel) {
+		// 64 位 hex 的目录是旧版别的项目的 hash 目录，没有 `.project_root`，不必去读。
+		if agentlog.GeminiProjectSlug(entry.Rel) && !geminiLegacyHashName(entry.Rel) {
 			slugs = append(slugs, entry.Rel)
 		}
 	}
@@ -49,10 +50,51 @@ func geminiProjectDirs(ctx context.Context, files transcriptFS, cwd string) ([]s
 	return append(dirs, marked...), nil
 }
 
+func geminiLegacyHashName(name string) bool {
+	if len(name) != 64 {
+		return false
+	}
+	for _, character := range name {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// geminiDirCache 记下一次请求里已经核对过的 slug 目录，同一请求里候选列表、绑定读取、会话
+// 失效后的重列都复用它，不再为同一个目录多读一次 `.project_root`。pane cwd 在一次请求内不变。
+type geminiDirCache struct {
+	owned map[string]bool
+}
+
+type geminiDirCacheKey struct{}
+
+func withGeminiDirCache(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(geminiDirCacheKey{}).(*geminiDirCache); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, geminiDirCacheKey{}, &geminiDirCache{owned: map[string]bool{}})
+}
+
 // geminiMarkedDirs 读各 slug 目录的 `.project_root`，留下内容与 pane cwd 相等的那些。
 func geminiMarkedDirs(ctx context.Context, files transcriptFS, slugs []string, cwd string) ([]string, error) {
 	spellings := cwdSpellings(files, cwd)
-	var owned []string
+	cache, _ := ctx.Value(geminiDirCacheKey{}).(*geminiDirCache)
+	var owned, unknown []string
+	for _, slug := range slugs {
+		known, seen := false, false
+		if cache != nil {
+			known, seen = cache.owned[slug]
+		}
+		switch {
+		case !seen:
+			unknown = append(unknown, slug)
+		case known:
+			owned = append(owned, slug)
+		}
+	}
+	slugs = unknown
 	for offset := 0; offset < len(slugs); offset += transcriptReadBatch {
 		batch := slugs[offset:min(offset+transcriptReadBatch, len(slugs))]
 		specs := make([]transcriptReadSpec, len(batch))
@@ -64,7 +106,14 @@ func geminiMarkedDirs(ctx context.Context, files transcriptFS, slugs []string, c
 			return nil, err
 		}
 		for index, result := range results {
-			if index < len(batch) && result.Err == nil && result.Exists && geminiMarkerNames(result.Data, spellings) {
+			if index >= len(batch) {
+				break
+			}
+			matched := result.Err == nil && result.Exists && geminiMarkerNames(result.Data, spellings)
+			if cache != nil {
+				cache.owned[batch[index]] = matched
+			}
+			if matched {
 				owned = append(owned, batch[index])
 			}
 		}

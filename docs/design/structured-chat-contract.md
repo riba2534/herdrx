@@ -327,7 +327,8 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    `read_limit_exceeded`。候选发现只读取首帧 header，不读取会话正文。
 5. **读取上限**：单次响应 ≤ 256 KiB，单块 ≤ 64 KiB，游标必须落在 `0 ≤ cursor ≤ fileSize`
    且行对齐。一行写了多条记录（traex 的 `history_mutation`）时不拆到两页；单独一行就超过记录数或
-   字节上限时整行算已读，只返回上限内的部分，其余计入 `skipped`。远端命令等价于 `tail -c +<N> | head -c <cap>`。
+   字节上限时整行算已读，只返回上限内的部分，没返回的条数放进响应的 `truncated`（不计入
+   `skipped`，前端提示“这一行记录过大，部分内容未显示，可在终端查看”）。远端命令等价于 `tail -c +<N> | head -c <cap>`。
 6. **owner 校验**：沿用 `ownedHost`；非 owner 返回 404，不泄露 host 是否存在。
 7. **审计**：每次打开会话写一条 `transcript.opened`（含 pane_id / agent / session_id），
    越界拒绝写一条 `transcript.denied`。
@@ -408,7 +409,9 @@ pane 处于 working / blocked 时最新一轮不折叠。打开会话仍然滚�
    `workspacePath`。Gemini 只读取 `session-*.json[l]`，归属见 §8.4（hash 与 slug 规则
    已对照 Gemini CLI 源码，测试只用合成样本，未对真实会话复核）。
    没有 id 的消息按行的绝对字节位置命名，工具结果按在消息里的位置命名，`thought: true` 的
-   part 丢弃；整份文档的游标身份是会话 id + `startTime`，文件增长或被重写都不会 reset。
+   part 丢弃；整份文档的游标身份是会话 id + `startTime`，位置是记录下标加前一条记录 id 的
+   摘要，单纯增长不 reset，被 /rewind 或压缩截短后再长回来就对不上而 reset。尾部窗口的游标是
+   字节偏移加偏移前最多 64 字节的摘要，追加不 reset，同一 inode 原地改写就 reset。
    Antigravity CLI（`agy`）读取 `conversations/<uuid>.db` 的 `steps.step_payload`
    （未加密 protobuf）。角色按 CortexStepType 的名字落地：14 user、15 assistant、
    132 tool、101/17/23 system。23 是检查点而不是 planner 回复。思考字段不输出。

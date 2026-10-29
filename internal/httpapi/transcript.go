@@ -42,6 +42,7 @@ type transcriptResponse struct {
 	Reset          bool                 `json:"reset,omitempty"`
 	HasMore        bool                 `json:"has_more,omitempty"`
 	Skipped        int                  `json:"skipped,omitempty"`
+	Truncated      int                  `json:"truncated,omitempty"`
 	Binding        string               `json:"binding,omitempty"`
 	Session        string               `json:"session,omitempty"`
 }
@@ -160,6 +161,7 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 		Reset:          page.Reset,
 		HasMore:        page.HasMore,
 		Skipped:        page.Skipped,
+		Truncated:      page.Truncated,
 		Binding:        page.Binding,
 		Session:        page.Session,
 	})

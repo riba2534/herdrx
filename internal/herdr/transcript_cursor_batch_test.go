@@ -2,6 +2,8 @@ package herdr
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -51,6 +53,29 @@ func TestGeminiCandidateReadErrorSkipsOnlyThatFile(t *testing.T) {
 	candidates, _, err := collectCandidates(context.Background(), files, newTranscriptCodecForTest(t), agentlog.AgentGemini, cwd)
 	if err != nil || len(candidates) != 1 || candidates[0].SessionID != "good" || files.calls < 2 {
 		t.Fatalf("candidates = %+v err = %v calls = %d", candidates, err, files.calls)
+	}
+}
+
+// 别的项目的旧版 hash 目录不去读 `.project_root`；同一请求里核对过的 slug 目录不再重读。
+func TestGeminiMarkerReadsSkipHashDirsAndAreReusedInARequest(t *testing.T) {
+	home := t.TempDir()
+	cwd := "/srv/proj"
+	hash := agentlog.GeminiProjectHash(cwd)
+	writeGeminiSession(t, home, agentlog.GeminiProjectHash("/srv/a"), "session-a.json", `{}`)
+	writeGeminiSession(t, home, agentlog.GeminiProjectHash("/srv/b"), "session-b.json", `{}`)
+	writeGeminiSession(t, home, "proj", "session-s.json", `{"sessionId":"s","projectHash":"`+hash+`","messages":[{"type":"user","content":"x"}]}`)
+	if err := os.WriteFile(filepath.Join(home, ".gemini", "tmp", "proj", ".project_root"), []byte(cwd), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files := &countingTranscriptFS{transcriptFS: &localTranscriptFS{home: home}}
+	ctx := withGeminiDirCache(context.Background())
+	dirs, err := geminiProjectDirs(ctx, files, cwd)
+	if err != nil || len(dirs) != 1 || dirs[0] != "proj" || files.specs != 1 {
+		t.Fatalf("dirs = %v err = %v marker specs = %d", dirs, err, files.specs)
+	}
+	reads := files.reads
+	if !geminiOwned(ctx, files, hash, "proj/chats/session-s.json", cwd) || files.reads != reads {
+		t.Fatalf("bound read re-read the marker: %d -> %d", reads, files.reads)
 	}
 }
 
