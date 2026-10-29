@@ -6,7 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
-import { chooseOption } from './browser-controls.mjs'
+import { chooseOption, servePanePrompt } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_DESKTOP_ARTIFACTS
@@ -36,8 +36,11 @@ function gridANSI(cols, rows, tag) {
   }).join('') + `\x1b[${rows};${cols}H`
 }
 
+// 当前 fixture 的发送替身（见 servePanePrompt）；同一时刻只有一个 fixture 在用。
+let promptHandler = null
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
+  if (await servePanePrompt(req, res, path, promptHandler)) return
   const json = path === '/api/bootstrap/status' ? { required: false }
     : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' }
     : path === '/api/me/workbench-session' ? { session: null }
@@ -60,7 +63,14 @@ async function fixture(browser, options, snapshot = splitSnapshot) {
   const page = await context.newPage()
   const messages = []
   const errors = []
+  const prompts = []
   page.on('pageerror', (error) => errors.push(error.message))
+  // Composer 经服务端 POST …/prompt 发送（读屏防护后由服务端送入正文与回车），不走工作台连接。
+  promptHandler = async (pane, body) => {
+    const { text, submit } = body
+    prompts.push({ pane, text, submit })
+    return { delivered: 'sent' }
+  }
   let emitSized = () => {}
   let pushSnapshot = () => {}
   const paneStreams = new Map()
@@ -114,7 +124,7 @@ async function fixture(browser, options, snapshot = splitSnapshot) {
   })
   await page.goto(base + '/h/display-test')
   await page.locator('.xterm-rows').first().waitFor({ timeout: 15000 })
-  return { context, page, messages, errors, paneStreams, emitSized: (...args) => emitSized(...args), pushSnapshot: (next) => pushSnapshot(next) }
+  return { context, page, messages, errors, prompts, paneStreams, emitSized: (...args) => emitSized(...args), pushSnapshot: (next) => pushSnapshot(next) }
 }
 
 async function metrics(page, index = 0) {
@@ -523,13 +533,9 @@ try {
       await expect(roundtrip.page.locator('.composer')).toBeVisible()
       await roundtrip.page.getByRole('textbox', { name: '本地输入内容' }).fill('keep-desktop-draft')
       await roundtrip.page.getByRole('button', { name: '发送', exact: true }).click()
-      // 提交分两腿：先整段正文（无按键），再单独一次回车。
-      const roundtripSends = () => roundtrip.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
-      await expect.poll(() => roundtripSends().length).toBe(2)
-      assert.deepEqual(roundtripSends().map((item) => item.params), [
-        { pane_id: 'p1', text: 'keep-desktop-draft', keys: [] },
-        { pane_id: 'p1', text: '', keys: ['Enter'] },
-      ])
+      // 一次提交 = 一次请求，钉在当前 pane。
+      await expect.poll(() => roundtrip.prompts.length).toBe(1)
+      assert.deepEqual(roundtrip.prompts, [{ pane: 'p1', text: 'keep-desktop-draft', submit: true }])
       assert.deepEqual(roundtrip.errors, [])
       await roundtrip.context.close()
 
@@ -538,12 +544,8 @@ try {
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()
       await mobile.page.getByRole('textbox', { name: '本地输入内容' }).fill('mobile-once')
       await mobile.page.getByRole('button', { name: '发送', exact: true }).click()
-      const mobileSends = () => mobile.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
-      await expect.poll(() => mobileSends().length).toBe(2)
-      assert.deepEqual(mobileSends().map((item) => item.params), [
-        { pane_id: 'p1', text: 'mobile-once', keys: [] },
-        { pane_id: 'p1', text: '', keys: ['Enter'] },
-      ])
+      await expect.poll(() => mobile.prompts.length).toBe(1)
+      assert.deepEqual(mobile.prompts, [{ pane: 'p1', text: 'mobile-once', submit: true }])
       await mobile.page.setViewportSize({ width: 844, height: 390 })
       await expect(mobile.page.locator('.terminal-pane')).toHaveCount(1)
       await expect(mobile.page.getByRole('textbox', { name: '本地输入内容' })).toBeVisible()

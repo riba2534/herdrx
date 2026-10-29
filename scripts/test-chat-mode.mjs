@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Isolated browser regression for the pane Chat view. Uses a fake workbench
-// WebSocket (terminal stream + `pane.send_input`) and a fake owner-authenticated
+// WebSocket (terminal stream), a fake guarded `.../prompt` send endpoint and a fake owner-authenticated
 // `.../transcript` HTTP endpoint; never connects to a real Herdr host, pane, PTY,
 // user session, or any real Agent session log.
 //
@@ -18,6 +18,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { servePanePrompt } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_CHAT_ARTIFACTS
@@ -50,9 +51,12 @@ const snapshot = {
 }
 const ansi = Array.from({ length: 24 }, (_, i) => `\x1b[${i + 1};1HChat terminal ${i}`).join('')
 const sendJSON = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
+// 当前 fixture 的发送替身（见 servePanePrompt）；同一时刻只有一个 fixture 在用。
+let promptHandler = null
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const path = url.pathname
+  if (await servePanePrompt(req, res, path, promptHandler)) return
   const transcript = path.match(/^\/api\/hosts\/chat-test\/panes\/(p\d+)\/transcript$/)
   if (transcript) {
     const pane = transcript[1]
@@ -90,6 +94,13 @@ async function fixture(browser, options, { mode = 'ok', sendDelayMs = 300, fixtu
   page.setDefaultTimeout(10_000)
   const messages = [], errors = []
   page.on('pageerror', (error) => errors.push(error.message))
+  // 对话输入经服务端 POST …/prompt 发送：服务端先读屏防护，再按“正文 + 回车”两腿送入。
+  promptHandler = async (pane, body) => {
+    const { text, submit } = body
+    sentTexts.push({ pane, text, submit })
+    await new Promise((resolve) => setTimeout(resolve, sendDelayMs))
+    return { delivered: 'sent' }
+  }
   await page.routeWebSocket('**/api/hosts/*/ws', (ws) => {
     let nextStreamID = 0
     ws.onMessage((raw) => {
@@ -119,9 +130,6 @@ async function fixture(browser, options, { mode = 'ok', sendDelayMs = 300, fixtu
       } else if (message.t === 'call' && message.method === 'pane.read') {
         // 对话视图不该走这条路；这里仍给出应答，好让「有没有发生」能被断言出来。
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: { read: { text: 'chat-read-line-1\nchat-read-line-2\n构建完成' } } }))
-      } else if (message.t === 'call' && message.method === 'pane.send_input') {
-        sentTexts.push({ pane: message.params?.pane_id, text: message.params?.text, keys: message.params?.keys })
-        setTimeout(() => ws.send(JSON.stringify({ t: 'result', id: message.id, result: { type: 'ok' } })), sendDelayMs)
       } else if (message.t === 'call') {
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: {} }))
       }
@@ -280,19 +288,13 @@ try {
 
         // 工作台底部的本地输入框在对话视图下隐藏，避免两个输入框。
         await expect(desk.page.locator('.workbench-dock')).toHaveCount(0)
-        // 对话里的输入框仍可发送；发送只走 pane.send_input（正文 + 回车两腿），不注入按键。
+        // 对话里的输入框仍可发送；发送经服务端读屏防护后整段提交一次，不注入按键。
         const box = chat.getByRole('textbox', { name: '对话输入内容' })
         await box.fill('请运行测试')
         await box.press('Enter')
-        // 两腿提交：正文与回车必须**分别**成两次调用，否则目标会把回车当粘贴内容吞掉。
-        await expect.poll(() => calls(desk.messages, 'pane.send_input').length).toBe(2)
-        const legs = calls(desk.messages, 'pane.send_input').map((call) => call.params)
-        assert.deepEqual(legs, [
-          { pane_id: 'p1', text: '请运行测试', keys: [] },
-          { pane_id: 'p1', text: '', keys: ['Enter'] },
-        ], '提交没有拆成「正文」「回车」两腿')
-        assert.equal(legs[0].keys.length, 0, '正文腿带了按键，回车会重新落进粘贴框架')
-        assert.equal(legs[1].text, '', '回车腿带了正文，正文会被重发')
+        await expect.poll(() => desk.sent.length).toBe(1)
+        assert.deepEqual(desk.sent, [{ pane: 'p1', text: '请运行测试', submit: true }], '对话发送没有整段提交一次')
+        assert.equal(calls(desk.messages, 'pane.send_input').length, 0, 'chat view typed through the workbench connection')
         assert.equal(calls(desk.messages, 'pane.send_keys').length, 0, 'chat view injected raw keys into the terminal')
         // 送达 ≠ 远端已执行：状态文案必须说清楚。
         await expect(chat.getByText(/不代表远端程序已执行成功/).first()).toBeVisible()
@@ -477,12 +479,9 @@ try {
         await expect(phone.page.getByRole('switch', { name: '对话视图' }).first()).toHaveAttribute('aria-checked', 'true')
         await phoneChat.getByRole('textbox', { name: '对话输入内容' }).fill('手机发送')
         await phoneChat.getByRole('button', { name: '发送', exact: true }).click()
-        // 手机端同样必须是两腿：只数到第一条就放过，等于没验证回车腿真的发出。
-        await expect.poll(() => calls(phone.messages, 'pane.send_input').length).toBe(2)
-        assert.deepEqual(calls(phone.messages, 'pane.send_input').map((call) => call.params), [
-          { pane_id: 'p1', text: '手机发送', keys: [] },
-          { pane_id: 'p1', text: '', keys: ['Enter'] },
-        ], '手机端提交没有拆成「正文」「回车」两腿')
+        // 手机端同样整段提交一次（带回车）。
+        await expect.poll(() => phone.sent.length).toBe(1)
+        assert.deepEqual(phone.sent, [{ pane: 'p1', text: '手机发送', submit: true }], '手机端没有整段提交一次')
         const phoneOverflow = await phone.page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
         assert.ok(phoneOverflow.scroll <= phoneOverflow.client + 1, `mobile chat view overflows horizontally: ${phoneOverflow.scroll} > ${phoneOverflow.client}`)
         await screenshot(phone.page, `${name}-mobile-chat`)

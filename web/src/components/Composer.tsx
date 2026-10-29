@@ -2,7 +2,10 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { ChevronUp, Keyboard, SquareTerminal } from 'lucide-react'
 import { Button } from './ui'
 import { clipboardImages } from '../lib/imagePaste'
-import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerSend, subscribeComposer, writeComposerDraft, type ComposerSendState, type ComposerSubmit } from '../lib/composerDrafts'
+import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerPrompt, subscribeComposer, writeComposerDraft, type ComposerSendState, type ComposerSubmit } from '../lib/composerDrafts'
+import type { PaneDialog } from '../types'
+import { DialogCard, usePrimaryDialogCard } from './DialogCard'
+import { useConfirm } from './useConfirm'
 import type { ComposerMediaHost } from '../lib/chatMediaTypes'
 import './Composer.css'
 
@@ -93,7 +96,7 @@ function InputModeMenu({ directInput, onDirectInput, onLocalInput }: {
   </div>
 }
 
-export function Composer({ hostID, paneID, visible, directInput, localOnly = false, compact = false, variant = 'dock', sendDisabled, placeholder, onDirectInput, onLocalInput, submit, onPasteImages, mediaHost }: {
+export function Composer({ hostID, paneID, visible, directInput, localOnly = false, compact = false, variant = 'dock', sendDisabled, placeholder, onDirectInput, onLocalInput, onPasteImages, mediaHost }: {
   hostID: string
   paneID: string
   visible: boolean
@@ -107,7 +110,11 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   placeholder?: string
   onDirectInput: () => void
   onLocalInput: () => void
-  submit: ComposerSubmit
+  /**
+   * 不再使用：发送统一经服务端 `api.panePrompt`（先读屏防护，再两腿送入）。
+   * 保留为可选只为兼容现有调用方，集成时删除。
+   */
+  submit?: ComposerSubmit
   onPasteImages?: (files: File[]) => void
   /**
    * 可选的媒体层接线点（图片附件）。缺席时本组件行为与接线前**逐字节一致**：
@@ -119,6 +126,11 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   const chat = variant === 'chat'
   const [value, setValue] = useState(() => readComposerDraft(hostID, paneID))
   const [send, setSend] = useState(() => readComposerSend(hostID, paneID))
+  // 发送因对话框被拒绝后显示卡片：值是服务端带回的对话框（null 表示没带回，由卡片自己读取），
+  // undefined 表示不显示。工作台已有主卡片时不再重复显示。
+  const [refusedDialog, setRefusedDialog] = useState<PaneDialog | null>()
+  const primaryCard = usePrimaryDialogCard(hostID, paneID)
+  const { confirm, dialog: confirmDialog } = useConfirm(`${hostID}\n${paneID}`)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const hostRef = useRef(hostID)
   const paneRef = useRef(paneID)
@@ -131,6 +143,7 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
       setSend(readComposerSend(hostRef.current, paneRef.current))
     }
     sync()
+    setRefusedDialog(undefined)
     return subscribeComposer(sync)
   }, [hostID, paneID])
 
@@ -165,7 +178,7 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
     writeComposerDraft(hostID, paneID, text)
   }
 
-  const sendNow = () => {
+  const sendNow = (force = false) => {
     if (sendDisabled || !paneID || composerInFlight(hostID, paneID)) return
     // 「仅图片也能发」：没有正文但媒体层有已 staged 的附件时同样可发送。
     if (!value.trim() && !mediaHost?.canSend()) return
@@ -175,8 +188,14 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
       if (composed === null) return
       writeComposerDraft(hostID, paneID, composed)
     }
-    void runComposerSend(hostID, paneID, submit)
-      .then(() => mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status))
+    setRefusedDialog(undefined)
+    void runComposerPrompt(hostID, paneID, { force }).then(async (result) => {
+      mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status)
+      if (result.kind === 'dialog') setRefusedDialog(result.dialog)
+      if (result.kind === 'draft' && await confirm('电脑上的输入框里有未发送的内容。仍要发送的话，这段文字会接在那段内容后面一起提交。', { title: '电脑上有未发送的输入，仍要发送吗？', confirmLabel: '仍要发送', danger: false })) {
+        sendNow(true)
+      }
+    })
   }
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -213,7 +232,10 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   const empty = !value.trim()
   const canEdit = Boolean(paneID)
   const selectLocalInput = () => { onLocalInput(); textareaRef.current?.focus() }
-  return <div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}${localOnly ? ' composer-local-only' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
+  const dialogCard = refusedDialog !== undefined && !primaryCard && <div className="composer-dialog-card">
+    <DialogCard key={`${hostID}\n${paneID}`} hostID={hostID} paneID={paneID} initial={refusedDialog} onClose={() => setRefusedDialog(undefined)}/>
+  </div>
+  return <>{dialogCard}<div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}${localOnly ? ' composer-local-only' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
     {compact && !chat && !localOnly && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}
     {mediaHost?.tray && <div className="composer-media">{mediaHost.tray}</div>}
     <textarea
@@ -235,7 +257,7 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
       onPaste={onPaste}
     />
     <div className="composer-side">
-      <Button className="button-primary composer-send" disabled={sendDisabled || (empty && !mediaHost?.canSend()) || sendingHere || !paneID} pending={sendingHere} onClick={sendNow}>发送</Button>
+      <Button className="button-primary composer-send" disabled={sendDisabled || (empty && !mediaHost?.canSend()) || sendingHere || !paneID} pending={sendingHere} onClick={() => sendNow()}>发送</Button>
     </div>
     {(!compact || current.status !== 'idle') && <div className="composer-meta">
       {!compact && !chat && !localOnly && <div className="composer-modes">
@@ -249,5 +271,5 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
         </>}
       </span>
     </div>}
-  </div>
+  </div>{confirmDialog}</>
 }

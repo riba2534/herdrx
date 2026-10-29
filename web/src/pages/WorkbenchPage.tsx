@@ -12,6 +12,7 @@ import { PaneViewToggle } from '../components/PaneViewToggle'
 import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems } from '../lib/keymap'
 import { ratioFromPointer, resizeModeBarItems, RESIZE_DIRECTIONS, splitHandleStyle, splitPathFromId, type LayoutSplit } from '../lib/layoutSplit'
 import { Composer } from '../components/Composer'
+import { DialogCard } from '../components/DialogCard'
 import { StartHerdrButton, type HerdrStartFeedback } from '../components/StartHerdr'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
@@ -1023,6 +1024,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {notice && !actionError && !switcherOpen && <div className={`action-toast action-toast-${notice.tone}`} role="status"><span>{notice.text}</span><button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={14}/></button></div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
+      {/* 当前 pane 的 Agent 在等选择时，浮出对话框答题卡片（认不出的对话框不出卡片）。 */}
+      {snapshot?.panes.find((pane) => pane.pane_id === paneID)?.agent_status === 'blocked' && connection === 'ready' && <div className="workbench-dialog-card"><DialogCard key={`${hostID}\n${paneID}`} primary hostID={hostID} paneID={paneID}/></div>}
       {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
       {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">

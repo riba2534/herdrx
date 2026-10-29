@@ -61,7 +61,10 @@ vi.mock('../lib/api', () => ({
     renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
     workbenchSession: vi.fn().mockResolvedValue({ session: null }),
     saveWorkbenchSession: vi.fn().mockResolvedValue({ session: { host_id: 'host' } }),
+    panePrompt: vi.fn().mockResolvedValue({ delivered: 'sent' }),
+    paneDialog: vi.fn().mockResolvedValue({ dialog: null }),
   },
+  APIError: class APIError extends Error {},
   currentSessionID: () => 'workbench-session',
   onAuthEvent: () => () => {},
 }))
@@ -305,6 +308,8 @@ describe('workbench sidebar context menus', () => {
 
 describe('workbench composer', () => {
   it('hides the local composer on desktop until it is opened, then submits the current pane once', async () => {
+    const prompt = vi.mocked(api.panePrompt)
+    prompt.mockClear()
     render(<WorkbenchPage hostID="host"/>)
     await screen.findByRole('button', { name: /agent1/ })
     expect(screen.queryByRole('region', { name: '本地输入' })).not.toBeInTheDocument()
@@ -312,10 +317,25 @@ describe('workbench composer', () => {
     const box = screen.getByRole('textbox', { name: '本地输入内容' })
     fireEvent.change(box, { target: { value: '整段提交' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    // 分两腿：先整段正文（无按键），再一次单独回车，都发给点击时的 pane。
-    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '整段提交', keys: [] }))
-    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_input', { pane_id: 'w1:p1', text: '', keys: ['Enter'] }))
-    expect(call.mock.calls.filter((item) => item[0] === 'pane.send_input')).toHaveLength(2)
+    // 经服务端读屏防护后整段提交一次，发给点击时的 pane；不再经工作台连接直接打字。
+    await waitFor(() => expect(prompt).toHaveBeenCalledWith('host', 'w1:p1', expect.objectContaining({ text: '整段提交', submit: true })))
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(call.mock.calls.filter((item) => item[0] === 'pane.send_input')).toHaveLength(0)
+  })
+
+  it('shows a dialog card only while the current pane is blocked', async () => {
+    const dialog = { fingerprint: '0123456789abcdef', title: 'Do you want to proceed?', lines: [], options: [{ index: 1, label: 'Yes', selected: true }, { index: 2, label: 'No', selected: false }] }
+    vi.mocked(api.paneDialog).mockResolvedValue({ dialog })
+    snapshot.panes = snapshot.panes.map((pane) => pane.pane_id === 'w1:p2' ? { ...pane, agent_status: 'blocked' } : pane)
+    render(<WorkbenchPage hostID="host"/>)
+    await screen.findByRole('button', { name: /agent1/ })
+    // 别的 pane 在等选择时不在当前 pane 上出卡片。
+    expect(screen.queryByRole('group', { name: 'Do you want to proceed?' })).not.toBeInTheDocument()
+    act(() => snapshotListeners.forEach((listener) => listener({ ...snapshot, panes: snapshot.panes.map((pane) => pane.pane_id === 'w1:p1' ? { ...pane, agent_status: 'blocked' } : pane) })))
+    expect(await screen.findByRole('group', { name: 'Do you want to proceed?' })).toBeInTheDocument()
+    expect(api.paneDialog).toHaveBeenCalledWith('host', 'w1:p1', expect.anything())
+    act(() => snapshotListeners.forEach((listener) => listener({ ...snapshot, panes: snapshot.panes.map((pane) => ({ ...pane, agent_status: 'working' })) })))
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Do you want to proceed?' })).not.toBeInTheDocument())
   })
 
   it('shows the local composer by default on a compact workbench', async () => {
