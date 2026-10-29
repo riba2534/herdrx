@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +37,7 @@ type realtimeEndpoint struct {
 	rejectSubscribe func([]herdr.EventSubscription) error
 	subscriptions   chan []herdr.EventSubscription
 	push            chan herdr.Event
+	end             chan error // ends the live subscription with this error
 
 	opens     chan herdr.TerminalOpen
 	processes chan *realtimeProcess
@@ -43,7 +45,7 @@ type realtimeEndpoint struct {
 
 func newRealtimeEndpoint() *realtimeEndpoint {
 	return &realtimeEndpoint{
-		subscriptions: make(chan []herdr.EventSubscription, 16), push: make(chan herdr.Event, 16),
+		subscriptions: make(chan []herdr.EventSubscription, 16), push: make(chan herdr.Event, 16), end: make(chan error, 1),
 		opens: make(chan herdr.TerminalOpen, 16), processes: make(chan *realtimeProcess, 16),
 	}
 }
@@ -89,6 +91,8 @@ func (e *realtimeEndpoint) SubscribeEvents(ctx context.Context, subscriptions []
 			return ctx.Err()
 		case event := <-e.push:
 			onEvent(event)
+		case err := <-e.end:
+			return err
 		}
 	}
 }
@@ -476,5 +480,52 @@ func TestScreenSignalRegistryIsSharedAndReleased(t *testing.T) {
 	}
 	if len(opened) != 0 {
 		t.Fatal("subscribers did not share one observer")
+	}
+}
+
+func TestSubscriptionStartResetsQuickRetries(t *testing.T) {
+	endpoint, srv, client := realtimeFixture(t)
+	endpoint.agents = []herdr.Agent{{PaneID: "p_0", Agent: "claude"}}
+	var rejections atomic.Int32
+	reject := atomic.Bool{}
+	reject.Store(true)
+	endpoint.rejectSubscribe = func([]herdr.EventSubscription) error {
+		if !reject.Load() {
+			return nil
+		}
+		n := rejections.Add(1)
+		if n == 3 {
+			// The third rejection uses up the quick retries; the next one succeeds.
+			reject.Store(false)
+		}
+		endpoint.mu.Lock()
+		endpoint.agents = []herdr.Agent{{PaneID: fmt.Sprintf("p_%d", n), Agent: "claude"}}
+		endpoint.mu.Unlock()
+		return &herdr.APIError{Code: "pane_not_found", Message: "pane closed"}
+	}
+	newRealtimeBrowser(t, srv, client, "realtime-browser-retry-reset")
+	receive(t, endpoint.subscriptions, "the subscription after three closed panes")
+
+	// The stream ran, so another closed pane is retried at once again.
+	reject.Store(true)
+	rejections.Store(2)
+	ended := time.Now()
+	endpoint.end <- &herdr.APIError{Code: "events_lost", Message: "subscriber fell behind"}
+	receive(t, endpoint.subscriptions, "the subscription after the stream ended")
+	if elapsed := time.Since(ended); elapsed > 1800*time.Millisecond {
+		t.Fatalf("resubscribed after %v: quick retries were not reset by the live stream", elapsed)
+	}
+}
+
+func TestSubscriptionBacksOffWhenPanesKeepClosing(t *testing.T) {
+	endpoint, srv, client := realtimeFixture(t)
+	endpoint.rejectSubscribe = func([]herdr.EventSubscription) error {
+		return &herdr.APIError{Code: "pane_not_found", Message: "pane closed"}
+	}
+	newRealtimeBrowser(t, srv, client, "realtime-browser-retry-bound")
+	time.Sleep(1500 * time.Millisecond)
+	// Three quick retries, then the exponential backoff: 1 + 3 + one after 1 s.
+	if got := endpoint.attempts.Load(); got < 4 || got > 5 {
+		t.Fatalf("subscribe attempts in 1.5 s = %d", got)
 	}
 }
