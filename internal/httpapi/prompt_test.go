@@ -392,7 +392,9 @@ func TestPromptValidatesInputAndOwnership(t *testing.T) {
 func TestPromptLogIsBoundedPerUserAndExpires(t *testing.T) {
 	log := &promptLog{}
 	start := time.Now()
-	key := func(user string, i int) promptKey { return promptKey{user: user, host: "h", pane: "p", id: strconv.Itoa(i)} }
+	key := func(user string, i int) promptKey {
+		return promptKey{user: user, host: "h", pane: "p", id: strconv.Itoa(i)}
+	}
 	// 另一个用户进行中与结果未知的记录。
 	pending, _, _ := log.begin(key("bob", 0), start)
 	uncertain, _, _ := log.begin(key("bob", 1), start)
