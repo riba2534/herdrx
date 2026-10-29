@@ -1,0 +1,113 @@
+.dialog-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--blocked);
+  border-radius: 6px;
+  background: var(--panel-strong, var(--panel));
+  color: var(--text);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.dialog-card-head {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--blocked);
+}
+
+.dialog-card-head strong {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.dialog-card-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.dialog-card-close:hover,
+.dialog-card-close:focus-visible { color: var(--text); background: var(--surface-raised, transparent); }
+
+.dialog-card-lines {
+  display: grid;
+  gap: 2px;
+  max-height: 96px;
+  overflow-y: auto;
+  color: var(--muted);
+}
+
+.dialog-card-lines p { margin: 0; overflow-wrap: anywhere; }
+
+.dialog-card-options { display: grid; gap: 4px; }
+
+.dialog-card-option {
+  width: 100%;
+  min-height: 36px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.dialog-card-option:hover:not(:disabled),
+.dialog-card-option:focus-visible { border-color: var(--accent); background: var(--accent-soft, transparent); }
+.dialog-card-option:disabled { opacity: 0.6; }
+.dialog-card-option[aria-busy='true'] { opacity: 1; border-color: var(--working); }
+
+.dialog-card-option-selected { border-color: var(--muted); }
+
+.dialog-card-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  border-radius: 3px;
+  background: var(--surface-raised, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog-card-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dialog-card-hint { margin: 0; color: var(--muted); font-size: 12px; }
+
+/* 工作台：浮在终端区域右上角，不遮住终端底部的对话框本身。 */
+.workbench-dialog-card {
+  position: absolute;
+  z-index: 20;
+  top: calc(var(--tabbar-height) + 8px);
+  right: 12px;
+  width: min(420px, calc(100% - 24px));
+}
+
+/* Composer 被拒绝后弹出的卡片：在输入框上方。 */
+.composer-dialog-card { padding: 6px 8px 0; }
+
+@media (max-width: 767px), (pointer: coarse) and (max-width: 1023px) and (max-height: 600px) {
+  .workbench-dialog-card { left: 8px; right: 8px; width: auto; top: 8px; }
+  .dialog-card-option { min-height: 44px; }
+}

@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, invalidateAuthentication } from '../../lib/api'
+import type { PanePromptInput, PanePromptResult } from '../../types'
 import { clearComposerDrafts, readComposerDraft, readComposerSend, runComposerSend } from '../../lib/composerDrafts'
 import { ChatMediaComposer } from './ChatMediaComposer'
 
@@ -34,6 +35,16 @@ type Overrides = Partial<Parameters<typeof ChatMediaComposer>[0]>
 
 /** 默认 stageImage 的 mock 类型：断言调用时需要 `.mock`。 */
 type StageMock = ReturnType<typeof vi.fn<(hostID: string, paneID: string, file: File) => Promise<{ path: string }>>>
+
+/**
+ * 发送统一走 `api.panePrompt`（一次逻辑发送 = 一次请求）。`prompt` 默认成功；
+ * `texts()` 是每次请求的提交文本。
+ */
+function mockPrompt(impl: () => Promise<PanePromptResult> = async () => ({ delivered: 'sent' })) {
+  const prompt = vi.spyOn(api, 'panePrompt').mockImplementation(() => impl())
+  const texts = () => prompt.mock.calls.map(([, pane, input]) => `${pane}:${(input as PanePromptInput).text}`)
+  return { prompt, texts }
+}
 
 function renderComposer(overrides: Overrides = {}) {
   const submit = overrides.submit ?? vi.fn(async () => {})
@@ -76,7 +87,8 @@ afterEach(() => {
 
 describe('ChatMediaComposer 图片附件', () => {
   it('拖入多张图片只落占位并 stage-only 上传，不向终端打任何字', async () => {
-    const { wrapper, stageImage, submit } = renderComposer()
+    const { prompt } = mockPrompt()
+    const { wrapper, stageImage } = renderComposer()
     fireEvent.dragOver(wrapper, dropData([imageFile('a.png')]))
     expect(wrapper).toHaveAttribute('data-drag', 'true')
 
@@ -89,18 +101,19 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(screen.getByText('a.png')).toBeInTheDocument()
 
     // 拖拽绝不触发发送，也不改草稿。
-    expect(submit).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
     expect(readComposerDraft('host', 'p1')).toBe('')
     expect(readComposerSend('host', 'p1').status).toBe('idle')
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
   })
 
   it('在输入框粘贴图片走同一条占位通道，而不是把文件塞进终端', async () => {
-    const { stageImage, submit } = renderComposer()
+    const { prompt } = mockPrompt()
+    const { stageImage } = renderComposer()
     fireEvent.paste(textarea(), { clipboardData: { items: [{ kind: 'file', getAsFile: () => imageFile('shot.png') }], files: [] } })
     expect(stageImage).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
-    expect(submit).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
     expect(readComposerDraft('host', 'p1')).toBe('')
   })
 
@@ -142,24 +155,23 @@ describe('ChatMediaComposer 图片附件', () => {
   })
 
   it('发送时把正文与已 staged 的引用合成一次提交，成功后清空附件', async () => {
-    const submit = vi.fn(async () => {})
-    const { wrapper } = renderComposer({ submit })
+    const { prompt, texts } = mockPrompt()
+    const { wrapper } = renderComposer()
     fireEvent.change(textarea(), { target: { value: '看这两张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png'), imageFile('b.png')]))
     await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
 
     fireEvent.click(sendButton())
-    // 一次逻辑发送 = 两腿：第一腿整段正文（含引用行），第二腿只补一次回车。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这两张图\n/remote/a.png\n/remote/b.png', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    // 一次逻辑发送 = 一次请求：整段正文（含引用行），服务端再补一次回车。
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(texts()).toEqual(['p1:看这两张图\n/remote/a.png\n/remote/b.png'])
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
     expect(readComposerDraft('host', 'p1')).toBe('')
   })
 
   it('发送失败保留附件与草稿，且不自动重放', async () => {
-    const submit = vi.fn(async () => { throw new Error('连接已断开') })
-    const { wrapper } = renderComposer({ submit })
+    const { prompt } = mockPrompt(async () => { throw new TypeError('Failed to fetch') })
+    const { wrapper } = renderComposer()
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
@@ -173,30 +185,27 @@ describe('ChatMediaComposer 图片附件', () => {
     expect(screen.getByText('已就绪')).toBeInTheDocument()
     // 失败时保留的是**本次提交文本**（正文 + 引用行）：附件没丢，手动重试时合成是幂等的。
     expect(readComposerDraft('host', 'p1')).toBe('看这张图\n/remote/a.png')
-    expect(submit).toHaveBeenCalledTimes(1)
+    expect(prompt).toHaveBeenCalledTimes(1)
   })
 
   it('失败后手动重试只重发同一条提交文本，引用不会被追加第二遍', async () => {
-    const submit = vi.fn()
-      .mockRejectedValueOnce(new Error('连接已断开'))
-      .mockResolvedValue(undefined)
-    const { wrapper } = renderComposer({ submit })
+    const { prompt, texts } = mockPrompt()
+    prompt.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const { wrapper } = renderComposer()
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
 
     fireEvent.click(sendButton())
-    // 第一腿（正文）被拒：本次发送到此为止，第二腿的回车绝不补发。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
+    // 请求失败：本次发送到此为止，不会自动重发。
+    await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('unknown'))
+    expect(prompt).toHaveBeenCalledTimes(1)
     expect(screen.getByText('已就绪')).toBeInTheDocument()
 
     fireEvent.click(sendButton())
-    // 手动重试重发的是同一条提交文本：第一腿逐字节相同（引用行没有被追加第二遍），
-    // 只有第一腿成功之后才补第二腿的回车。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(3))
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '看这张图\n/remote/a.png', [])
-    expect(submit).toHaveBeenNthCalledWith(3, 'p1', '', ['Enter'])
+    // 手动重试重发的是同一条提交文本：逐字节相同（引用行没有被追加第二遍）。
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(2))
+    expect(texts()).toEqual(['p1:看这张图\n/remote/a.png', 'p1:看这张图\n/remote/a.png'])
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
   })
 
@@ -243,58 +252,55 @@ describe('ChatMediaComposer 图片附件', () => {
   // 接线后（契约 §7.4「仅图片也能发」）：空正文 + 有 staged 附件时发送按钮可用，
   // 且整条提交事务只跑一次，提交文本就是引用行本身。
   it('仅图片（空正文）也能发送：提交文本就是引用行本身，只提交一次', async () => {
-    const submit = vi.fn(async () => {})
-    const { wrapper } = renderComposer({ submit })
+    const { prompt, texts } = mockPrompt()
+    const { wrapper } = renderComposer()
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
     expect(sendButton()).toBeEnabled()
 
     fireEvent.click(sendButton())
-    // 提交文本就是引用行本身，仍然按两腿发：正文腿 + 回车腿。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '/remote/a.png', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    // 提交文本就是引用行本身，只发一次请求。
+    await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(texts()).toEqual(['p1:/remote/a.png'])
     expect(readComposerDraft('host', 'p1')).toBe('')
     await waitFor(() => expect(tray()).not.toBeInTheDocument())
   })
 
   it('空正文且没有可用附件时仍然不能发送', async () => {
-    const submit = vi.fn(async () => {})
-    const { wrapper } = renderComposer({ submit })
+    const { prompt } = mockPrompt()
+    const { wrapper } = renderComposer()
     fireEvent.drop(wrapper, dropData([imageFile('notes.txt', 8, 'text/plain')]))
     expect(screen.getByRole('alert')).toHaveTextContent('仅支持 PNG、JPEG、WebP、GIF 图片')
     expect(sendButton()).toBeDisabled()
     fireEvent.click(sendButton())
     fireEvent.keyDown(textarea(), { key: 'Enter' })
-    expect(submit).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
   })
 
   it.each([false, true])('发送期间新加的图片不会打断提交或被结算清掉（上传挂起：%s）', async (pendingUpload) => {
-    // 两腿各占一个 deferred：放行第一腿后才会发出第二腿，逐腿控制时序。
-    const legs: Array<() => void> = []
-    const submit = vi.fn(() => new Promise<void>((resolve) => { legs.push(resolve) }))
+    // 请求挂起，手动放行以控制时序。
+    let finishSend!: () => void
+    const { prompt, texts } = mockPrompt(() => new Promise<PanePromptResult>((resolve) => { finishSend = () => resolve({ delivered: 'sent' }) }))
     let finishUpload!: () => void
     const stageImage = vi.fn(async (_host: string, _pane: string, file: File) => {
       if (pendingUpload && file.name === 'b.png') await new Promise<void>((resolve) => { finishUpload = resolve })
       return { path: `/remote/${file.name}` }
     })
-    const { wrapper } = renderComposer({ submit, stageImage })
+    const { wrapper } = renderComposer({ stageImage })
     fireEvent.change(textarea(), { target: { value: '看这张图' } })
     fireEvent.drop(wrapper, dropData([imageFile('a.png')]))
     await waitFor(() => expect(screen.getByText('已就绪')).toBeInTheDocument())
 
     fireEvent.click(sendButton())
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(1))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/a.png', [])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(texts()).toEqual(['p1:看这张图\n/remote/a.png'])
     // 发送在飞时又加了一张：它不属于本次提交快照。
     fireEvent.drop(wrapper, dropData([imageFile('b.png')]))
     if (!pendingUpload) await waitFor(() => expect(screen.getAllByText('已就绪')).toHaveLength(2))
 
-    // 两腿都放行才算送达；中间新加的 b.png 不参与本次提交。
-    await act(async () => { legs[0]() })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
-    await act(async () => { legs[1]() })
+    // 请求成功才算送达；中间新加的 b.png 不参与本次提交。
+    await act(async () => { finishSend() })
     await waitFor(() => expect(readComposerSend('host', 'p1').status).toBe('delivered'))
     if (pendingUpload) await act(async () => finishUpload())
     // 只清掉本次提交过的那张，发送期间新加的仍然在。

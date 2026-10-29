@@ -466,6 +466,7 @@ describe('explicit DSH read source', () => {
 
   it('rebuilds the view on a source switch and keeps the submit target and count unchanged', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     const client = createClient()
     let plain = 0
     const mock = dshServer((url) => {
@@ -489,20 +490,20 @@ describe('explicit DSH read source', () => {
     expect(await screen.findByRole('button', { name: /aaaa1111/ })).toBeVisible()
 
     // 切换读取源不发送、不重放任何输入；发送目标仍是这个 pane。
-    expect(submit).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     fireEvent.change(input, { target: { value: '继续' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // 一次发送 = 两腿，不多不少：正文一腿 + 单独回车一腿，目标固定为这个 pane。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '继续', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '继续', submit: true }))
     expect(client.call).not.toHaveBeenCalled()
     expect(mock.mock.calls.every(([url]) => !String(url).includes('agent='))).toBe(true)
   })
 
   it('drops the DSH source when the pane turns into a recognized agent without touching the draft', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     const mock = dshServer((url) => (url.includes('source=dsh')
       ? { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
       : { supported: false, reason: 'no_agent', messages: [] }))
@@ -524,13 +525,13 @@ describe('explicit DSH read source', () => {
     const input = screen.getByRole('textbox', { name: '对话输入内容' })
     expect(input).toHaveValue('草稿要保留')
     fireEvent.keyDown(input, { key: 'Enter' })
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '草稿要保留', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '草稿要保留', submit: true }))
   })
 
   it('scopes the remembered source and the send target per pane', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     const mock = dshServer((url) => (url.includes('source=dsh')
       ? { supported: true, agent: 'dsh', candidates: [dshCandidate], messages: [] }
       : { supported: false, reason: 'no_agent', messages: [] }))
@@ -552,9 +553,8 @@ describe('explicit DSH read source', () => {
     fireEvent.change(input, { target: { value: '给 p1 的命令' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // 两腿都发往 p1：pane 切换既不继承读取源，也不会把回车送到别的终端。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '给 p1 的命令', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '给 p1 的命令', submit: true }))
   })
 })
 
@@ -619,6 +619,7 @@ describe('degraded states', () => {
 describe('sending', () => {
   it('sends once through the existing submit prop without adding an optimistic bubble', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     transcriptServer(sequence(candidatesPage, boundPage([text('u1', 'user', '盘上的问题')])))
     render(<ChatView {...props({ submit })}/>)
     fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
@@ -629,9 +630,8 @@ describe('sending', () => {
     fireEvent.change(input, { target: { value: '继续' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // 一次逻辑发送只有两腿：正文（不带键）与单独一次回车；正文里绝不含隐式回车。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '继续', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '继续', submit: true }))
     // 不追加乐观气泡：盘上的权威记录到了才显示。
     expect(document.querySelectorAll('.chat-message-user')).toHaveLength(before)
   })
@@ -655,6 +655,7 @@ describe('media and voice wiring', () => {
 
   it('stages a dropped image with inject=false and sends text plus reference in one submission', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     const mock = mediaServer(() => ({ ok: true, path: '/remote/shot.png', injected: false }))
     const client = createClient()
     render(<ChatView {...props({ client, submit })}/>)
@@ -665,7 +666,7 @@ describe('media and voice wiring', () => {
     // stage-only：上传 URL 必须带 inject=false，且拖拽本身绝不提交、绝不碰终端。
     await waitFor(() => expect(mock.mock.calls.some(([url]) => String(url).includes('paste-image?inject=false'))).toBe(true))
     expect(mock.mock.calls.every(([url]) => !String(url).includes('inject=true'))).toBe(true)
-    expect(submit).not.toHaveBeenCalled()
+    expect(prompt).not.toHaveBeenCalled()
     expect(client.call).not.toHaveBeenCalled()
     await screen.findByText('已就绪')
     expect(readComposerDraft('host', 'p1')).toBe('')
@@ -674,14 +675,14 @@ describe('media and voice wiring', () => {
     fireEvent.change(input, { target: { value: '看这张图' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     // 正文与图片引用合成为第一腿的正文，回车仍单独走第二腿。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '看这张图\n/remote/shot.png', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '看这张图\n/remote/shot.png', submit: true }))
     expect(client.call).not.toHaveBeenCalled()
   })
 
   it('sends an image-only message: the reference line is the whole submission', async () => {
     const submit = vi.fn().mockResolvedValue(undefined)
+    const prompt = vi.spyOn(api, 'panePrompt').mockResolvedValue({ delivered: 'sent' })
     mediaServer(() => ({ ok: true, path: '/remote/only.png', injected: false }))
     render(<ChatView {...props({ submit })}/>)
     await screen.findByText('选择此终端的会话记录')
@@ -690,9 +691,8 @@ describe('media and voice wiring', () => {
     await screen.findByText('已就绪')
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
     // 没有正文时第一腿只送引用行，第二腿照旧只送一次回车。
-    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2))
-    expect(submit).toHaveBeenNthCalledWith(1, 'p1', '/remote/only.png', [])
-    expect(submit).toHaveBeenNthCalledWith(2, 'p1', '', ['Enter'])
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1))
+    expect(prompt).toHaveBeenCalledWith('host', 'p1', expect.objectContaining({ text: '/remote/only.png', submit: true }))
   })
 
   it('appends the final voice transcript to the draft and never sends it', async () => {
