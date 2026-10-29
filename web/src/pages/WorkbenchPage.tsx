@@ -3,7 +3,7 @@ import { useConfirm } from '../components/useConfirm'
 import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
@@ -19,9 +19,10 @@ import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferen
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
 import { composerSubmitParams } from '../lib/composerDrafts'
-import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, pasteTextTooLarge, sanitizePasteText, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS } from '../lib/terminalKeys'
+import { applyModifiers, hasModifiers, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
 import { navigate } from '../lib/navigation'
+import { usePaneDeepLink } from '../lib/workbenchDeepLink'
 import { WorkbenchClient } from '../lib/workbench'
 import { agentNotificationTitle, agentStatusLabel, connectionLabel, contextMenuLabel, hostConnectionText, paneDisplayName, terminalCountLabel, workspaceCountLabel, workspaceSwitcherDetail } from '../lib/labels'
 import { applyAttachWindowForm, cacheWorkbenchSession, matchWorkbenchLocation, peekWorkbenchSession, workbenchClientClass, workbenchLocationFromSession, workbenchWindowForm, type WorkbenchLocation } from '../lib/workbenchSession'
@@ -181,12 +182,25 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     window.clearInterval(timers.tick)
     repeatTimersRef.current = null
   }, [])
+  // 粘滞修饰键：按下后作用于下一个键（键栏或软键盘），生效后释放。ref 供定时器和 xterm 回调读取。
+  const [stickyModifiers, setStickyModifiers] = useState<StickyModifiers>(NO_MODIFIERS)
+  const stickyModifiersRef = useRef(NO_MODIFIERS)
+  const updateStickyModifiers = (next: StickyModifiers) => { stickyModifiersRef.current = next; setStickyModifiers(next) }
+  const consumeModifiers = useCallback((data: string) => {
+    const modifiers = stickyModifiersRef.current
+    if (!hasModifiers(modifiers) || !isModifiableKey(data)) return data
+    stickyModifiersRef.current = NO_MODIFIERS
+    setStickyModifiers(NO_MODIFIERS)
+    return applyModifiers(data, modifiers)
+  }, [])
   // 与 orca 一致：⌫、Del 和方向键长按才连发，其余键按一下发一次，避免误触连发。
-  const repeatOnHold = (data: string) => ({
+  const repeatOnHold = (key: string) => ({
     onPointerDown: () => {
       const send = terminalInputRef.current
       if (!send) return
       stopKeyRepeat()
+      // 长按期间连发的是带修饰的同一个键，例如按住 Ctrl+← 连续按词左移。
+      const data = consumeModifiers(key)
       send(data)
       const delay = window.setTimeout(() => {
         const tick = window.setInterval(() => terminalInputRef.current?.(data), KEY_REPEAT_INTERVAL_MS)
@@ -202,7 +216,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => {
       if (event.key !== 'Enter' && event.key !== ' ') return
       event.preventDefault()
-      terminalInputRef.current?.(data)
+      terminalInputRef.current?.(consumeModifiers(key))
     },
   })
   useEffect(() => stopKeyRepeat, [stopKeyRepeat])
@@ -467,6 +481,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       || snapshot.panes.find((item) => item.tab_id === tab.tab_id)
     if (pane && pane.pane_id !== paneID) setPaneID(pane.pane_id)
   }, [snapshot, workspaceID, tabID, paneID, restore])
+  // 深链与通知点名的 pane 算作用户选择，上次位置的恢复随之让位。
+  usePaneDeepLink(snapshot, (target) => {
+    userPickedLocation.current = true
+    setWorkspaceID(target.workspaceID)
+    setTabID(target.tabID)
+    setPaneID(target.paneID)
+  }, () => setNotice({ tone: 'warn', text: '该 Agent 所在的 pane 已关闭' }))
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -987,7 +1008,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
           // picked here keeps its split size.
           const sourceRect = zoomed && pane.pane_id === layout?.focused_pane_id ? layout.area : layout?.panes.find((item) => item.pane_id === pane.pane_id)?.rect
           return <div className="pane-position" key={`${connectionEpoch}:${pane.pane_id}`} style={mobile ? undefined : paneStyle(layout!, pane.pane_id)}>
-            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} hostID={hostID} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} connected={connection === 'ready'} viewMode={paneModeFor(pane.pane_id)} onViewModeChange={(mode) => togglePaneMode(pane.pane_id, mode)} onPasteImages={(files) => void pasteImagesTo(pane.pane_id, files)} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} onDisplayChange={updateDisplay} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput} keyboardInset={keyboardInset}/>
+            <TerminalPane inputFocusRequest={inputFocusRequest} externalControlsTrigger={mobile ? mobileToolsTrigger : undefined} compact={mobile} controlsOpen={mobile ? mobileToolsOpen : undefined} onControlsOpenChange={mobile ? setMobileToolsOpen : undefined} client={client} hostID={hostID} pane={interactivePane} connectionEpoch={connectionEpoch} active={pane.pane_id === paneID} connected={connection === 'ready'} viewMode={paneModeFor(pane.pane_id)} onViewModeChange={(mode) => togglePaneMode(pane.pane_id, mode)} onPasteImages={(files) => void pasteImagesTo(pane.pane_id, files)} sourceCols={sourceRect?.width} sourceRows={sourceRect?.height} layoutVersion={sidebarOpen ? 1 : 0} onFocus={() => setPaneID(pane.pane_id)} onContextMenu={(event) => { const sourcePaneID = paneID && paneID !== pane.pane_id ? paneID : undefined; setPaneID(pane.pane_id); openContextMenu(event, { kind: 'pane', pane: interactivePane, sourcePaneID }) }} onControlReady={pane.pane_id === paneID ? handleControlReady : undefined} onSurfaceReady={(handle) => { if (handle) paneSurfaces.current.set(pane.pane_id, handle); else paneSurfaces.current.delete(pane.pane_id) }} theme={terminalTheme} enhancedContrast={enhancedContrast} optionAsMeta={optionAsMeta} screenReaderMode={screenReaderMode} display={display} onFontSizeChange={pane.pane_id === paneID ? setActualFontSize : undefined} onDisplayChange={updateDisplay} headerControls={!mobile && pane.pane_id === paneID ? <DisplayToolbar display={display} actualFontSize={actualFontSize} onChange={updateDisplay} onSettings={() => setSettingsOpen(true)}/> : undefined} directInput={directInput} onDirectInput={focusDirectInput} keyboardInset={keyboardInset} transformInput={touchKeys && pane.pane_id === paneID ? consumeModifiers : undefined}/>
           </div>
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
@@ -1001,7 +1022,10 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
       {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} submit={(targetPane, text, keys) => client.call('pane.send_input', composerSubmitParams(targetPane, text, keys))} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
-        {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <button key={key.id} aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(key.bytes)} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>)}
+        {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <Fragment key={key.id}>
+          {key.id === 'ctrlC' && STICKY_MODIFIER_KEYS.map((modifier) => <button key={modifier.id} className={stickyModifiers[modifier.id] ? 'key-active' : undefined} aria-label={modifier.aria} aria-pressed={stickyModifiers[modifier.id]} disabled={!terminalInput} onClick={() => updateStickyModifiers({ ...stickyModifiersRef.current, [modifier.id]: !stickyModifiersRef.current[modifier.id] })}>{modifier.label}</button>)}
+          <button aria-label={key.aria} disabled={!terminalInput} onClick={key.repeatable ? undefined : () => terminalInput?.(consumeModifiers(key.bytes))} {...(key.repeatable ? repeatOnHold(key.bytes) : {})}>{key.label}</button>
+        </Fragment>)}
         <button aria-label="粘贴到终端，不自动回车" disabled={!paneID} data-tooltip="粘贴到终端，不自动回车" onClick={() => void pasteClipboardToTerminal()}>粘贴</button><button className={prefix ? 'key-active' : ''} aria-label="前缀键 Ctrl+B" onClick={() => setPrefix((value) => !value)}>⌘B</button><button disabled={!paneID} aria-label="上传图片" data-tooltip="上传图片" onClick={() => fileInputRef.current?.click()}><ImageIcon size={14}/></button>
       </div>}
       </div>}
