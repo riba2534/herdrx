@@ -40,7 +40,14 @@ func DescribeError(err error) *ConnectionError {
 		}
 	}
 	if strings.Contains(message, "ssh host key changed") {
-		return &ConnectionError{Code: "host_key_changed", Permanent: true, Err: fmt.Errorf("SSH 主机密钥已变化，请核对远程主机身份后更新连接配置：%w", err)}
+		return &ConnectionError{Code: "host_key_changed", Permanent: true, Err: fmt.Errorf("%s：%w", hostKeyChangedNext, err)}
+	}
+	// System OpenSSH reports a changed key only in its stderr. Check it before
+	// the generic "host key verification failed" also printed for unknown keys.
+	for _, token := range []string{"remote host identification has changed", "has changed and you have requested strict checking", "possible dns spoofing"} {
+		if strings.Contains(message, token) {
+			return &ConnectionError{Code: "host_key_changed", Permanent: true, Err: fmt.Errorf("%s：%w", hostKeyChangedNext, err)}
+		}
 	}
 	for _, token := range []string{"unable to authenticate", "no supported methods remain", "parse ssh private key", "invalid saved ssh key", "unsupported ssh authentication", "ssh password is empty"} {
 		if strings.Contains(message, token) {
@@ -59,6 +66,8 @@ func DescribeError(err error) *ConnectionError {
 	}
 	return &ConnectionError{Code: "host_unavailable", Err: err}
 }
+
+const hostKeyChangedNext = "远程主机指纹已变化，可能存在中间人攻击。请先通过其他可信渠道核对远程主机身份，确认无误后再更新指纹并重新连接"
 
 // offlineCauses match lowercase SSH and dial errors, including the stderr
 // tail OpenSSH reports, and say what the user can do next.
