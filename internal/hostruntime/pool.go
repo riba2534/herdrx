@@ -46,7 +46,45 @@ func DescribeError(err error) *ConnectionError {
 			return &ConnectionError{Code: "host_auth_failed", Permanent: true, Err: fmt.Errorf("SSH 认证失败，请检查用户名和密钥或密码，再重新连接：%w", err)}
 		}
 	}
+	// The causes below are usually fixed outside the website, so they stay
+	// retryable: a permanent failure would be cached until the host is edited.
+	if HerdrSocketUnavailable(err) {
+		return &ConnectionError{Code: "herdr_not_running", Err: fmt.Errorf("远程主机上的 Herdr 没有运行，或会话名与主机配置不一致。请在远程主机上启动 Herdr 后重新连接：%w", err)}
+	}
+	if strings.Contains(message, "permission denied (") {
+		return &ConnectionError{Code: "host_auth_failed", Err: fmt.Errorf("SSH 认证被远程主机拒绝，请检查用户名、密钥或 Kerberos 票据后重新连接：%w", err)}
+	}
+	if strings.Contains(message, "host key verification failed") {
+		return &ConnectionError{Code: "host_key_unverified", Err: fmt.Errorf("工作台主机的 known_hosts 中没有这台远程主机的指纹，请管理员用工作台服务账号核对并添加后重新连接：%w", err)}
+	}
+	if strings.Contains(message, "could not resolve hostname") || strings.Contains(message, "no such host") {
+		return &ConnectionError{Code: "host_unreachable", Err: fmt.Errorf("无法解析远程主机地址，请检查主机地址拼写和 DNS 后重新连接：%w", err)}
+	}
+	for _, token := range []string{"connection refused", "no route to host", "network is unreachable", "connection timed out", "i/o timeout"} {
+		if strings.Contains(message, token) {
+			return &ConnectionError{Code: "host_unreachable", Err: fmt.Errorf("连不上远程主机的 SSH 端口，请确认远程主机已开机、网络可达且 SSH 服务在运行后重新连接：%w", err)}
+		}
+	}
 	return &ConnectionError{Code: "host_unavailable", Err: err}
+}
+
+// HerdrSocketUnavailable reports a reachable host whose Herdr API socket is
+// missing: Herdr is not running there, or the session name does not match.
+func HerdrSocketUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "herdr socket is unavailable") {
+		return true
+	}
+	if strings.Contains(message, "connect herdr api socket") {
+		return strings.Contains(message, "no such file") || strings.Contains(message, "connection refused")
+	}
+	if strings.Contains(message, "forward remote herdr socket") {
+		return strings.Contains(message, "connect failed") || strings.Contains(message, "open failed")
+	}
+	return false
 }
 
 func capacityError() error {

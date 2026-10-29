@@ -3,16 +3,20 @@ package herdr
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type openSSHTransport struct {
@@ -51,6 +55,59 @@ func (b *limitedSSHLog) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return strings.TrimSpace(string(b.data))
+}
+
+// RemoteStderrError carries the last stderr line of a failed connection
+// step. SSH and remote commands explain the cause there (Permission denied,
+// command not found); the exit status alone does not.
+type RemoteStderrError struct {
+	Err    error
+	Source string
+	Line   string
+}
+
+func (e *RemoteStderrError) Error() string {
+	return e.Err.Error() + "（" + e.Source + "：" + e.Line + "）"
+}
+func (e *RemoteStderrError) Unwrap() error { return e.Err }
+
+// WithStderrTail attaches the last meaningful stderr line to err, if any.
+func WithStderrTail(err error, source, stderr string) error {
+	line := StderrTail(stderr)
+	if err == nil || line == "" {
+		return err
+	}
+	return &RemoteStderrError{Err: err, Source: source, Line: line}
+}
+
+var terminalEscape = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])`)
+
+// StderrTail returns the last non-empty stderr line without terminal escapes
+// or control characters, bounded for display in an error message.
+func StderrTail(stderr string) string {
+	const maxRunes = 240
+	lines := strings.Split(stderr, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		line := terminalEscape.ReplaceAllString(lines[index], "")
+		line = strings.Map(func(r rune) rune {
+			if r == '\t' {
+				return ' '
+			}
+			if unicode.IsControl(r) || r == utf8.RuneError {
+				return -1
+			}
+			return r
+		}, line)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if runes := []rune(line); len(runes) > maxRunes {
+			line = string(runes[:maxRunes]) + "…"
+		}
+		return line
+	}
+	return ""
 }
 
 func openSSHArgs(options SSHOptions, control string) ([]string, error) {
@@ -124,7 +181,7 @@ func DialOpenSSHEndpoint(ctx context.Context, binary string, options SSHOptions)
 		}
 		select {
 		case <-t.done:
-			return nil, fmt.Errorf("system OpenSSH 连接失败，请用工作台服务账号检查 known_hosts、kinit 和 SSH 配置: %s", t.stderr.String())
+			return nil, WithStderrTail(errors.New("system OpenSSH 连接失败，请用工作台服务账号检查 known_hosts、kinit 和 SSH 配置"), "SSH 输出", t.stderr.String())
 		case <-dialCtx.Done():
 			return nil, fmt.Errorf("system OpenSSH 连接超时或取消: %w", dialCtx.Err())
 		case <-ticker.C:

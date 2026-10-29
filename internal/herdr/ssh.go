@@ -351,9 +351,11 @@ func (e *SSHEndpoint) locateSocket(ctx context.Context) (string, error) {
 	defer session.Close()
 	stop := context.AfterFunc(ctx, func() { _ = session.Close() })
 	defer stop()
+	var stderr limitedSSHLog
+	session.setStderr(&stderr)
 	output, err := session.Output(`sh -c 'printf "%s\n%s\n" "$HOME" "${XDG_CONFIG_HOME:-}"'`)
 	if err != nil {
-		return "", fmt.Errorf("discover remote config path: %w", err)
+		return "", WithStderrTail(fmt.Errorf("discover remote config path: %w", err), "远程主机输出", stderr.String())
 	}
 	lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
 	if len(lines) == 0 || !strings.HasPrefix(lines[0], "/") {
