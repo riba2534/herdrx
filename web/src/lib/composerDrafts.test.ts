@@ -114,4 +114,63 @@ describe('composer guarded send', () => {
     expect(readComposerSend('host', 'p1').status).toBe('failed')
     expect(readComposerDraft('host', 'p1')).toBe('保留')
   })
+
+  it('treats proxy errors and unknown codes as uncertain and keeps the id, but definite rejections as failed', async () => {
+    const prompt = vi.spyOn(api, 'panePrompt')
+    writeComposerDraft('host', 'p1', '可能已发出')
+    for (const error of [
+      new APIError(502, 'request_failed', '请求失败，请检查网络后重试', {}),
+      new APIError(504, 'request_failed', '请求失败，请检查网络后重试', {}),
+      new APIError(500, 'internal_error', 'boom', { code: 'internal_error' }),
+    ]) {
+      prompt.mockRejectedValueOnce(error)
+      await runComposerPrompt('host', 'p1')
+      expect(readComposerSend('host', 'p1').status).toBe('unknown')
+    }
+    const ids = new Set(prompt.mock.calls.map((call) => call[2].client_msg_id))
+    expect(ids.size).toBe(1)
+    for (const error of [
+      new APIError(502, 'pane_read_failed', '读取终端画面失败'),
+      new APIError(400, 'invalid_client_msg_id', '消息编号无效'),
+      new APIError(404, 'host_not_found', '主机不存在'),
+      new APIError(502, 'host_unreachable', '连不上主机', { code: 'host_unreachable', retryable: true }),
+      new APIError(429, 'prompt_busy', '同时进行中的发送太多'),
+    ]) {
+      prompt.mockRejectedValueOnce(error)
+      await runComposerPrompt('host', 'p1')
+      expect(readComposerSend('host', 'p1').status).toBe('failed')
+    }
+  })
+
+  it('keeps the message id across a page reload until the draft changes', async () => {
+    const prompt = vi.spyOn(api, 'panePrompt').mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    writeComposerDraft('host', 'p1', '刷新前发的')
+    await runComposerPrompt('host', 'p1')
+    const first = prompt.mock.calls[0][2].client_msg_id
+    // 模拟刷新页面：模块状态重建，localStorage 留着。
+    vi.resetModules()
+    const fresh = await import('./api')
+    const drafts = await import('./composerDrafts')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ user, csrf_token: 'csrf-sess-a', session_id: 'sess-a' }))))
+    await fresh.api.login({ email: 'user@example.test', password: 'test' })
+    const again = vi.spyOn(fresh.api, 'panePrompt').mockResolvedValue({ delivered: 'duplicate' })
+    expect(drafts.readComposerDraft('host', 'p1')).toBe('刷新前发的')
+    await drafts.runComposerPrompt('host', 'p1')
+    expect(again.mock.calls[0][2].client_msg_id).toBe(first)
+    // 改了正文就是新消息。
+    again.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    drafts.writeComposerDraft('host', 'p1', '改过的')
+    await drafts.runComposerPrompt('host', 'p1')
+    expect(again.mock.calls[1][2].client_msg_id).not.toBe(first)
+    // 退出登录后不留下编号。
+    drafts.clearComposerDrafts()
+    expect([...Array(localStorage.length)].map((_, i) => localStorage.key(i)).filter((key) => key?.endsWith('#msg'))).toEqual([])
+  })
+
+  it('explains a dialog that only the terminal can answer', async () => {
+    vi.spyOn(api, 'panePrompt').mockRejectedValue(new APIError(409, 'pane_dialog', '终端正弹着一个多选对话框'))
+    writeComposerDraft('host', 'p1', '1')
+    await expect(runComposerPrompt('host', 'p1')).resolves.toEqual({ kind: 'dialog', dialog: null })
+    expect(readComposerSend('host', 'p1').error).toContain('需要在终端里操作')
+  })
 })

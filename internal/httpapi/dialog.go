@@ -86,7 +86,12 @@ func (a *API) paneDialog(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer endpoint.Close()
 	writer.Header().Set("Cache-Control", "no-store")
-	writeJSON(writer, http.StatusOK, map[string]any{"dialog": screenparse.ParseDialog(text)})
+	// 多选题不能一键作答，不出卡片。
+	dialog := screenparse.ParseDialog(text)
+	if dialog != nil && dialog.Multiple {
+		dialog = nil
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"dialog": dialog})
 }
 
 // dialogKeys 是选中编号为 index 的选项要按的键：编号对话框直接按数字；否则从当前光标
@@ -96,7 +101,8 @@ func dialogKeys(dialog *screenparse.Dialog, index int) []string {
 	if target < 0 {
 		return nil
 	}
-	if dialog.Numbered && index <= 9 {
+	// 超过 9 个选项时数字键有歧义，一律走方向键。
+	if dialog.Numbered && len(dialog.Options) <= 9 {
 		return []string{strconv.Itoa(index)}
 	}
 	if current < 0 {
@@ -141,13 +147,24 @@ func (a *API) answerPaneDialog(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusConflict, "dialog_changed", "对话框已变化，请重新选择")
 		return
 	}
+	if dialog.Multiple {
+		writeError(writer, http.StatusConflict, "dialog_unanswerable", "这是多选对话框，请在终端里操作")
+		return
+	}
 	keys := dialogKeys(dialog, input.OptionIndex)
 	if keys == nil {
 		writeError(writer, http.StatusBadRequest, "invalid_option", "没有这个选项，请刷新卡片后重新选择")
 		return
 	}
-	a.audit(request, "pane.dialog_answer", "host", host.ID, map[string]any{"pane_id": paneID, "option_index": input.OptionIndex})
-	if _, err := endpoint.Call(ctx, "pane.send_keys", map[string]any{"pane_id": paneID, "keys": keys}); err != nil {
+	// 按键序列不随浏览器断开截断，但随访问授权撤销停止。
+	keysCtx, releaseKeys, err := a.inputContext(request, host.ID, paneDialogTimeout)
+	if err != nil {
+		a.authenticationError(writer, err)
+		return
+	}
+	defer releaseKeys()
+	a.audit(request.WithContext(keysCtx), "pane.dialog_answer", "host", host.ID, map[string]any{"pane_id": paneID, "option_index": input.OptionIndex})
+	if _, err := endpoint.Call(keysCtx, "pane.send_keys", map[string]any{"pane_id": paneID, "keys": keys}); err != nil {
 		writeError(writer, http.StatusBadGateway, "answer_unknown", "按键结果不确定，不会自动重试。请先查看终端再决定下一步")
 		return
 	}

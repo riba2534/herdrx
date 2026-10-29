@@ -317,6 +317,45 @@ describe('Composer', () => {
     expect(calls.map((call) => call.force)).toEqual([undefined, undefined, true])
     expect(new Set(calls.map((call) => call.client_msg_id)).size).toBe(1)
   })
+
+  it('never opens the draft confirmation on another pane, and the original pane keeps its refusal', async () => {
+    const { prompt, calls } = deferredPrompt()
+    const { rerender } = render(<Composer hostID="host" paneID="p1" {...props}/>)
+    typeLocal('给 p1 的')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    rerender(<Composer hostID="host" paneID="p2" {...props}/>)
+    await act(async () => calls[0].reject(new APIError(409, 'pane_draft', '电脑上的输入框里有未发送的内容')))
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(readComposerSend('host', 'p1').status).toBe('refused')
+    // 确认框打开后切走：以取消结束，不会强制发给原终端。
+    rerender(<Composer hostID="host" paneID="p1" {...props}/>)
+    prompt.mockImplementationOnce(() => Promise.reject(new APIError(409, 'pane_draft', '电脑上的输入框里有未发送的内容')))
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alertdialog')
+    rerender(<Composer hostID="host" paneID="p2" {...props}/>)
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(prompt).toHaveBeenCalledTimes(2)
+    expect(sent(prompt).every((call) => call.pane === 'p1' && !call.force)).toBe(true)
+  })
+
+  it('does not force a send while sending became blocked during the confirmation', async () => {
+    const prompt = mockPrompt()
+    prompt.mockImplementationOnce(() => Promise.reject(new APIError(409, 'pane_draft', '电脑上的输入框里有未发送的内容')))
+    const { rerender } = render(<Composer hostID="host" paneID="p1" {...props}/>)
+    typeLocal('带图')
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alertdialog')
+    // 确认期间又加了一张还在上传的图：媒体层把发送禁用。
+    rerender(<Composer hostID="host" paneID="p1" {...props} sendDisabled/>)
+    fireEvent.click(screen.getByRole('button', { name: '仍要发送' }))
+    await waitFor(() => expect(readComposerSend('host', 'p1').error).toContain('暂时不能发送'))
+    expect(prompt).toHaveBeenCalledTimes(1)
+    expect(readComposerDraft('host', 'p1')).toBe('带图')
+  })
 })
 
 describe('Composer media host', () => {

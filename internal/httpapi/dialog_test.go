@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/riba2534/herdrx/internal/screenparse"
 	"github.com/riba2534/herdrx/internal/store"
@@ -114,12 +116,24 @@ func TestDialogKeysFromCursorPosition(t *testing.T) {
 	if got := strings.Join(dialogKeys(dialog, 3), ","); got != "Enter" {
 		t.Fatalf("keys=%s", got)
 	}
-	numbered := &screenparse.Dialog{Numbered: true, Options: []screenparse.Option{{Index: 9}, {Index: 10, Selected: true}, {Index: 11}}}
-	if got := strings.Join(dialogKeys(numbered, 9), ","); got != "9" {
+	small := &screenparse.Dialog{Numbered: true, Options: []screenparse.Option{{Index: 1, Selected: true}, {Index: 2}, {Index: 3}}}
+	if got := strings.Join(dialogKeys(small, 3), ","); got != "3" {
 		t.Fatalf("keys=%s", got)
 	}
-	if got := strings.Join(dialogKeys(numbered, 11), ","); got != "Down,Enter" {
-		t.Fatalf("two-digit options move with arrows: %s", got)
+	// 超过 9 个选项：数字键有歧义，全部走方向键。
+	var many []screenparse.Option
+	for i := 1; i <= 11; i++ {
+		many = append(many, screenparse.Option{Index: i, Selected: i == 10})
+	}
+	large := &screenparse.Dialog{Numbered: true, Options: many}
+	if got := strings.Join(dialogKeys(large, 9), ","); got != "Up,Enter" {
+		t.Fatalf("keys=%s", got)
+	}
+	if got := strings.Join(dialogKeys(large, 2), ","); got != "Up,Up,Up,Up,Up,Up,Up,Up,Enter" {
+		t.Fatalf("keys=%s", got)
+	}
+	if got := strings.Join(dialogKeys(large, 11), ","); got != "Down,Enter" {
+		t.Fatalf("keys=%s", got)
 	}
 }
 
@@ -169,5 +183,42 @@ func TestDialogAnswerKeyFailureIsNotRetried(t *testing.T) {
 	}
 	if len(keysSent(f)) != 1 {
 		t.Fatalf("keys=%q", keysSent(f))
+	}
+}
+
+// 读屏之后访问被撤销：不按键。
+func TestDialogAnswerStopsWhenAccessIsRevoked(t *testing.T) {
+	f := newPromptFixture(t, dialogScreen)
+	fingerprint := f.dialog(t)["fingerprint"]
+	f.endpoint.beforeKeys = func() { f.revoke(t) }
+	postJSON(t, f.client, f.url("/dialog/answer"), f.csrf, map[string]any{"fingerprint": fingerprint, "option_index": 1}, 502)
+	if len(keysSent(f)) != 0 {
+		t.Fatalf("keys were pressed after revocation: %q", keysSent(f))
+	}
+}
+
+// 浏览器在按键前断开：按键序列照样送完。
+func TestDialogAnswerCompletesWhenTheBrowserLeaves(t *testing.T) {
+	f := newPromptFixture(t, trustScreen)
+	fingerprint := f.dialog(t)["fingerprint"]
+	ctx, cancel := context.WithCancel(t.Context())
+	f.endpoint.beforeKeys = func() {
+		cancel()
+		time.Sleep(50 * time.Millisecond)
+	}
+	encoded, _ := json.Marshal(map[string]any{"fingerprint": fingerprint, "option_index": 2})
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, f.url("/dialog/answer"), strings.NewReader(string(encoded)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", "http://example.test")
+	request.Header.Set("X-CSRF-Token", f.csrf)
+	if response, err := f.client.Do(request); err == nil {
+		response.Body.Close()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(keysSent(f)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := strings.Join(keysSent(f), ","); got != `["Down","Enter"]` {
+		t.Fatalf("keys=%q", got)
 	}
 }

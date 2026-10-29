@@ -58,6 +58,9 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
   const titleID = useId()
   const listRef = useRef<HTMLDivElement>(null)
   const controllerRef = useRef<AbortController | null>(null)
+  // 回答进行中不接收轮询结果；回答后的补读定时器随卡片卸载清掉，免得卸载后还去关别的 pane 的卡片。
+  const answeringRef = useRef(false)
+  const followUpRef = useRef(0)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   // initial 只作首屏内容，之后以轮询为准；换 pane 时由调用方用 key 重建卡片。
@@ -76,7 +79,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
     controllerRef.current = controller
     try {
       const result = await api.paneDialog(hostID, paneID, { signal: controller.signal })
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || answeringRef.current) return
       setDialog(result.dialog)
       if (!result.dialog) onCloseRef.current?.()
     } catch {
@@ -88,7 +91,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
     let timer = 0
     const tick = () => {
       window.clearTimeout(timer)
-      if (document.visibilityState === 'visible') void refresh()
+      if (document.visibilityState === 'visible' && !answeringRef.current) void refresh()
       timer = window.setTimeout(tick, DIALOG_POLL_MS)
     }
     if (startedWithDialog.current) timer = window.setTimeout(tick, DIALOG_POLL_MS)
@@ -97,6 +100,7 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       window.clearTimeout(timer)
+      window.clearTimeout(followUpRef.current)
       document.removeEventListener('visibilitychange', onVisible)
       controllerRef.current?.abort()
     }
@@ -104,18 +108,28 @@ export function DialogCard({ hostID, paneID, initial, primary = false, onClose }
 
   const answer = async (index: number, label: string) => {
     if (!dialog || answering !== null) return
+    // 进行中的轮询可能在按键之前读到旧画面，回来后会把已回答的卡片又显示出来：先中止它。
+    controllerRef.current?.abort()
+    answeringRef.current = true
     setAnswering(index)
+    let reread = false
     try {
       await api.answerPaneDialog(hostID, paneID, dialog.fingerprint, index)
       setToast(`已选择：${label}`)
-      setDialog(null)
-      window.setTimeout(() => void refresh(), 600)
+      // 终端重绘前再读到的还是这个对话框：按指纹收起，出现新的对话框时才再显示。
+      setDismissed(dialog.fingerprint)
+      reread = true
     } catch (error) {
       const code = error instanceof APIError ? error.code : ''
       setToast(answerErrors[code] || (error instanceof Error ? error.message : '回答失败，请到终端里操作'))
-      if (code === 'dialog_changed' || code === 'dialog_gone') void refresh()
+      reread = code === 'dialog_changed' || code === 'dialog_gone'
     } finally {
+      answeringRef.current = false
       setAnswering(null)
+    }
+    if (reread) {
+      window.clearTimeout(followUpRef.current)
+      followUpRef.current = window.setTimeout(() => void refresh(), 600)
     }
   }
 

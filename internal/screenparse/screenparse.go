@@ -2,7 +2,7 @@
 // Claude 输入框里的未发送草稿。
 //
 // 这里只做纯解析：输入是一屏文本，输出是认出的结构或“认不出”。规则保守——只认
-// 底部带光标的编号选项、或带按键提示页脚的不编号列表；认不出就返回 nil / 无草稿，
+// 画面最底部带按键提示页脚、选项紧贴页脚的选择框；认不出就返回 nil / 无草稿，
 // 由调用方回到终端操作，不猜。
 package screenparse
 
@@ -31,6 +31,10 @@ type Dialog struct {
 	Options     []Option `json:"options"`
 	Numbered    bool     `json:"numbered"`
 	Fingerprint string   `json:"fingerprint"`
+	// Multiple：多选题（选项带勾选框）。卡片不作答，用户回终端操作。
+	Multiple bool `json:"-"`
+	// FreeText：光标停在“Type something”之类的自由输入项上，键入的文字进入对话框自己的输入框。
+	FreeText bool `json:"-"`
 }
 
 // Selected 返回当前光标所在的选项位置（Options 下标），没有时为 -1。
@@ -113,71 +117,83 @@ func unbox(line string) string {
 }
 
 var (
-	// 编号选项：`  2. No`；光标所在的一行带 `❯`（Claude）或 `›`（Codex），由分组 1 标出。
-	numberedRow = regexp.MustCompile(`^\s*([❯›]\s*)?(\d{1,2})\.\s+(\S.*)$`)
+	// 编号选项：`  2. No`；光标所在的一行带 `❯`（Claude）或 `›`（Codex），由分组 2 标出。
+	numberedRow = regexp.MustCompile(`^(\s*)([❯›]\s*)?(\d{1,2})\.\s+(\S.*)$`)
 	// 不编号列表的光标行：`❯ No, exit`。
 	plainCursor = regexp.MustCompile(`^(\s*)❯\s+(\S.*)$`)
 	// 选择器把名称和说明排成两列，中间是一串空格。
 	columnGap = regexp.MustCompile(`\s{2,}`)
-	// 按键提示页脚：`Enter to confirm · Esc to cancel`、`↑/↓ to navigate`。
-	footerPattern = regexp.MustCompile(`(?i)\b(?:enter to (?:confirm|select|submit|continue)|esc to (?:cancel|go back|exit|close|interrupt))\b|↑/?↓ to (?:navigate|select|move)`)
+	// 按键提示页脚：`Enter to confirm · Esc to cancel`、`Press enter to confirm or esc to cancel`、
+	// `↑/↓ to navigate`。不含 Claude 工作中的 `esc to interrupt`：那不是对话框。
+	footerPattern = regexp.MustCompile(`(?i)\b(?:enter to (?:confirm|select|submit|continue)|esc to (?:cancel|go back|exit|close))\b|↑/?↓ to (?:navigate|select|move)`)
+	// 多选题的勾选框：`[ ] Red`、`[x] Blue`、`☐ Green`。
+	checkboxPattern = regexp.MustCompile(`^(?:\[[ xX✓✔]\]|[☐☑☒◻◼])\s`)
+	// 自由输入类选项：选中后键入的文字进入对话框自己的输入框。
+	freeTextPattern = regexp.MustCompile(`(?i)^(?:type something|other)\b`)
 )
 
-// 对话框往上最多看这么多行找说明文字；往下最多看这么多行找页脚。
+// 对话框往上最多看这么多行找选项与说明文字。
 const (
 	maxDialogContext = 20
 	maxScanLines     = 40
 )
 
 // ParseDialog 认出画面底部的对话框，认不出返回 nil。
+//
+// 只认确定的形态，选项必须是画面最底部的内容：
+//   - 最后一行非空文字是按键提示页脚（Claude 的选择框、Codex 的审批框），选项紧贴在它上方；
+//   - 或者没有页脚，带光标的编号选项本身就在画面最底部，且上方有对话框顶边（横线、边框、▔▔▔▔），
+//     如 Claude 的权限确认、Rewind。
+//
+// 选项与页脚之间只能有空行。输入框（下面还有横线和状态行）、Shell 提示符、Codex 历史里回显的
+// `› 1. …` 都不在画面最底部，所以不会被当成对话框。宁可漏判。
 func ParseDialog(ansi string) *Dialog {
 	plain, _ := splitLines(ansi)
 	if len(plain) == 0 {
 		return nil
 	}
+	footer := footerPattern.MatchString(plain[len(plain)-1])
+	if footer {
+		plain = plain[:len(plain)-1]
+	}
 	lines := make([]string, len(plain))
 	for i, line := range plain {
 		lines[i] = unbox(line)
 	}
-	if dialog := parseNumbered(lines); dialog != nil {
-		return dialog
+	// 页脚与选项之间只允许空行和对话框边框的底边。
+	end := len(lines)
+	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "╰") && isBoxEdge(lines[end-1])) {
+		end--
+	}
+	lines = lines[:end]
+	if len(lines) == 0 {
+		return nil
+	}
+	if numberedRow.MatchString(lines[len(lines)-1]) || hasNumberedCursor(lines) {
+		return parseNumbered(lines, !footer)
+	}
+	if !footer {
+		return nil
 	}
 	return parseUnnumbered(lines)
 }
 
-// inputBoxBelow：光标行之下还有 Claude 输入框（横线后紧跟 `❯`/`>`/`!` 提示行）时，
-// 那个 `❯ 1. …` 是历史或输入内容，不是正在等待的对话框。
-func inputBoxBelow(lines []string, row int) bool {
-	for i := row + 1; i < len(lines); i++ {
-		if !isRule(lines[i]) {
-			continue
+// hasNumberedCursor：选项区（最后一个空段之后）里有带光标的编号行。
+func hasNumberedCursor(lines []string) bool {
+	for i := len(lines) - 1; i >= max(0, len(lines)-maxScanLines); i-- {
+		if strings.TrimSpace(lines[i]) == "" || isEdge(lines[i]) {
+			return false
 		}
-		for _, next := range lines[i+1:] {
-			text := strings.TrimSpace(next)
-			if text == "" {
-				continue
-			}
-			if strings.HasPrefix(text, "❯") || strings.HasPrefix(text, ">") || strings.HasPrefix(text, "!") || isRule(text) {
-				return true
-			}
-			break
+		if match := numberedRow.FindStringSubmatch(lines[i]); match != nil && match[2] != "" {
+			return true
 		}
 	}
 	return false
 }
 
-func hasFooter(lines []string) bool {
-	seen := 0
-	for i := len(lines) - 1; i >= 0 && seen < 4; i-- {
-		if strings.TrimSpace(lines[i]) == "" {
-			continue
-		}
-		seen++
-		if footerPattern.MatchString(lines[i]) {
-			return true
-		}
-	}
-	return false
+// isEdge：对话框的边线（横线、带标签的横线、边框顶/底边、▔▔▔▔）。
+func isEdge(line string) bool {
+	return isRule(line) || isBoxEdge(line)
 }
 
 type optionRow struct {
@@ -187,102 +203,152 @@ type optionRow struct {
 	selected bool
 }
 
-func parseNumbered(lines []string) *Dialog {
+// parseNumbered 从选项区底部往上收集连续的编号选项（直到编号 1）。选项下方可以有缩进更深的
+// 说明行；空行、边线或缩进不够的文字都结束选项区。唯一的例外是 Claude 提问框在最后的
+// “Chat about this”前画的一条分隔线：它上方紧挨着前一个编号时跳过。
+// requireEdge：没有页脚时，对话框上方必须有顶边。
+func parseNumbered(lines []string, requireEdge bool) *Dialog {
 	start := max(0, len(lines)-maxScanLines)
-	cursor := -1
+	var rows []optionRow
+	below := len(lines)
 	for i := len(lines) - 1; i >= start; i-- {
-		if match := numberedRow.FindStringSubmatch(lines[i]); match != nil && match[1] != "" {
-			cursor = i
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
 			break
 		}
-	}
-	if cursor < 0 || inputBoxBelow(lines, cursor) {
-		return nil
-	}
-	parse := func(i int) (optionRow, bool) {
-		match := numberedRow.FindStringSubmatch(lines[i])
+		if isEdge(line) {
+			// 分隔线（上方可隔着空行）紧挨着前一个编号时跳过，否则是对话框顶边。
+			prev := i - 1
+			for prev >= start && strings.TrimSpace(lines[prev]) == "" {
+				prev--
+			}
+			if len(rows) == 0 || prev < start || below != i+1 {
+				break
+			}
+			above := numberedRow.FindStringSubmatch(lines[prev])
+			if index, _ := strconv.Atoi(valueAt(above, 3)); above == nil || index != rows[0].index-1 {
+				break
+			}
+			i, below = prev+1, prev+1
+			continue
+		}
+		match := numberedRow.FindStringSubmatch(line)
 		if match == nil {
-			return optionRow{}, false
+			continue // 说明行，归属在遇到它上方的选项时检查
 		}
-		index, _ := strconv.Atoi(match[2])
-		return optionRow{line: i, index: index, label: strings.TrimSpace(match[3]), selected: match[1] != ""}, true
-	}
-	current, _ := parse(cursor)
-	rows := []optionRow{current}
-	// 向上收集编号递减的选项；中间允许选项自己的说明行（非空、非横线）。
-	for i := cursor - 1; i >= start && rows[0].index > 1; i-- {
-		if isRule(lines[i]) {
+		index, _ := strconv.Atoi(match[3])
+		if len(rows) > 0 && index != rows[0].index-1 {
 			break
 		}
-		if row, ok := parse(i); ok {
-			if row.index != rows[0].index-1 {
-				break
-			}
-			rows = append([]optionRow{row}, rows...)
+		if !detailsBelong(lines[i+1:below], utf8.RuneCountInString(match[1]+match[2])) {
+			return nil
+		}
+		rows = append([]optionRow{{line: i, index: index, label: strings.TrimSpace(match[4]), selected: match[2] != ""}}, rows...)
+		below = i
+		if index == 1 {
+			break
 		}
 	}
-	// 向下收集编号递增的选项。
-	for i := cursor + 1; i < len(lines); i++ {
-		if row, ok := parse(i); ok {
-			if row.index != rows[len(rows)-1].index+1 {
-				break
-			}
-			rows = append(rows, row)
-		}
-	}
-	if rows[0].index != 1 || len(rows) < 2 {
+	if len(rows) < 2 || rows[0].index != 1 || selectedCount(rows) != 1 {
 		return nil
 	}
-	return build(lines, rows, true)
+	return build(lines, rows, true, requireEdge)
 }
 
-func parseUnnumbered(lines []string) *Dialog {
-	if !hasFooter(lines) {
-		return nil
+// detailsBelong：这些行都是上方选项的说明（或分隔线），缩进比选项的编号所在列更深。
+func detailsBelong(lines []string, numberColumn int) bool {
+	for _, line := range lines {
+		if !isEdge(line) && len(line)-len(strings.TrimLeft(line, " ")) <= numberColumn {
+			return false
+		}
 	}
+	return true
+}
+
+func valueAt(match []string, index int) string {
+	if index < len(match) {
+		return match[index]
+	}
+	return ""
+}
+
+func selectedCount(rows []optionRow) int {
+	n := 0
+	for _, row := range rows {
+		if row.selected {
+			n++
+		}
+	}
+	return n
+}
+
+// parseUnnumbered 认不编号的列表：光标行 `❯ label` 与其余选项的文字对齐在同一列，连续排列。
+// 折行的选项续行也对齐在这一列，与下一个选项无法区分：有选项几乎占满画面宽度时不出卡片。
+func parseUnnumbered(lines []string) *Dialog {
 	start := max(0, len(lines)-maxScanLines)
 	cursor, indent := -1, 0
 	for i := len(lines) - 1; i >= start; i-- {
+		if strings.TrimSpace(lines[i]) == "" || isEdge(lines[i]) {
+			break
+		}
 		if match := plainCursor.FindStringSubmatch(lines[i]); match != nil {
-			cursor, indent = i, len([]rune(match[1]))+2
+			cursor, indent = i, utf8.RuneCountInString(match[1])+2
 			break
 		}
 	}
-	if cursor < 0 || inputBoxBelow(lines, cursor) {
+	if cursor < 0 {
 		return nil
 	}
-	// 兄弟选项与光标行的文字对齐：前 indent 列为空白，第 indent 列起是文字。
 	sibling := func(line string) bool {
 		runes := []rune(line)
-		return len(runes) > indent && strings.TrimSpace(string(runes[:indent])) == "" && runes[indent] != ' ' && !footerPattern.MatchString(line)
+		return len(runes) > indent && strings.TrimSpace(string(runes[:indent])) == "" && runes[indent] != ' '
 	}
-	first, last := cursor, cursor
+	first := cursor
 	for first-1 >= start && sibling(lines[first-1]) {
 		first--
 	}
-	for last+1 < len(lines) && sibling(lines[last+1]) {
-		last++
+	// 光标行以下到选项区末尾必须都是兄弟选项。
+	for i := cursor + 1; i < len(lines); i++ {
+		if !sibling(lines[i]) {
+			return nil
+		}
 	}
+	last := len(lines) - 1
 	if first == last {
 		return nil
 	}
+	width := 0
+	for _, line := range lines {
+		width = max(width, cells(line))
+	}
 	var rows []optionRow
 	for i := first; i <= last; i++ {
+		if i < last && cells(lines[i]) >= width-12 {
+			return nil
+		}
 		label := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "❯"))
 		rows = append(rows, optionRow{line: i, index: i - first + 1, label: label, selected: i == cursor})
 	}
-	return build(lines, rows, false)
+	return build(lines, rows, false, false)
 }
 
-// build 补上选项上方的说明：一直往上到对话框顶边（横线或边框）为止。
-func build(lines []string, rows []optionRow, numbered bool) *Dialog {
-	top := max(0, rows[0].line-maxDialogContext)
+// build 补上选项上方的说明：一直往上到对话框顶边（横线或边框）为止；找不到顶边时
+// 只取紧挨着选项的那一段，免得把上方 Agent 的回复当成说明。
+func build(lines []string, rows []optionRow, numbered, requireEdge bool) *Dialog {
+	top, bounded := max(0, rows[0].line-maxDialogContext), false
 	for i := rows[0].line - 1; i >= top; i-- {
-		if isRule(lines[i]) || isBoxEdge(lines[i]) {
-			top = i + 1
+		if isEdge(lines[i]) {
+			top, bounded = i+1, true
 			break
 		}
 	}
+	if !bounded {
+		if requireEdge {
+			return nil
+		}
+		top = unboundedTop(lines, rows[0].line, top)
+	}
+
 	// 终端折行的长句接回一行：上一行几乎占满画面宽度（以最宽的一行为准，按列计）时，下一行是它的续行。
 	width := 0
 	for _, line := range lines {
@@ -330,6 +396,8 @@ func build(lines []string, rows []optionRow, numbered bool) *Dialog {
 	}
 	for _, row := range rows {
 		dialog.Options = append(dialog.Options, Option{Index: row.index, Label: columnGap.ReplaceAllString(row.label, " · "), Selected: row.selected})
+		dialog.Multiple = dialog.Multiple || checkboxPattern.MatchString(row.label)
+		dialog.FreeText = dialog.FreeText || (row.selected && freeTextPattern.MatchString(row.label))
 		hash.Write([]byte("\x00o" + strconv.Itoa(row.index) + "\x00" + row.label))
 	}
 	if numbered {
@@ -337,6 +405,37 @@ func build(lines []string, rows []optionRow, numbered bool) *Dialog {
 	}
 	dialog.Fingerprint = hex.EncodeToString(hash.Sum(nil))[:16]
 	return dialog
+}
+
+// agentMarker：Agent 回复与工具调用的行首标记，说明文字不会越过它们。
+var agentMarker = regexp.MustCompile(`^\s*[●•⏺]`)
+
+// unboundedTop：对话框没有顶边时，从选项往上按段收集说明，收到问句所在的段为止（最多三段），
+// 遇到 Agent 回复的行首标记就停。
+func unboundedTop(lines []string, first, limit int) int {
+	top := first
+	for paragraphs := 0; paragraphs < 3; paragraphs++ {
+		i := top - 1
+		for i >= limit && strings.TrimSpace(lines[i]) == "" {
+			i--
+		}
+		question := false
+		for i >= limit && strings.TrimSpace(lines[i]) != "" {
+			if agentMarker.MatchString(lines[i]) {
+				return top
+			}
+			question = question || strings.ContainsAny(lines[i], "?？")
+			i--
+		}
+		if i+1 == top {
+			return top
+		}
+		top = i + 1
+		if question {
+			break
+		}
+	}
+	return top
 }
 
 // joinWrapped 接上折行：中日韩文字之间不补空格。
