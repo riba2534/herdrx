@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { ChevronUp, Keyboard, SquareTerminal } from 'lucide-react'
 import { Button } from './ui'
 import { clipboardImages } from '../lib/imagePaste'
-import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, runComposerPrompt, subscribeComposer, writeComposerDraft, type ComposerSendState } from '../lib/composerDrafts'
+import { composerInFlight, composerStatusText, idleComposerSend, readComposerDraft, readComposerSend, refuseComposerSend, runComposerPrompt, subscribeComposer, writeComposerDraft, type ComposerSendState } from '../lib/composerDrafts'
 import type { PaneDialog } from '../types'
 import { DialogCard, usePrimaryDialogCard } from './DialogCard'
 import { useConfirm } from './useConfirm'
@@ -173,10 +173,15 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
     writeComposerDraft(hostID, paneID, text)
   }
 
+  // 最新的 props：确认框在发送结果回来之后才弹，必须按此刻的上传状态判断，不能用发起时的快照。
+  const latest = useRef({ sendDisabled, mediaHost })
+  latest.current = { sendDisabled, mediaHost }
+
   const sendNow = (force = false) => {
+    const { sendDisabled, mediaHost } = latest.current
     if (sendDisabled || !paneID || composerInFlight(hostID, paneID)) return
     // 「仅图片也能发」：没有正文但媒体层有已 staged 的附件时同样可发送。
-    if (!value.trim() && !mediaHost?.canSend()) return
+    if (!readComposerDraft(hostID, paneID).trim() && !mediaHost?.canSend()) return
     if (mediaHost) {
       // 文本与图片引用合成为**一次**提交；null 表示本次放弃（正文与引用都为空）。
       const composed = mediaHost.compose(readComposerDraft(hostID, paneID))
@@ -186,10 +191,19 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
     setRefusedDialog(undefined)
     void runComposerPrompt(hostID, paneID, { force }).then(async (result) => {
       mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status)
+      // 结果回来前已切到别的终端：不在新终端上弹卡片或确认框，原终端的状态行仍记着这次结果。
+      const stillHere = () => hostRef.current === hostID && paneRef.current === paneID
+      if (!stillHere()) return
       if (result.kind === 'dialog') setRefusedDialog(result.dialog)
-      if (result.kind === 'draft' && await confirm('电脑上的输入框里有未发送的内容。仍要发送的话，这段文字会接在那段内容后面一起提交。', { title: '电脑上有未发送的输入，仍要发送吗？', confirmLabel: '仍要发送', danger: false })) {
-        sendNow(true)
+      if (result.kind !== 'draft') return
+      // 确认框绑定在这个终端上：切换终端会让它以“取消”结束（useConfirm 的 scope）。
+      if (!await confirm('电脑上的输入框里有未发送的内容。仍要发送的话，这段文字会接在那段内容后面一起提交。', { title: '电脑上有未发送的输入，仍要发送吗？', confirmLabel: '仍要发送', danger: false }) || !stillHere()) return
+      // 确认期间又加了图片且仍在上传（或主机断开）：不发，免得这张图被悄悄漏掉。
+      if (latest.current.sendDisabled) {
+        refuseComposerSend(hostID, paneID, '暂时不能发送（图片仍在上传或主机未连接），请稍后再点发送')
+        return
       }
+      sendNow(true)
     })
   }
 

@@ -130,4 +130,40 @@ describe('DialogCard', () => {
     card.unmount()
     expect(probe.getByText('none')).toBeInTheDocument()
   })
+
+  it('does not flash an answered card back from a poll that read the old screen', async () => {
+    vi.useFakeTimers()
+    setVisibility('visible')
+    let finishPoll: (value: { dialog: PaneDialog | null }) => void = () => {}
+    const read = vi.spyOn(api, 'paneDialog')
+      .mockResolvedValueOnce({ dialog })
+      .mockImplementationOnce(() => new Promise((resolve) => { finishPoll = resolve }))
+      .mockResolvedValue({ dialog })
+    vi.spyOn(api, 'answerPaneDialog').mockResolvedValue({ ok: true })
+    render(<DialogCard hostID="host" paneID="w1:p1"/>)
+    await act(async () => {})
+    await act(async () => { vi.advanceTimersByTime(DIALOG_POLL_MS) })
+    expect(read).toHaveBeenCalledTimes(2)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes' })) })
+    // 旧轮询带着答前的画面回来，以及终端尚未重绘时的补读：都不让卡片回闪。
+    await act(async () => finishPoll({ dialog }))
+    await act(async () => { vi.advanceTimersByTime(1000) })
+    expect(screen.queryByRole('group')).not.toBeInTheDocument()
+  })
+
+  it('cancels the follow-up read on unmount so it cannot close another pane card', async () => {
+    vi.useFakeTimers()
+    setVisibility('visible')
+    const read = vi.spyOn(api, 'paneDialog').mockResolvedValueOnce({ dialog }).mockResolvedValue({ dialog: null })
+    vi.spyOn(api, 'answerPaneDialog').mockResolvedValue({ ok: true })
+    const onClose = vi.fn()
+    const view = render(<DialogCard hostID="host" paneID="w1:p1" onClose={onClose}/>)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Yes' })) })
+    view.unmount()
+    const calls = read.mock.calls.length
+    await act(async () => { vi.advanceTimersByTime(DIALOG_POLL_MS * 2) })
+    expect(read).toHaveBeenCalledTimes(calls)
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })

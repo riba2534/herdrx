@@ -14,10 +14,12 @@ const sends = new Map<string, ComposerSendState>()
 const inflight = new Set<string>()
 /**
  * 每个 pane 当前这段草稿的 client_msg_id。正文不变时沿用同一个 id：网络断在半路后用户再点
- * 发送，服务端能认出已送达的那次（返回 duplicate）或如实说明结果不确定，而不是再打一遍。
- * 服务端明确说“结果不确定”后换新 id——用户看过终端、主动再点发送就是一条新消息。
+ * 发送（包括刷新页面之后），服务端能认出已送达的那次（返回 duplicate）或如实说明结果不确定，
+ * 而不是再打一遍。正文一改就换新 id；服务端明确说“结果不确定”后也换新 id——用户看过终端、
+ * 主动再点发送就是一条新消息。与草稿一样按登录会话存进 localStorage，退出登录时一并清掉。
  */
-const messageIDs = new Map<string, { id: string; text: string }>()
+type MessageID = { id: string; text: string }
+const messageIDs = new Map<string, MessageID>()
 const listeners = new Set<() => void>()
 let listening = false
 
@@ -177,12 +179,54 @@ function newMessageID() {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function messageIDFor(key: string, text: string) {
-  const current = messageIDs.get(key)
+// 草稿键里的 host/pane 经过 encodeURIComponent，不会含 '#'，所以这个后缀不会与草稿键冲突。
+function messageStorageKey(sessionID: string, hostID: string, paneID: string) {
+  return `${storageKey(sessionID, hostID, paneID)}#msg`
+}
+
+function storedMessageID(sessionID: string, hostID: string, paneID: string): MessageID | undefined {
+  try {
+    const value = JSON.parse(localStorage.getItem(messageStorageKey(sessionID, hostID, paneID)) || 'null')
+    if (typeof value?.id === 'string' && typeof value?.text === 'string') return value
+  } catch {
+    // Storage may be unavailable or hold a malformed record; start a new id.
+  }
+  return undefined
+}
+
+function messageIDFor(key: string, sessionID: string, hostID: string, paneID: string, text: string) {
+  const current = messageIDs.get(key) || storedMessageID(sessionID, hostID, paneID)
   if (current && current.text === text) return current.id
-  const id = newMessageID()
-  messageIDs.set(key, { id, text })
-  return id
+  const record = { id: newMessageID(), text }
+  messageIDs.set(key, record)
+  try { localStorage.setItem(messageStorageKey(sessionID, hostID, paneID), JSON.stringify(record)) } catch { /* in-memory id still lasts this visit */ }
+  return record.id
+}
+
+function forgetMessageID(key: string, sessionID: string, hostID: string, paneID: string) {
+  messageIDs.delete(key)
+  try { localStorage.removeItem(messageStorageKey(sessionID, hostID, paneID)) } catch { /* ignore */ }
+}
+
+/**
+ * 服务端明确拒绝、什么都没有送进终端的错误码。其余错误（包括反代返回的非 JSON 5xx）
+ * 都可能发生在打字之后，按结果未知处理并保留同一个 id。
+ */
+const NOT_SENT_CODES = new Set(['pane_send_failed', 'pane_read_failed', 'empty_prompt', 'host_not_found', 'pane_not_found', 'prompt_busy', 'unauthenticated', 'auth_unavailable', 'auth_busy', 'csrf_failed', 'origin_forbidden', 'json_required', 'rate_limited', 'request_too_large'])
+
+function notSent(error: APIError) {
+  if (NOT_SENT_CODES.has(error.code) || error.code.startsWith('invalid_')) return true
+  // 主机连接失败（writeHostConnectionError）发生在读屏之前，带 retryable 字段。
+  const details = error.details as { retryable?: unknown } | undefined
+  return typeof details?.retryable === 'boolean'
+}
+
+/** 发送没有发出就被本地拦下（例如确认后图片仍在上传）时，把状态标成未发送。 */
+export function refuseComposerSend(hostID: string, paneID: string, reason: string) {
+  const key = liveKey(hostID, paneID)
+  if (!key || inflight.has(key)) return
+  sends.set(key, { status: 'refused', error: reason, revision: drafts.get(key)?.revision || 0 })
+  notify()
 }
 
 export type ComposerPromptResult =
@@ -214,7 +258,7 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
     notify()
   }
   try {
-    const clientMsgID = messageIDFor(key, text)
+    const clientMsgID = messageIDFor(key, sessionID, hostID, paneID, text)
     try {
       await api.panePrompt(hostID, paneID, { text, submit: true, client_msg_id: clientMsgID, force: options.force || undefined })
     } catch (error) {
@@ -224,8 +268,9 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
         return { kind: 'failed' }
       }
       if (error.code === 'pane_dialog') {
-        settle('refused', '终端正弹着一个选择对话框，请先回答它再发送')
         const details = error.details as { dialog?: PaneDialog } | undefined
+        // 没带卡片的对话框（如多选题）只能在终端里操作。
+        settle('refused', details?.dialog ? '终端正弹着一个选择对话框，请先回答它再发送' : '终端正弹着一个需要在终端里操作的对话框，请先在终端里处理')
         return { kind: 'dialog', dialog: details?.dialog || null }
       }
       if (error.code === 'pane_draft') {
@@ -233,15 +278,17 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
         return { kind: 'draft' }
       }
       if (error.code === 'delivery_unknown') {
-        messageIDs.delete(key)
+        forgetMessageID(key, sessionID, hostID, paneID)
         settle('unknown', error.message)
-      } else {
+      } else if (notSent(error)) {
         settle('failed', error.message)
+      } else {
+        settle('unknown', error.message)
       }
       return { kind: 'failed' }
     }
     if (!inflight.has(key)) return { kind: 'skipped' }
-    messageIDs.delete(key)
+    forgetMessageID(key, sessionID, hostID, paneID)
     // 草稿在发送期间被改写则保留用户的新内容。
     const latest = drafts.get(key)
     if (latest && latest.revision === revision && latest.text === text) {
