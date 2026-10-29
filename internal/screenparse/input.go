@@ -87,8 +87,6 @@ type styledRun struct {
 	dim, inverse bool
 }
 
-var sgrOrEscape = regexp.MustCompile(`\x1b(?:\[([0-?]*)[ -/]*([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])`)
-
 // sgrState 是跨行延续的 dim / 反显状态：一个灰字建议可能折到下一行，而下一行不一定重发 SGR。
 type sgrState struct{ dim, inverse bool }
 
@@ -98,7 +96,7 @@ func styleRuns(line string, state sgrState) ([]styledRun, sgrState) {
 	var runs []styledRun
 	dim, inverse := state.dim, state.inverse
 	offset := 0
-	for _, match := range sgrOrEscape.FindAllStringSubmatchIndex(line, -1) {
+	for _, match := range escapePattern.FindAllStringSubmatchIndex(line, -1) {
 		if match[0] > offset {
 			runs = append(runs, styledRun{line[offset:match[0]], dim, inverse})
 		}

@@ -102,17 +102,23 @@ func TestDialogAnswerUnnumberedDialogMovesFromTheCursor(t *testing.T) {
 
 func TestDialogKeysFromCursorPosition(t *testing.T) {
 	dialog := &screenparse.Dialog{Options: []screenparse.Option{{Index: 1}, {Index: 2}, {Index: 3, Selected: true}, {Index: 4}}}
-	if got := strings.Join(dialogKeys(dialog, 0), ","); got != "Up,Up,Enter" {
+	if got := strings.Join(dialogKeys(dialog, 1), ","); got != "Up,Up,Enter" {
 		t.Fatalf("keys=%s", got)
 	}
-	if got := strings.Join(dialogKeys(dialog, 3), ","); got != "Down,Enter" {
+	if got := strings.Join(dialogKeys(dialog, 4), ","); got != "Down,Enter" {
+		t.Fatalf("keys=%s", got)
+	}
+	if dialogKeys(dialog, 7) != nil {
+		t.Fatal("an unknown option must press nothing")
+	}
+	if got := strings.Join(dialogKeys(dialog, 3), ","); got != "Enter" {
 		t.Fatalf("keys=%s", got)
 	}
 	numbered := &screenparse.Dialog{Numbered: true, Options: []screenparse.Option{{Index: 9}, {Index: 10, Selected: true}, {Index: 11}}}
-	if got := strings.Join(dialogKeys(numbered, 0), ","); got != "9" {
+	if got := strings.Join(dialogKeys(numbered, 9), ","); got != "9" {
 		t.Fatalf("keys=%s", got)
 	}
-	if got := strings.Join(dialogKeys(numbered, 2), ","); got != "Down,Enter" {
+	if got := strings.Join(dialogKeys(numbered, 11), ","); got != "Down,Enter" {
 		t.Fatalf("two-digit options move with arrows: %s", got)
 	}
 }

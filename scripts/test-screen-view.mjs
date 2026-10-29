@@ -14,6 +14,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { servePanePrompt } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_SCREEN_ARTIFACTS
@@ -36,20 +37,11 @@ const screenLines = (count) => [
 ]
 const ansi = Array.from({ length: 24 }, (_, i) => `\x1b[${i + 1};1HScreen terminal ${i}`).join('')
 
-// 当前 fixture 的发送替身：POST …/prompt 由本地假服务器转交给它
-// （Service Worker 接管页面后，WebKit 的 page.route 拦不到页面发出的 fetch）。同一时刻只有一个 fixture 在用。
+// 当前 fixture 的发送替身（见 servePanePrompt）；同一时刻只有一个 fixture 在用。
 let promptHandler = null
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
-  const prompt = path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/prompt$/)
-  if (prompt && promptHandler && req.method === 'POST') {
-    let raw = ''
-    for await (const chunk of req) raw += chunk
-    const payload = await promptHandler(decodeURIComponent(prompt[1]), raw ? JSON.parse(raw) : {})
-    res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify(payload))
-    return
-  }
+  if (await servePanePrompt(req, res, path, promptHandler)) return
   const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'screen-user', email: 'screen@example.test', display_name: 'Screen', role: 'admin' }, csrf_token: 'screen-fixture', session_id: 'screen-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/screen-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }

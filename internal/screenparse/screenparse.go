@@ -53,18 +53,13 @@ func (d *Dialog) Find(index int) int {
 	return -1
 }
 
-var (
-	csiPattern = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
-	oscPattern = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
-	// 其他两字节转义（ESC 7、ESC = 等）。
-	escPattern = regexp.MustCompile(`\x1b[ -/]*[0-~]`)
-)
+// escapePattern 匹配一个终端转义：CSI（分组 1 是参数、2 是终止字节，SGR 的终止字节是 m）、
+// OSC，以及其他两字节转义（ESC 7、ESC = 等）。
+var escapePattern = regexp.MustCompile(`\x1b(?:\[([0-?]*)[ -/]*([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\)|[ -/]*[0-~])`)
 
 // Plain 去掉 ANSI 转义、回车与不换行空格。
 func Plain(text string) string {
-	text = oscPattern.ReplaceAllString(text, "")
-	text = csiPattern.ReplaceAllString(text, "")
-	text = escPattern.ReplaceAllString(text, "")
+	text = escapePattern.ReplaceAllString(text, "")
 	text = strings.ReplaceAll(text, "\r", "")
 	return strings.ReplaceAll(text, "\u00a0", " ")
 }
@@ -86,7 +81,7 @@ func splitLines(ansi string) (plain []string, raw []string) {
 // isRule：一整行横线（Claude 输入框上下沿、对话框顶边）。
 func isRule(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	if len([]rune(trimmed)) < 8 {
+	if utf8.RuneCountInString(trimmed) < 8 {
 		return false
 	}
 	return strings.Trim(trimmed, "─━═") == "" || labeledRule.MatchString(trimmed)
@@ -118,10 +113,8 @@ func unbox(line string) string {
 }
 
 var (
-	// 光标停在编号选项上：`❯ 1. Yes`（Claude）、`› 1. Allow`（Codex）。
-	numberedCursor = regexp.MustCompile(`^(\s*)[❯›]\s*(\d{1,2})\.\s+(\S.*)$`)
-	// 没有光标的编号选项：`  2. No`。
-	numberedRow = regexp.MustCompile(`^(\s*)(\d{1,2})\.\s+(\S.*)$`)
+	// 编号选项：`  2. No`；光标所在的一行带 `❯`（Claude）或 `›`（Codex），由分组 1 标出。
+	numberedRow = regexp.MustCompile(`^\s*([❯›]\s*)?(\d{1,2})\.\s+(\S.*)$`)
 	// 不编号列表的光标行：`❯ No, exit`。
 	plainCursor = regexp.MustCompile(`^(\s*)❯\s+(\S.*)$`)
 	// 选择器把名称和说明排成两列，中间是一串空格。
@@ -198,7 +191,7 @@ func parseNumbered(lines []string) *Dialog {
 	start := max(0, len(lines)-maxScanLines)
 	cursor := -1
 	for i := len(lines) - 1; i >= start; i-- {
-		if numberedCursor.MatchString(lines[i]) {
+		if match := numberedRow.FindStringSubmatch(lines[i]); match != nil && match[1] != "" {
 			cursor = i
 			break
 		}
@@ -207,15 +200,12 @@ func parseNumbered(lines []string) *Dialog {
 		return nil
 	}
 	parse := func(i int) (optionRow, bool) {
-		if match := numberedCursor.FindStringSubmatch(lines[i]); match != nil {
-			index, _ := strconv.Atoi(match[2])
-			return optionRow{line: i, index: index, label: strings.TrimSpace(match[3]), selected: true}, true
+		match := numberedRow.FindStringSubmatch(lines[i])
+		if match == nil {
+			return optionRow{}, false
 		}
-		if match := numberedRow.FindStringSubmatch(lines[i]); match != nil {
-			index, _ := strconv.Atoi(match[2])
-			return optionRow{line: i, index: index, label: strings.TrimSpace(match[3])}, true
-		}
-		return optionRow{}, false
+		index, _ := strconv.Atoi(match[2])
+		return optionRow{line: i, index: index, label: strings.TrimSpace(match[3]), selected: match[1] != ""}, true
 	}
 	current, _ := parse(cursor)
 	rows := []optionRow{current}

@@ -22,6 +22,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { servePanePrompt } from './browser-controls.mjs'
 import { websiteSecurityPolicy } from './browser-security-policy.mjs'
 
 const security = await websiteSecurityPolicy(process.argv[2] || 'bin/herdrx-server')
@@ -66,21 +67,12 @@ async function holdUpload() {
 
 const sendJSON = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
 
-// 当前 fixture 的发送替身：POST …/prompt 由本地假服务器转交给它
-// （Service Worker 接管页面后，WebKit 的 page.route 拦不到页面发出的 fetch）。同一时刻只有一个 fixture 在用。
+// 当前 fixture 的发送替身（见 servePanePrompt）；同一时刻只有一个 fixture 在用。
 let promptHandler = null
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const path = url.pathname
-  const prompt = path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/prompt$/)
-  if (prompt && promptHandler && req.method === 'POST') {
-    let raw = ''
-    for await (const chunk of req) raw += chunk
-    const payload = await promptHandler(decodeURIComponent(prompt[1]), raw ? JSON.parse(raw) : {})
-    res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify(payload))
-    return
-  }
+  if (await servePanePrompt(req, res, path, promptHandler)) return
 
   // 图片 stage-only 上传。真实服务端按魔数嗅探；假端点只记录 `inject` 与文件名。
   const upload = path.match(/^\/api\/hosts\/media-test\/panes\/(p\d+)\/paste-image$/)

@@ -33,3 +33,17 @@ export async function openSiteNav(page, name) {
     }
   }
 }
+
+// 本地假服务器上的发送替身：把 POST /api/hosts/{id}/panes/{pane}/prompt 交给 handler(pane, body)，
+// 返回值作为 JSON 响应。真实服务端在这里读屏防护，再按“正文 + 回车”两腿送入。
+// 用假服务器而不是 page.route：Service Worker 接管页面后，WebKit 的 page.route 拦不到页面发出的 fetch。
+export async function servePanePrompt(req, res, path, handler) {
+  const match = handler && req.method === 'POST' && path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/prompt$/)
+  if (!match) return false
+  let raw = ''
+  for await (const chunk of req) raw += chunk
+  const payload = await handler(decodeURIComponent(match[1]), raw ? JSON.parse(raw) : {})
+  res.setHeader('content-type', 'application/json')
+  res.end(JSON.stringify(payload))
+  return true
+}

@@ -57,8 +57,20 @@ func readVisibleScreen(ctx context.Context, endpoint herdr.Endpoint, paneID stri
 	return result.Read.Text, nil
 }
 
-func writePaneReadFailed(writer http.ResponseWriter) {
-	writeError(writer, http.StatusBadGateway, "pane_read_failed", "读取终端画面失败，什么都没有发送。请检查主机连接后重试，或直接在终端里操作")
+// openPaneScreen 打开主机连接并读一屏；失败时已写好响应。成功时调用方负责关闭 endpoint。
+func (a *API) openPaneScreen(ctx context.Context, writer http.ResponseWriter, host store.Host, paneID string) (herdr.Endpoint, string, bool) {
+	endpoint, err := a.hosts.Open(ctx, host)
+	if err != nil {
+		writeHostConnectionError(writer, err)
+		return nil, "", false
+	}
+	text, err := readVisibleScreen(ctx, endpoint, paneID)
+	if err != nil {
+		endpoint.Close()
+		writeError(writer, http.StatusBadGateway, "pane_read_failed", "读取终端画面失败，什么都没有发送。请检查主机连接后重试，或直接在终端里操作")
+		return nil, "", false
+	}
+	return endpoint, text, true
 }
 
 func (a *API) paneDialog(writer http.ResponseWriter, request *http.Request) {
@@ -68,28 +80,25 @@ func (a *API) paneDialog(writer http.ResponseWriter, request *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), paneDialogTimeout)
 	defer cancel()
-	endpoint, err := a.hosts.Open(ctx, host)
-	if err != nil {
-		writeHostConnectionError(writer, err)
+	endpoint, text, ok := a.openPaneScreen(ctx, writer, host, paneID)
+	if !ok {
 		return
 	}
 	defer endpoint.Close()
-	text, err := readVisibleScreen(ctx, endpoint, paneID)
-	if err != nil {
-		writePaneReadFailed(writer)
-		return
-	}
 	writer.Header().Set("Cache-Control", "no-store")
 	writeJSON(writer, http.StatusOK, map[string]any{"dialog": screenparse.ParseDialog(text)})
 }
 
-// dialogKeys 是选中某个选项要按的键：编号对话框直接按数字；否则从当前光标位置
-// 按若干次上/下再回车。编号超过一位数时同样走方向键。
-func dialogKeys(dialog *screenparse.Dialog, target int) []string {
-	if dialog.Numbered && dialog.Options[target].Index <= 9 {
-		return []string{strconv.Itoa(dialog.Options[target].Index)}
+// dialogKeys 是选中编号为 index 的选项要按的键：编号对话框直接按数字；否则从当前光标
+// 位置按若干次上/下再回车。编号超过一位数时同样走方向键。没有这个选项时返回 nil。
+func dialogKeys(dialog *screenparse.Dialog, index int) []string {
+	target, current := dialog.Find(index), dialog.Selected()
+	if target < 0 {
+		return nil
 	}
-	current := dialog.Selected()
+	if dialog.Numbered && index <= 9 {
+		return []string{strconv.Itoa(index)}
+	}
 	if current < 0 {
 		return nil
 	}
@@ -118,17 +127,11 @@ func (a *API) answerPaneDialog(writer http.ResponseWriter, request *http.Request
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), paneDialogTimeout)
 	defer cancel()
-	endpoint, err := a.hosts.Open(ctx, host)
-	if err != nil {
-		writeHostConnectionError(writer, err)
+	endpoint, text, ok := a.openPaneScreen(ctx, writer, host, paneID)
+	if !ok {
 		return
 	}
 	defer endpoint.Close()
-	text, err := readVisibleScreen(ctx, endpoint, paneID)
-	if err != nil {
-		writePaneReadFailed(writer)
-		return
-	}
 	dialog := screenparse.ParseDialog(text)
 	if dialog == nil {
 		writeError(writer, http.StatusConflict, "dialog_gone", "对话框已经关闭（可能已在电脑上回答），这次什么都没有按")
@@ -138,11 +141,7 @@ func (a *API) answerPaneDialog(writer http.ResponseWriter, request *http.Request
 		writeError(writer, http.StatusConflict, "dialog_changed", "对话框已变化，请重新选择")
 		return
 	}
-	target := dialog.Find(input.OptionIndex)
-	keys := []string(nil)
-	if target >= 0 {
-		keys = dialogKeys(dialog, target)
-	}
+	keys := dialogKeys(dialog, input.OptionIndex)
 	if keys == nil {
 		writeError(writer, http.StatusBadRequest, "invalid_option", "没有这个选项，请刷新卡片后重新选择")
 		return

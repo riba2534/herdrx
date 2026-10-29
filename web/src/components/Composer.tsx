@@ -126,8 +126,9 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   const chat = variant === 'chat'
   const [value, setValue] = useState(() => readComposerDraft(hostID, paneID))
   const [send, setSend] = useState(() => readComposerSend(hostID, paneID))
-  // 发送被拒绝时服务端带回的对话框；工作台已有主卡片时不再重复显示。
-  const [refusedDialog, setRefusedDialog] = useState<{ dialog: PaneDialog | null } | null>(null)
+  // 发送因对话框被拒绝后显示卡片：值是服务端带回的对话框（null 表示没带回，由卡片自己读取），
+  // undefined 表示不显示。工作台已有主卡片时不再重复显示。
+  const [refusedDialog, setRefusedDialog] = useState<PaneDialog | null>()
   const primaryCard = usePrimaryDialogCard(hostID, paneID)
   const { confirm, dialog: confirmDialog } = useConfirm(`${hostID}\n${paneID}`)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -142,7 +143,7 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
       setSend(readComposerSend(hostRef.current, paneRef.current))
     }
     sync()
-    setRefusedDialog(null)
+    setRefusedDialog(undefined)
     return subscribeComposer(sync)
   }, [hostID, paneID])
 
@@ -187,10 +188,10 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
       if (composed === null) return
       writeComposerDraft(hostID, paneID, composed)
     }
-    setRefusedDialog(null)
+    setRefusedDialog(undefined)
     void runComposerPrompt(hostID, paneID, { force }).then(async (result) => {
       mediaHost?.onSettled?.(readComposerSend(hostID, paneID).status)
-      if (result.kind === 'dialog') setRefusedDialog({ dialog: result.dialog })
+      if (result.kind === 'dialog') setRefusedDialog(result.dialog)
       if (result.kind === 'draft' && await confirm('电脑上的输入框里有未发送的内容。仍要发送的话，这段文字会接在那段内容后面一起提交。', { title: '电脑上有未发送的输入，仍要发送吗？', confirmLabel: '仍要发送', danger: false })) {
         sendNow(true)
       }
@@ -231,8 +232,8 @@ export function Composer({ hostID, paneID, visible, directInput, localOnly = fal
   const empty = !value.trim()
   const canEdit = Boolean(paneID)
   const selectLocalInput = () => { onLocalInput(); textareaRef.current?.focus() }
-  const dialogCard = refusedDialog && !primaryCard && <div className="composer-dialog-card">
-    <DialogCard key={`${hostID}\n${paneID}`} hostID={hostID} paneID={paneID} initial={refusedDialog.dialog} onClose={() => setRefusedDialog(null)}/>
+  const dialogCard = refusedDialog !== undefined && !primaryCard && <div className="composer-dialog-card">
+    <DialogCard key={`${hostID}\n${paneID}`} hostID={hostID} paneID={paneID} initial={refusedDialog} onClose={() => setRefusedDialog(undefined)}/>
   </div>
   return <>{dialogCard}<div className={`composer${compact ? ' composer-compact' : ''}${chat ? ' composer-chat' : ''}${localOnly ? ' composer-local-only' : ''}`} role="region" aria-label={chat ? '对话输入' : '本地输入'}>
     {compact && !chat && !localOnly && <InputModeMenu key={`${hostID}:${paneID}`} directInput={directInput} onDirectInput={onDirectInput} onLocalInput={selectLocalInput}/>}

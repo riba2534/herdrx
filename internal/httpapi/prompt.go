@@ -35,8 +35,7 @@ const (
 type promptOutcome int
 
 const (
-	promptPending promptOutcome = iota
-	promptForgotten
+	promptForgotten promptOutcome = iota + 1
 	promptSent
 	promptUnknown
 )
@@ -160,17 +159,11 @@ func (a *API) panePrompt(writer http.ResponseWriter, request *http.Request) {
 
 	ctx, cancel := context.WithTimeout(request.Context(), promptCheckTimeout)
 	defer cancel()
-	endpoint, err := a.hosts.Open(ctx, host)
-	if err != nil {
-		writeHostConnectionError(writer, err)
+	endpoint, text, ok := a.openPaneScreen(ctx, writer, host, paneID)
+	if !ok {
 		return
 	}
 	defer endpoint.Close()
-	text, err := readVisibleScreen(ctx, endpoint, paneID)
-	if err != nil {
-		writePaneReadFailed(writer)
-		return
-	}
 	if dialog := screenparse.ParseDialog(text); dialog != nil {
 		writeJSON(writer, http.StatusConflict, map[string]any{"code": "pane_dialog", "error": "终端正弹着一个选择对话框，这段文字没有发出去，免得被当成选项。请先回答对话框再发送", "dialog": dialog})
 		return
