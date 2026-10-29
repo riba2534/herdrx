@@ -696,6 +696,27 @@ describe('verified binding', () => {
     expect(applyStructuredChatPage(state(), page({ binding: 'verified', messages: [textRecord('1', 'user', '问')] })).messages).toEqual([])
   })
 
+  it('catches up a verified first page with the session it was bound to', async () => {
+    vi.useFakeTimers()
+    const { calls, fetchPage } = recorder((call) => call.session
+      ? page({ binding: 'selected', session_id: 's1', messages: [textRecord('2', 'assistant', '续页')], next_cursor: 'c2' })
+      : page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1', has_more: true }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 1000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ session: 'cand-1', cursor: 'c1' })
+    expect(session.getSnapshot().state.messages.map((item) => item.id)).toEqual(['1', '2'])
+    session.stop()
+  })
+
+  it('treats a verified page for another session as a session switch', () => {
+    const bound = applyStructuredChatPage(state(), page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('old', 'user', '旧会话')], next_cursor: 'c1', skipped: 2 }))
+    const switched = applyStructuredChatPage(bound, page({ binding: 'verified', session: 'cand-2', session_id: 's2', messages: [textRecord('new', 'user', '新会话')], next_cursor: 'n1' }))
+    expect(switched).toMatchObject({ session: 'cand-2', sessionID: 's2', binding: 'verified', nextCursor: 'n1', skipped: 0 })
+    expect(switched.messages.map((item) => item.id)).toEqual(['new'])
+  })
+
   it('polls the verified session, asks for candidates only after reselect, and re-checks evidence on refresh', async () => {
     vi.useFakeTimers()
     const { calls, fetchPage } = recorder((call) => call.session

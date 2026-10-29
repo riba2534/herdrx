@@ -264,7 +264,12 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
   }
   // 只有用户显式选择过候选（`state.session`），或服务端用 Herdr 证据 verified 认领并给出候选 id，
   // 才允许渲染消息：服务端即便误发记录也不认领。
-  // `page.session` 只在 verified 页上出现（见 normalize）。
+  // `page.session` 只在 verified 页上出现（见 normalize）。verified 认领到的会话与当前不同
+  // （Agent 换了会话，如 /clear）时按会话切换处理：整体重建，不混入旧会话的记录。
+  const switched = page.session !== undefined && state.session !== undefined && page.session !== state.session
+  if (switched) {
+    return mergePage({ ...EMPTY_STRUCTURED_CHAT_STATE, source: state.source }, { ...page, reset: true }, direction)
+  }
   const session = state.session ?? page.session
   const bound = session !== undefined
   const carried = bound && !page.reset ? state.messages : []
@@ -723,6 +728,8 @@ export class StructuredChatSession {
     this.inFlight = true
     const stale = () => !this.running || generation !== this.generation || epoch !== authenticationGeneration() || login !== currentSessionID()
     let cursor = query.cursor
+    // 续页必须带上会话：无 session 的首页被 verified 认领后，之后的游标只对那个会话有效。
+    let session = query.session
     try {
       // 服务端触顶后 `has_more` 表示还有记录：立刻续取，而不是等下一个心跳。
       for (let page = 0; page < this.maxCatchUpPages; page++) {
@@ -731,7 +738,7 @@ export class StructuredChatSession {
           paneID,
           // 显式读取源只在用户选过时出现；请求里永远没有 `agent` / `cwd` / 路径。
           ...(this.source ? { source: this.source } : {}),
-          ...(query.session ? { session: query.session } : this.manual ? { manual: true } : {}),
+          ...(session ? { session } : this.manual ? { manual: true } : {}),
           ...(query.before ? { before: query.before } : {}),
           ...(cursor ? { cursor } : {}),
           signal: controller.signal,
@@ -744,6 +751,8 @@ export class StructuredChatSession {
         this.publish(merged, '', candidates)
         if (direction === 'earlier' || !response.has_more || !response.next_cursor) return
         cursor = response.next_cursor
+        session = merged.session
+        if (!session) return
       }
     } catch (error) {
       if (stale()) return
