@@ -167,6 +167,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
   const { gitWorkspaces, workspaceBranches, refreshWorkspaceBranches } = useWorkspaceBranches(client, connection, snapshot?.workspaces || [])
   const previousStatuses = useRef(new Map<string, string>())
+  const pushStatusRef = useRef<PushStatusCache['current']>(null)
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
   // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
@@ -381,7 +382,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       for (const agent of nextSnapshot.agents) {
         const previous = previousStatuses.current.get(agent.pane_id)
         if (previous && previous !== agent.agent_status && (agent.agent_status === 'blocked' || agent.agent_status === 'done') && document.visibilityState !== 'visible') {
-          void showAgentNotification(agent.name || agent.agent, agent.agent_status, hostID, agent.pane_id)
+          void showAgentNotification(agent.name || agent.agent, agent.agent_status, hostID, agent.pane_id, pushStatusRef)
         }
         previousStatuses.current.set(agent.pane_id, agent.agent_status)
       }
@@ -1054,7 +1055,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <SwitcherGroup title="操作">{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{paneID && <button aria-pressed={paneModeFor(paneID) === 'screen'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'screen' ? 'terminal' : 'screen'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'screen' ? <SquareTerminal size={16}/> : <ScrollText size={16}/>}<span><strong>{paneModeFor(paneID) === 'screen' ? '切换到终端视图' : '切换到画面视图'}</strong><small>{paneModeFor(paneID) === 'screen' ? '回到完整终端' : '按屏幕宽度重排终端文字，不改远端尺寸'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
-    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => setNotificationPermission(await enablePushNotifications())}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
+    {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => { setNotificationPermission(await enablePushNotifications()); pushStatusRef.current = null }}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {helpOpen && <Modal title="快捷键" className="keymap-modal" closeLabel="关闭快捷键" onClose={() => setHelpOpen(false)}><div className="keymap-help">{keymapHelpGroups().map((group) => <section key={group.id} className="keymap-group"><h3>{group.title}</h3><ul>{group.entries.map((entry) => <li key={entry.chord} className={entry.implemented ? undefined : 'keymap-unimplemented'}><kbd>{entry.chord}</kbd><span>{entry.label}</span></li>)}</ul></section>)}</div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenuLabel(contextMenu.target.kind)} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
@@ -1122,19 +1123,34 @@ function paneStyle(layout: Layout, paneID: string) {
   }
 }
 
-async function showAgentNotification(name: string, status: string, hostID: string, paneID: string) {
+async function showAgentNotification(name: string, status: string, hostID: string, paneID: string, pushStatus: PushStatusCache) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return
   const title = agentNotificationTitle(name, status)
   const options: NotificationOptions = { body: status === 'blocked' ? 'Agent 正在等待你的输入。' : 'Agent 已完成后台工作。', tag: `herdrx:${hostID}:${paneID}`, data: { url: workbenchPaneURL(hostID, paneID) } }
   if ('serviceWorker' in navigator) {
     const registration = await navigator.serviceWorker.ready
-    // 已订阅后台推送时由服务端发送同一条通知：它有 60 秒完成延迟和已读判断，
-    // 页内再发一次只会重复（tag 也不同，无法互相替换），所以只在没有订阅时兜底。
-    if (await registration.pushManager?.getSubscription().catch(() => null)) return
+    // 服务端确认本浏览器的订阅仍属于当前用户时，由推送发同一条通知（有 60 秒完成延迟和
+    // 已读判断），页内再发只会重复；换了用户、订阅已过期或被删除时页面自己兜底。
+    if (await pushDeliversForThisUser(registration, pushStatus)) return
     await registration.showNotification(title, options)
   } else {
     new Notification(title, options)
   }
+}
+
+// 订阅状态按 endpoint 缓存 60 秒；读取失败当作未订阅，宁可重复也不漏通知。缓存属于
+// 工作台实例，换登录会重新挂载工作台，不会把上一个用户的结果带过去。
+const PUSH_STATUS_TTL_MS = 60_000
+type PushStatusCache = { current: { endpoint: string; subscribed: boolean; at: number } | null }
+async function pushDeliversForThisUser(registration: ServiceWorkerRegistration, cache: PushStatusCache) {
+  const subscription = await registration.pushManager?.getSubscription().catch(() => null)
+  if (!subscription) return false
+  const { endpoint } = subscription
+  const cached = cache.current
+  if (cached?.endpoint === endpoint && Date.now() - cached.at < PUSH_STATUS_TTL_MS) return cached.subscribed
+  const subscribed = await api.pushSubscriptionStatus(endpoint).then((result) => result.subscribed === true, () => false)
+  cache.current = { endpoint, subscribed, at: Date.now() }
+  return subscribed
 }
 
 async function enablePushNotifications(): Promise<NotificationPermission> {

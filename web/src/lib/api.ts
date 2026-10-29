@@ -132,6 +132,7 @@ export const api = {
     request<{ tasks: { id: string; status: string; host_id?: string; error?: string; agent_id?: string }[] }>('/api/tailcat/enrollments'),
   pushConfig: () => request<{ public_key: string }>('/api/push/config'),
   subscribePush: (subscription: PushSubscriptionJSON) => request<{ ok: boolean }>('/api/push/subscriptions', { method: 'POST', body: JSON.stringify(subscription) }),
+  pushSubscriptionStatus: (endpoint: string) => request<{ subscribed: boolean }>('/api/push/subscriptions/status', { method: 'POST', body: JSON.stringify({ endpoint }) }),
   agents: (init?: RequestInit) => request<AgentOverview>('/api/agents', init),
   markAgentSeen: (host_id: string, pane_id: string, state_change_seq: number) =>
     request<{ ok: boolean }>('/api/agents/seen', { method: 'POST', body: JSON.stringify({ host_id, pane_id, state_change_seq }) }),

@@ -56,6 +56,7 @@ vi.mock('../lib/workbench', () => ({
 }))
 vi.mock('../lib/api', () => ({
   api: {
+    pushSubscriptionStatus: vi.fn().mockResolvedValue({ subscribed: false }),
     host: vi.fn().mockResolvedValue({ host: { id: 'host', name: 'Local', transport: 'local' } }),
     hosts: vi.fn().mockResolvedValue({ hosts: [{ id: 'host', name: 'Local', transport: 'local' }, { id: 'host-other', name: 'Office', transport: 'ssh' }] }),
     renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
@@ -149,7 +150,10 @@ describe('workbench page notifications', () => {
     Reflect.deleteProperty(document, 'visibilityState')
   })
 
-  async function blockAgentInBackground(subscription: object | null) {
+  async function blockAgentInBackground(subscription: object | null, status?: { subscribed: boolean } | Error) {
+    vi.mocked(api.pushSubscriptionStatus).mockReset()
+    if (status instanceof Error) vi.mocked(api.pushSubscriptionStatus).mockRejectedValue(status)
+    else vi.mocked(api.pushSubscriptionStatus).mockResolvedValue(status ?? { subscribed: false })
     const showNotification = vi.fn(async () => {})
     const registration = { showNotification, pushManager: { getSubscription: vi.fn(async () => subscription) } }
     Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { ready: Promise.resolve(registration), addEventListener() {}, removeEventListener() {} } })
@@ -163,10 +167,26 @@ describe('workbench page notifications', () => {
     return showNotification
   }
 
-  it('leaves background notifications to the debounced server push when subscribed', async () => {
-    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' })
+  it('leaves background notifications to the debounced server push when the server confirms the subscription', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/sub' }, { subscribed: true })
+    await waitFor(() => expect(api.pushSubscriptionStatus).toHaveBeenCalledWith('https://push.example.test/sub'))
     await act(async () => { await Promise.resolve() })
     expect(showNotification).not.toHaveBeenCalled()
+    // 60 秒内的下一次变化复用结果，不再请求。
+    act(() => emitSnapshot({ ...snapshot, agents: snapshot.agents.map((agent) => agent.pane_id === 'w1:p1' ? { ...agent, agent_status: 'done' as const } : agent) }))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    expect(api.pushSubscriptionStatus).toHaveBeenCalledTimes(1)
+    expect(showNotification).not.toHaveBeenCalled()
+  })
+
+  it('still notifies when the browser subscription belongs to another user or was deleted', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/stale' }, { subscribed: false })
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
+  })
+
+  it('still notifies when the subscription status cannot be read', async () => {
+    const showNotification = await blockAgentInBackground({ endpoint: 'https://push.example.test/offline' }, new Error('offline'))
+    await waitFor(() => expect(showNotification).toHaveBeenCalledTimes(1))
   })
 
   it('falls back to a page notification with the pane deep link when not subscribed', async () => {
