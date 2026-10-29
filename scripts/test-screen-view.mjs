@@ -36,8 +36,20 @@ const screenLines = (count) => [
 ]
 const ansi = Array.from({ length: 24 }, (_, i) => `\x1b[${i + 1};1HScreen terminal ${i}`).join('')
 
+// 当前 fixture 的发送替身：POST …/prompt 由本地假服务器转交给它
+// （Service Worker 接管页面后，WebKit 的 page.route 拦不到页面发出的 fetch）。同一时刻只有一个 fixture 在用。
+let promptHandler = null
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
+  const prompt = path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/prompt$/)
+  if (prompt && promptHandler && req.method === 'POST') {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const payload = await promptHandler(decodeURIComponent(prompt[1]), raw ? JSON.parse(raw) : {})
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(payload))
+    return
+  }
   const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'screen-user', email: 'screen@example.test', display_name: 'Screen', role: 'admin' }, csrf_token: 'screen-fixture', session_id: 'screen-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/screen-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
@@ -57,11 +69,29 @@ async function fixture(browser, options) {
   const messages = [], errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   let gen = 0
+  const prompts = []
+  // 回显 Composer 发送的正文：由下面的工作台连接替身挂上，HTTP 发送替身调用。
+  let echoTyped = () => {}
+  // Composer 经服务端 POST …/prompt 发送（读屏防护后由服务端送入），不走工作台连接。
+  promptHandler = async (pane, body) => {
+    prompts.push(body)
+    echoTyped(body.text)
+    return { delivered: 'sent' }
+  }
   await page.routeWebSocket('**/api/hosts/*/ws', (ws) => {
     let lines = []
     let nextStreamID = 0
     let watchGen = 0, seq = 0
     const send = (message) => ws.send(JSON.stringify(message))
+    echoTyped = (text) => {
+      if (!text) return
+      // Echo like a shell: the typed text lands on the prompt line, then a new prompt.
+      const echo = `\x1b[0m\x1b[1m\x1b[38;5;4m$ \x1b[0m${text}`
+      setTimeout(() => {
+        lines = [...lines.slice(1, -1), echo, '\x1b[0m\x1b[1m\x1b[38;5;4m$ \x1b[0m']
+        send({ t: 'screen', pane_id: 'p1', gen: watchGen, seq: ++seq, drop: 1, total: lines.length, set: [[lines.length - 2, echo], [lines.length - 1, lines.at(-1)]] })
+      }, 60)
+    }
     ws.onMessage((raw) => {
       if (typeof raw !== 'string') return
       const message = JSON.parse(raw)
@@ -91,16 +121,6 @@ async function fixture(browser, options) {
         // A frame of the replaced generation arriving late must be ignored.
         if (previousGen) send({ t: 'screen', pane_id: message.pane_id, gen: previousGen, seq: 99, total: 1, set: [[0, 'STALE GENERATION']] })
         send({ t: 'screen', pane_id: message.pane_id, gen: watchGen, seq: ++seq, full: true, lines, total: lines.length, requested: message.lines })
-      } else if (message.t === 'call' && message.method === 'pane.send_input') {
-        send({ t: 'result', id: message.id, result: { type: 'ok' } })
-        if (message.params?.text) {
-          // Echo like a shell: the typed text lands on the prompt line, then a new prompt.
-          const echo = `\x1b[0m\x1b[1m\x1b[38;5;4m$ \x1b[0m${message.params.text}`
-          setTimeout(() => {
-            lines = [...lines.slice(1, -1), echo, '\x1b[0m\x1b[1m\x1b[38;5;4m$ \x1b[0m']
-            send({ t: 'screen', pane_id: 'p1', gen: watchGen, seq: ++seq, drop: 1, total: lines.length, set: [[lines.length - 2, echo], [lines.length - 1, lines.at(-1)]] })
-          }, 60)
-        }
       } else if (message.t === 'call') {
         send({ t: 'result', id: message.id, result: {} })
       }
@@ -108,7 +128,7 @@ async function fixture(browser, options) {
   })
   await page.goto(base + '/h/screen-test')
   await expect(page.locator('.xterm-rows').first()).toContainText('Screen terminal')
-  return { context, page, messages, errors }
+  return { context, page, messages, errors, prompts }
 }
 
 async function withFixture(browser, options, body) {
@@ -170,7 +190,8 @@ try {
         assert.ok(boxRect && boxRect.x <= 16 && boxRect.width > 240, `${name}: local-only composer leaves an empty mode column ${JSON.stringify(boxRect)}`)
         await box.fill('echo 画面发送')
         await phone.page.getByRole('button', { name: '发送', exact: true }).click()
-        await expect.poll(() => phone.messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input').length).toBeGreaterThan(0)
+        await expect.poll(() => phone.prompts.length).toBe(1)
+        assert.equal(phone.prompts[0].text, 'echo 画面发送')
         await expect(view.locator('.screen-line').filter({ hasText: 'echo 画面发送' })).toHaveCount(1)
         await expect(view.getByText('STALE GENERATION')).toHaveCount(0)
 

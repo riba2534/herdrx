@@ -20,8 +20,17 @@ const snapshot = {
   agents: [],
 }
 const ansi = Array.from({ length: 24 }, (_, i) => `\x1b[${i + 1};1HComposer terminal ${i}`).join('')
+// 当前 fixture 的 pane 接口替身（prompt / dialog / dialog/answer）。
+let paneAPI = null
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
+  const pane = path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/(prompt|dialog|dialog\/answer)$/)
+  if (pane && paneAPI) {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    await paneAPI(pane[2], decodeURIComponent(pane[1]), raw ? JSON.parse(raw) : {}, req, res)
+    return
+  }
   const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'composer-user', email: 'composer@example.test', display_name: 'Composer', role: 'admin' }, csrf_token: 'composer-fixture', session_id: 'composer-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host, otherHost] } : path === '/api/hosts/composer-test/' ? { host } : path === '/api/hosts/composer-other/' ? { host: otherHost } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
@@ -34,11 +43,28 @@ const server = createServer(async (req, res) => {
 await new Promise((done) => server.listen(0, '127.0.0.1', done))
 const base = `http://127.0.0.1:${server.address().port}`
 
-async function fixture(browser, options, { delayMs = 500, failText = 'FORCE_FAIL', closeOnSend = false, receiptError = '' } = {}) {
+const promptDialog = { fingerprint: '0123456789abcdef', title: 'Do you want to proceed?', lines: ['Bash command', 'rm -rf build'], options: [{ index: 1, label: 'Yes', selected: true }, { index: 2, label: 'No, and tell Claude what to do differently', selected: false }] }
+
+async function fixture(browser, options, { delayMs = 500, failText = 'FORCE_FAIL', closeOnSend = false, receiptError = '', screen = 'idle' } = {}) {
   const context = await browser.newContext(options)
   const page = await context.newPage()
-  const messages = [], errors = []
+  const messages = [], errors = [], prompts = [], answers = []
   page.on('pageerror', (error) => errors.push(error.message))
+  // 发送经服务端 POST …/prompt：服务端读屏防护后再按“正文 + 回车”两腿送入。这里按请求体模拟服务端的各种结果。
+  // 由本地假服务器转交（WebKit 下 page.route 拦不到这些 fetch）；同一时刻只有一个 fixture 在用。
+  paneAPI = async (kind, pane, body, req, res) => {
+    const json = (status, payload) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(payload)) }
+    if (kind === 'dialog') return json(200, { dialog: screen === 'dialog' ? promptDialog : null })
+    if (kind === 'dialog/answer') { answers.push(body); return json(200, { ok: true }) }
+    prompts.push({ pane, ...body })
+    if (closeOnSend) { req.socket.destroy(); return }
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    if (screen === 'dialog') return json(409, { code: 'pane_dialog', error: '终端正弹着一个选择对话框', dialog: promptDialog })
+    if (screen === 'draft' && !body.force) return json(409, { code: 'pane_draft', error: '电脑上的输入框里有未发送的内容' })
+    if (receiptError && String(body.text).includes('EOF_RECEIPT')) return json(502, { code: 'delivery_unknown', error: '上一次发送结果不确定，请先查看终端再决定是否重发' })
+    if (String(body.text).includes(failText)) return json(502, { code: 'pane_send_failed', error: '发送失败（远端拒绝），内容没有送入终端，请检查后重试' })
+    return json(200, { delivered: 'sent' })
+  }
   await page.routeWebSocket('**/api/hosts/*/ws', (ws) => {
     let streamID = 0
     const emitFrame = (id) => {
@@ -81,7 +107,7 @@ async function fixture(browser, options, { delayMs = 500, failText = 'FORCE_FAIL
   })
   await page.goto(base + '/h/composer-test')
   await expect(page.locator('.xterm-rows').first()).toContainText('Composer terminal')
-  return { context, page, messages, errors }
+  return { context, page, messages, errors, prompts, answers }
 }
 
 async function screenshot(page, name) {
@@ -102,17 +128,14 @@ async function showAuxiliaryKeys(page) {
   await expect(page.getByRole('toolbar', { name: '终端辅助键', exact: true })).toBeVisible()
 }
 
+// 工作台连接上的直接输入 RPC（键栏粘贴）。Composer 提交不走这里。
 function sendCalls(messages) {
   return messages.filter((item) => item.t === 'call' && item.method === 'pane.send_input')
 }
 
-// 提交分两腿：正文一腿不带按键（bracketed paste 由 herdr 决定），回车单独一腿。
-function textLegs(messages) {
-  return sendCalls(messages).filter((item) => Array.isArray(item.params?.keys) && item.params.keys.length === 0)
-}
-
-function enterLegs(messages) {
-  return sendCalls(messages).filter((item) => Array.isArray(item.params?.keys) && item.params.keys.includes('Enter'))
+// Composer 的一次提交 = 一次 POST …/prompt；去掉随机的 client_msg_id 便于比较。
+function promptBodies(f) {
+  return f.prompts.map(({ client_msg_id: _id, ...rest }) => rest)
 }
 
 function inputFrames(messages) {
@@ -133,7 +156,7 @@ try {
       await box.pressSequentially('hello中文🙂', { delay: 20 })
       await f.page.waitForTimeout(80)
       assert.equal(inputFrames(f.messages.slice(beforeType)).length, 0, 'typing leaked terminal input frames')
-      assert.equal(sendCalls(f.messages.slice(beforeType)).length, 0, 'typing sent a submit RPC')
+      assert.equal(sendCalls(f.messages.slice(beforeType)).length + f.prompts.length, 0, 'typing sent a submit')
       await expect(box).toHaveValue('hello中文🙂')
 
       await box.evaluate((el) => {
@@ -144,22 +167,21 @@ try {
       await box.fill('第一行')
       await box.press('Enter')
       await box.type('第二行')
-      assert.equal(sendCalls(f.messages).length, 0, 'Enter or IME submitted early')
+      assert.equal(f.prompts.length, 0, 'Enter or IME submitted early')
       await expect(box).toHaveValue('第一行\n第二行')
 
       const started = Date.now()
       await f.page.getByRole('button', { name: '发送', exact: true }).click()
-      // 第一腿只送正文，且不带任何按键。
-      await expect.poll(() => textLegs(f.messages).length).toBe(1)
-      assert.deepEqual(textLegs(f.messages)[0].params, { pane_id: 'p1', text: '第一行\n第二行', keys: [] })
+      // 一次提交 = 一次请求：整段正文，由服务端读屏后送入并补回车。
+      await expect.poll(() => f.prompts.length).toBe(1)
+      assert.deepEqual(promptBodies(f)[0], { pane: 'p1', text: '第一行\n第二行', submit: true })
+      assert.match(f.prompts[0].client_msg_id, /^[0-9a-f]{32}$/)
       await expect(f.page.getByRole('status')).toContainText('发送中')
       await expect(f.page.getByRole('button', { name: '发送', exact: true })).toBeDisabled()
-      // 正文那一腿成功之后，才补一次单独的回车。
-      await expect.poll(() => enterLegs(f.messages).length).toBe(1)
-      assert.deepEqual(enterLegs(f.messages)[0].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
       await expect(f.page.getByRole('status')).toContainText('已送达', { timeout: 5000 })
       assert.ok(Date.now() - started >= 450, 'send finished before the simulated 500ms round trip')
-      assert.equal(sendCalls(f.messages).length, 2, 'one submit is exactly two legs')
+      assert.equal(f.prompts.length, 1, 'one submit is exactly one request')
+      assert.equal(sendCalls(f.messages).length, 0, 'composer typed through the workbench connection')
 
       await box.fill('切换前再发')
       await f.page.getByRole('button', { name: '发送', exact: true }).click()
@@ -167,10 +189,9 @@ try {
       await f.page.getByRole('button', { name: '切换工作区或终端', exact: true }).click()
       await f.page.locator('.switcher button').filter({ hasText: '终端 2' }).click()
       await box.fill('切换前再发')
-      await expect.poll(() => sendCalls(f.messages).filter((item) => item.params.text === '切换前再发').length).toBe(1)
-      await expect.poll(() => enterLegs(f.messages).length).toBe(2)
-      assert.deepEqual(textLegs(f.messages)[1].params, { pane_id: 'p1', text: '切换前再发', keys: [] })
-      assert.deepEqual(enterLegs(f.messages)[1].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
+      await expect.poll(() => f.prompts.filter((item) => item.text === '切换前再发').length).toBe(1)
+      // 提交钉在点击时的 pane，切换终端不会把它送到别处。
+      assert.deepEqual(promptBodies(f)[1], { pane: 'p1', text: '切换前再发', submit: true })
       await f.page.waitForTimeout(600)
       await expect(f.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('切换前再发')
       await expect(f.page.getByRole('status')).toHaveCount(0)
@@ -184,15 +205,17 @@ try {
       await fail.page.getByRole('button', { name: '发送', exact: true }).click()
       await expect(fail.page.getByRole('status')).toContainText('发送失败')
       await expect(fail.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('keep FORCE_FAIL')
-      assert.equal(sendCalls(fail.messages).length, 1)
+      assert.equal(fail.prompts.length, 1)
       await fail.context.close()
 
       const drop = await fixture(browser, mobile, { closeOnSend: true })
       await drop.page.getByRole('textbox', { name: '本地输入内容' }).fill('do not replay')
       await drop.page.getByRole('button', { name: '发送', exact: true }).click()
-      await expect.poll(() => drop.messages.some((item) => item.t === 'call' && item.method === 'pane.send_input')).toBe(true)
+      await expect.poll(() => drop.prompts.length).toBeGreaterThan(0)
       await drop.page.waitForTimeout(700)
-      assert.equal(sendCalls(drop.messages).length, 1, 'disconnect replayed composer submit')
+      // 浏览器网络栈可能在连接被重置后自动重发同一个 POST；它们必须带同一个 client_msg_id，
+      // 服务端据此只发一次。应用自己不重放。
+      assert.equal(new Set(drop.prompts.map((item) => item.client_msg_id)).size, 1, 'disconnect replayed composer submit')
       await expect(drop.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('do not replay')
       await expect(drop.page.getByRole('status')).toContainText('结果未知')
       await drop.context.close()
@@ -203,9 +226,10 @@ try {
       await expect(hop.page.getByRole('status')).toContainText('发送中')
       await selectMobileHost(hop.page, '另一台主机')
       await selectMobileHost(hop.page, '输入框测试')
-      await expect(hop.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('host hop draft')
-      await expect(hop.page.getByRole('status')).toContainText('结果未知')
-      assert.equal(sendCalls(hop.messages).length, 1, 'returning to the host replayed composer submit')
+      // 发送是独立的 HTTP 请求，不随工作台连接切换而中断：回来时看到它的真实结果。
+      await expect(hop.page.getByRole('status')).toContainText('已送达', { timeout: 5000 })
+      await expect(hop.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('')
+      assert.equal(hop.prompts.length, 1, 'returning to the host replayed composer submit')
       await hop.context.close()
 
       const eof = await fixture(browser, mobile, { receiptError: 'read herdr response: EOF' })
@@ -214,14 +238,45 @@ try {
       await expect(eof.page.getByRole('status')).toContainText('结果未知')
       await expect(eof.page.getByRole('status')).not.toContainText('发送失败')
       await expect(eof.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('EOF_RECEIPT already written')
-      assert.equal(sendCalls(eof.messages).length, 1)
+      assert.equal(eof.prompts.length, 1)
       await selectMobileHost(eof.page, '另一台主机')
       await selectMobileHost(eof.page, '输入框测试')
       await expect(eof.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('EOF_RECEIPT already written')
       await expect(eof.page.getByRole('status')).toContainText('结果未知')
       await expect(eof.page.getByRole('status')).not.toContainText('发送失败')
-      assert.equal(sendCalls(eof.messages).length, 1, 'EOF receipt navigation replayed composer submit')
+      assert.equal(eof.prompts.length, 1, 'EOF receipt navigation replayed composer submit')
       await eof.context.close()
+
+      // 终端弹着对话框：文字不发出去，改为显示答题卡片，点选项走 answer。
+      const dialog = await fixture(browser, mobile, { screen: 'dialog', delayMs: 50 })
+      await dialog.page.getByRole('textbox', { name: '本地输入内容' }).fill('1')
+      await dialog.page.getByRole('button', { name: '发送', exact: true }).click()
+      const card = dialog.page.getByRole('group', { name: 'Do you want to proceed?' })
+      await expect(card).toBeVisible()
+      await expect(dialog.page.locator('.composer-status')).toContainText('未发送')
+      await expect(dialog.page.getByRole('textbox', { name: '本地输入内容' })).toHaveValue('1')
+      const option = card.getByRole('button', { name: 'No, and tell Claude what to do differently' })
+      const optionBox = await option.boundingBox()
+      assert.ok(optionBox && optionBox.height >= 44, `dialog option is not 44px on a phone: ${JSON.stringify(optionBox)}`)
+      await screenshot(dialog.page, `${name}-mobile-390-dialog-card`)
+      await option.click()
+      await expect.poll(() => dialog.answers).toEqual([{ fingerprint: promptDialog.fingerprint, option_index: 2 }])
+      assert.equal(sendCalls(dialog.messages).length, 0)
+      assert.deepEqual(dialog.errors, [])
+      await dialog.context.close()
+
+      // 电脑上有未发送的输入：先用自绘确认框询问，确认后才 force 发送。
+      const draft = await fixture(browser, mobile, { screen: 'draft', delayMs: 50 })
+      await draft.page.getByRole('textbox', { name: '本地输入内容' }).fill('接着说')
+      await draft.page.getByRole('button', { name: '发送', exact: true }).click()
+      const ask = draft.page.getByRole('alertdialog', { name: '电脑上有未发送的输入，仍要发送吗？' })
+      await expect(ask).toBeVisible()
+      await ask.getByRole('button', { name: '仍要发送' }).click()
+      await expect(draft.page.locator('.composer-status')).toContainText('已送达', { timeout: 5000 })
+      assert.deepEqual(draft.prompts.map((item) => item.force), [undefined, true])
+      assert.equal(new Set(draft.prompts.map((item) => item.client_msg_id)).size, 1)
+      assert.deepEqual(draft.errors, [])
+      await draft.context.close()
 
       // 手机键栏的「粘贴」：只把剪贴板整段送进当前终端，绝不隐式回车。
       // 走真实浏览器剪贴板（Chromium 授权 clipboard-read），断言的是 RPC 形状与次数，
@@ -299,7 +354,7 @@ try {
           await view.page.keyboard.type('ls')
           await view.page.getByRole('toolbar', { name: '终端辅助键' }).getByRole('button', { name: 'Tab 键', exact: true }).click()
           await expect.poll(() => inputFrames(view.messages.slice(beforeTap)).map((item) => item.bytes).join('')).toBe('ls\t')
-          assert.equal(sendCalls(view.messages.slice(beforeTap)).length, 0, 'direct typing went through the local submit path')
+          assert.equal(view.prompts.length, 0, 'direct typing went through the local submit path')
           await box.tap()
           await expect(box).toBeFocused()
           await expect(view.page.getByRole('button', { name: '输入方式：本地输入', exact: true })).toBeVisible()
@@ -351,15 +406,14 @@ try {
       await desktop.page.getByRole('button', { name: '本地输入框' }).click()
       await desktop.page.getByRole('textbox', { name: '本地输入内容' }).fill('desktop 整段')
       await desktop.page.getByRole('textbox', { name: '本地输入内容' }).press('Control+Enter')
-      await expect.poll(() => sendCalls(desktop.messages).length).toBe(2)
-      assert.deepEqual(textLegs(desktop.messages)[0].params, { pane_id: 'p1', text: 'desktop 整段', keys: [] })
-      assert.deepEqual(enterLegs(desktop.messages)[0].params, { pane_id: 'p1', text: '', keys: ['Enter'] })
+      await expect.poll(() => desktop.prompts.length).toBe(1)
+      assert.deepEqual(promptBodies(desktop)[0], { pane: 'p1', text: 'desktop 整段', submit: true })
       await screenshot(desktop.page, `${name}-desktop-composer`)
       await desktop.page.getByRole('button', { name: '直接输入终端' }).click()
       await expect.poll(() => desktop.page.evaluate(() => document.activeElement?.classList.contains('xterm-helper-textarea'))).toBe(true)
       assert.deepEqual(desktop.errors, [])
       await desktop.context.close()
-      console.log(`${name}: composer local edit, delayed one-shot send, pane switch, failure, disconnect and layout passed`)
+      console.log(`${name}: composer local edit, delayed one-shot guarded send, pane switch, failure, disconnect, dialog card, draft confirm and layout passed`)
     } finally { await browser.close() }
   }
 } finally { await new Promise((resolve) => server.close(resolve)) }

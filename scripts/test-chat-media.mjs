@@ -4,8 +4,10 @@
 // 网站二进制仅在临时目录启动以读取安全响应头，不连接任何真实主机。
 //
 // 全部是假的后端，任何一步都不碰真实 Herdr 主机 / pane / PTY / 用户会话：
-// - 假工作台 WebSocket（`**/api/hosts/*/ws`）：终端观察流 + `pane.send_input`，与
+// - 假工作台 WebSocket（`**/api/hosts/*/ws`）：终端观察流，与
 //   scripts/test-chat-mode.mjs 同构，但只保留本回归要用的部分。
+// - 假发送 `POST /api/hosts/media-test/panes/{pane}/prompt`：记录每次提交的 pane 与正文
+//   （真实服务端在这里读屏防护，再按“正文 + 回车”两腿送入）。
 // - 假图片上传 `POST /api/hosts/media-test/panes/{pane}/paste-image?inject=<bool>`：
 //   记录 `inject`、文件名与字节数，按模式返回 staged 路径 / 挂起 / 失败。
 // - 假语音中继 `**/api/voice/ws**`：按冻结的 §3.4 帧协议回 `ready`，其余帧由用例
@@ -64,9 +66,21 @@ async function holdUpload() {
 
 const sendJSON = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)) }
 
+// 当前 fixture 的发送替身：POST …/prompt 由本地假服务器转交给它
+// （Service Worker 接管页面后，WebKit 的 page.route 拦不到页面发出的 fetch）。同一时刻只有一个 fixture 在用。
+let promptHandler = null
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const path = url.pathname
+  const prompt = path.match(/^\/api\/hosts\/[^/]+\/panes\/([^/]+)\/prompt$/)
+  if (prompt && promptHandler && req.method === 'POST') {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const payload = await promptHandler(decodeURIComponent(prompt[1]), raw ? JSON.parse(raw) : {})
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(payload))
+    return
+  }
 
   // 图片 stage-only 上传。真实服务端按魔数嗅探；假端点只记录 `inject` 与文件名。
   const upload = path.match(/^\/api\/hosts\/media-test\/panes\/(p\d+)\/paste-image$/)
@@ -131,8 +145,14 @@ async function fixture(browser, options, { mode = 'ok', voiceOn = true, sendDela
   await context.grantPermissions(['microphone', 'clipboard-read', 'clipboard-write'], { origin: base }).catch(() => {})
   const page = await context.newPage()
   page.setDefaultTimeout(10_000)
-  const messages = [], errors = [], relay = { frames: [], audio: 0, audioBytes: [], closed: [], socket: null }
+  const messages = [], errors = [], prompts = [], relay = { frames: [], audio: 0, audioBytes: [], closed: [], socket: null }
   page.on('pageerror', (error) => errors.push(error.message))
+  promptHandler = async (pane, body) => {
+    const { text, submit } = body
+    prompts.push({ pane, text, submit })
+    await new Promise((resolve) => setTimeout(resolve, sendDelayMs))
+    return { delivered: 'sent' }
+  }
 
   // 麦克风证据：计数 getUserMedia 与 MediaStreamTrack.stop，不改动任何应用代码。
   await page.addInitScript(() => {
@@ -172,8 +192,6 @@ async function fixture(browser, options, { mode = 'ok', voiceOn = true, sendDela
         bytes.copy(frame, 20)
         ws.send(JSON.stringify({ t: 'terminal.opened', id: message.id, stream_id: streamID }))
         ws.send(frame)
-      } else if (message.t === 'call' && message.method === 'pane.send_input') {
-        setTimeout(() => ws.send(JSON.stringify({ t: 'result', id: message.id, result: { type: 'ok' } })), sendDelayMs)
       } else if (message.t === 'call') {
         ws.send(JSON.stringify({ t: 'result', id: message.id, result: {} }))
       }
@@ -195,7 +213,7 @@ async function fixture(browser, options, { mode = 'ok', voiceOn = true, sendDela
   })
 
   const api = {
-    context, page, messages, errors, imageLog, voice: relay,
+    context, page, messages, errors, prompts, imageLog, voice: relay,
     async push(frame) { relay.socket?.send(JSON.stringify(frame)) },
     async mic() { return page.evaluate(() => window.__herdrxMic) },
   }
@@ -217,17 +235,14 @@ async function screenshot(page, name) {
 
 const calls = (messages, method) => messages.filter((item) => item.t === 'call' && item.method === method)
 
-// 提交是**两腿**：先整段正文（keys: []），再单独一次回车（text: ''）。两腿之间还有
-// 一段 settle，所以断言按「第几次提交」而非「第几条调用」来数，避免把两次调用错配成一次。
-const settleCalls = (messages) => calls(messages, 'pane.send_input')
-const submitLegs = (messages, index) => settleCalls(messages).slice(index * 2, index * 2 + 2).map((item) => item.params)
-const waitSubmits = async (messages, count) => {
-  await expect.poll(() => settleCalls(messages).length).toBe(count * 2)
-  const legs = submitLegs(messages, count - 1)
-  assert.equal(legs[0].keys.length, 0, '正文腿带了按键，回车会重新落进粘贴框架')
-  assert.equal(legs[1].text, '', '回车腿带了正文，正文会被重发')
-  assert.deepEqual(legs[1].keys, ['Enter'], '第二腿必须是单独的一次回车')
-  return legs
+// 一次提交 = 一次 POST …/prompt（带回车）；工作台连接上不应出现任何直接输入。
+const submitted = (f) => f.prompts.length + calls(f.messages, 'pane.send_input').length
+const waitSubmits = async (f, count) => {
+  await expect.poll(() => f.prompts.length).toBe(count)
+  assert.equal(calls(f.messages, 'pane.send_input').length, 0, '对话输入经工作台连接直接打进了终端')
+  const { pane, text, submit } = f.prompts[count - 1]
+  assert.equal(submit, true, '提交没有带回车')
+  return { pane, text }
 }
 const binaryFrames = (messages) => messages.filter((item) => typeof item.op === 'number')
 const chatRegion = (page, index = 0) => page.getByRole('region', { name: '对话视图' }).nth(index)
@@ -359,7 +374,7 @@ try {
         ], '图片上传没有固定 inject=false 或打到了别的 pane')
         for (const item of imageLog) assert.ok(item.bytes > 0, '图片上传没有带上文件内容')
         // 三条入口都不向终端打字：没有 send_input、没有 send_keys、没有原始输入帧。
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '加图片时向终端发送了输入')
+        assert.equal(submitted(f), 0, '加图片时向终端发送了输入')
         assert.equal(calls(f.messages, 'pane.send_keys').length, 0, '加图片时向终端注入了按键')
         assert.equal(binaryFrames(f.messages.slice(before)).length, 0, '加图片时向终端写了原始输入帧')
         assert.equal(await input(chat).inputValue(), '', '加图片时改动了草稿')
@@ -370,16 +385,13 @@ try {
         await expect(tray(chat).locator('.chat-media-item')).toHaveCount(2)
         await expect(chat.getByText('dropped.png')).toHaveCount(0)
         assert.equal(imageLog.length, 3, '删除占位触发了重新上传')
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '删除占位触发了发送')
+        assert.equal(submitted(f), 0, '删除占位触发了发送')
 
         // 图片 + 文本：Enter 只提交一次，文本与引用合成同一段，附件随后清空。
         await input(chat).fill('看这两张图')
         await input(chat).press('Enter')
-        const sentLegs = await waitSubmits(f.messages, 1)
-        assert.deepEqual(sentLegs, [
-          { pane_id: 'p1', text: '看这两张图\n/remote/staged/picked.png\n/remote/staged/pasted.png', keys: [] },
-          { pane_id: 'p1', text: '', keys: ['Enter'] },
-        ], '文本与图片引用没有合成一次提交')
+        const sentLegs = await waitSubmits(f, 1)
+        assert.deepEqual(sentLegs, { pane: 'p1', text: '看这两张图\n/remote/staged/picked.png\n/remote/staged/pasted.png' }, '文本与图片引用没有合成一次提交')
         await expect(tray(chat)).toHaveCount(0)
         await expect(input(chat)).toHaveValue('')
 
@@ -388,10 +400,7 @@ try {
         await waitStaged(chat, 1)
         await expect(sendButton(chat)).toBeEnabled()
         await sendButton(chat).click()
-        assert.deepEqual(await waitSubmits(f.messages, 2), [
-          { pane_id: 'p1', text: '/remote/staged/only.png', keys: [] },
-          { pane_id: 'p1', text: '', keys: ['Enter'] },
-        ], '仅图片（空正文）没有发送提交文本')
+        assert.deepEqual(await waitSubmits(f, 2), { pane: 'p1', text: '/remote/staged/only.png' }, '仅图片（空正文）没有发送提交文本')
         await expect(tray(chat)).toHaveCount(0)
         await screenshot(f.page, `${name}-media-sent`)
         assert.deepEqual(f.errors, [])
@@ -410,7 +419,7 @@ try {
         await expect(sendButton(chat)).toBeDisabled()
         await input(chat).press('Enter')
         await f.page.waitForTimeout(150)
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '上传中仍然把消息发出去了')
+        assert.equal(submitted(f), 0, '上传中仍然把消息发出去了')
         releaseUpload()
         await waitStaged(chat, 1)
         await expect(sendButton(chat)).toBeEnabled()
@@ -423,19 +432,16 @@ try {
         await pickImage(f.page, chat, 'broken.png')
         await expect(tray(chat).locator('.chat-media-item-failed')).toHaveCount(1)
         await expect(chat.getByRole('alert')).toContainText('图片上传失败')
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '上传失败后仍然发送了消息')
+        assert.equal(submitted(f), 0, '上传失败后仍然发送了消息')
         await input(chat).fill('')
         await expect(sendButton(chat)).toBeDisabled()
         await input(chat).press('Enter')
         await f.page.waitForTimeout(150)
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '空正文 + 上传失败仍然发送了消息')
+        assert.equal(submitted(f), 0, '空正文 + 上传失败仍然发送了消息')
         // 手动补文字后发送：只发文本，失败的图片绝不作为路径混进去，也不会自动重放。
         await input(chat).fill('失败的图不算')
         await input(chat).press('Enter')
-        assert.deepEqual(await waitSubmits(f.messages, 1), [
-          { pane_id: 'p1', text: '失败的图不算', keys: [] },
-          { pane_id: 'p1', text: '', keys: ['Enter'] },
-        ], '失败的图片被当成引用发进了终端')
+        assert.deepEqual(await waitSubmits(f, 1), { pane: 'p1', text: '失败的图不算' }, '失败的图片被当成引用发进了终端')
         assert.equal(imageLog.length, 2, '上传失败后自动重放了上传')
         await expect(tray(chat).locator('.chat-media-item-failed')).toHaveCount(1)
         assert.deepEqual(f.errors, [])
@@ -456,10 +462,7 @@ try {
         await expect(second.getByText('iso.png')).toHaveCount(0)
         await input(second).fill('第二个 pane 的消息')
         await input(second).press('Enter')
-        assert.deepEqual(await waitSubmits(f.messages, 1), [
-          { pane_id: 'p2', text: '第二个 pane 的消息', keys: [] },
-          { pane_id: 'p2', text: '', keys: ['Enter'] },
-        ], '另一个 pane 的图片引用串进了提交文本')
+        assert.deepEqual(await waitSubmits(f, 1), { pane: 'p2', text: '第二个 pane 的消息' }, '另一个 pane 的图片引用串进了提交文本')
         // 第一个 pane 的附件仍然完好，且没有被这次发送清掉。
         await expect(tray(first).locator('.chat-media-item')).toHaveCount(1)
         await expect(tray(first).locator('.chat-media-item-staged')).toHaveCount(1)
@@ -494,7 +497,7 @@ try {
         await f.push({ t: 'assistantText', text: '我是语音助手，不是终端 Agent', final: true })
         await f.page.waitForTimeout(150)
         assert.equal(await input(chat).inputValue(), '帮我看一下这张图', '语音助手的回答被写进了草稿')
-        assert.equal(calls(f.messages, 'pane.send_input').length, 0, '语音识别结果被自动发送了')
+        assert.equal(submitted(f), 0, '语音识别结果被自动发送了')
         assert.equal(calls(f.messages, 'pane.send_keys').length, 0, '语音识别结果被注入成按键')
         await screenshot(f.page, `${name}-voice-listening`)
 
