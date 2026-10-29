@@ -26,14 +26,14 @@
 推荐直接复制网站第一步提供的 **GitHub 一行安装命令**。页面自动填写可用版本，无需替换工作台地址；当前预发布版示例：
 
 ```sh
-curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.2/install-herdrx.sh | sh -s -- --version v0.1.0-rc.2
+curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.3/install-herdrx.sh | sh -s -- --version v0.1.0-rc.3
 ```
 
 页面选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将脚本下载地址与安装版本固定到同一标签。脚本和安装包均直接从 GitHub 获取，安装过程不依赖任何工作台或个人域名。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。
 
 安装脚本需要 curl、tar、coreutils（或 shasum），默认安装到 `~/.local/bin/herdrx`。后续教程直接使用这个路径；若想直接输入 `herdrx`，可自行将 `export PATH="$HOME/.local/bin:$PATH"` 加入 shell 配置。
 
-需要安装其他版本时，将下载地址和 `--version` 的标签同时换成对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 的版本。也可以先下载 `install-herdrx.sh` 再运行 `sh install-herdrx.sh --version v0.1.0-rc.2`。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
+需要安装其他版本时，将下载地址和 `--version` 的标签同时换成对应 [GitHub Release](https://github.com/riba2534/herdrx/releases) 的版本。也可以先下载 `install-herdrx.sh` 再运行 `sh install-herdrx.sh --version v0.1.0-rc.3`。自定义安装位置可追加 `--install-dir DIR`，后续命令使用相应路径。`latest` 只指向正式版，不包括 RC。
 
 手动安装：从同一个 Release 下载适合 CPU 的包和 `SHA256SUMS`，在下载目录执行以下命令。ARM64 将示例中的 `amd64` 改成 `arm64`。
 
@@ -120,8 +120,8 @@ launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 已安装的 CLI 可以直接从 GitHub 检查和安装签名版本：
 
 ```sh
-~/.local/bin/herdrx update --version v0.1.0-rc.2 --check
-~/.local/bin/herdrx update --version v0.1.0-rc.2
+~/.local/bin/herdrx update --version v0.1.0-rc.3 --check
+~/.local/bin/herdrx update --version v0.1.0-rc.3
 ~/.local/bin/herdrx status
 ```
 
@@ -129,7 +129,7 @@ launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 
 重新运行安装器也可替换 CLI：校验后原子安装，旧文件保存为同目录的 `herdrx.previous`，随后需手动执行 `~/.local/bin/herdrx service restart`。此文件备份与签名更新的回退点不同。配置目录 `~/.config/herdrx` 不会被替换；不要在下载临时目录中运行 setup。
 
-v0.1.0-rc.2 之后发布的 CLI 在访问服务启动时，如果默认会话的 Herdr 没有运行，会用 `systemd-run --user --scope` 把它拉起到独立的用户 scope 中；已在运行的 Herdr 不会被接管或重启，herdrx 的升级、重启和卸载都不影响它。命名会话不自动拉起。不需要时执行 `systemctl --user edit herdrx`，加入 `[Service]` 和 `Environment=HERDRX_HERDR_AUTOSTART=0` 两行后重启服务。说明见 [画面视图与远程主机拉起 Herdr](screen-view.md)。
+CLI v0.1.0-rc.3 起，访问服务启动时，如果默认会话的 Herdr 没有运行，会用 `systemd-run --user --scope` 把它拉起到独立的用户 scope 中；已在运行的 Herdr 不会被接管或重启，herdrx 的升级、重启和卸载都不影响它。命名会话不自动拉起。不需要时执行 `systemctl --user edit herdrx`，加入 `[Service]` 和 `Environment=HERDRX_HERDR_AUTOSTART=0` 两行后重启服务。说明见 [画面视图与远程主机拉起 Herdr](screen-view.md)。
 
 `~/.local/bin/herdrx service stop` 暂停访问服务；`~/.local/bin/herdrx service uninstall` 移除该用户服务。二者不停止 Herdr 或结束 pane 内任务，也不删除身份配置。解除已绑定的访问授权使用 `~/.local/bin/herdrx unpair`，会让当前 Tailcat 访问失效，下一次接入需要重新绑定。
 
