@@ -128,8 +128,9 @@ var (
 	footerPattern = regexp.MustCompile(`(?i)\b(?:enter to (?:confirm|select|submit|continue)|esc to (?:cancel|go back|exit|close))\b|↑/?↓ to (?:navigate|select|move)`)
 	// 多选题的勾选框：`[ ] Red`、`[x] Blue`、`☐ Green`。
 	checkboxPattern = regexp.MustCompile(`^(?:\[[ xX✓✔]\]|[☐☑☒◻◼])\s`)
-	// 自由输入类选项：选中后键入的文字进入对话框自己的输入框。
-	freeTextPattern = regexp.MustCompile(`(?i)^(?:type something|other)\b`)
+	// 自由输入类选项（按 Claude 提问框的实际文案列白名单，整行精确匹配）：选中后键入的文字进入
+	// 对话框自己的输入框。不能前缀匹配，否则“Other projects”之类的普通选项也会放行。
+	freeTextPattern = regexp.MustCompile(`(?i)^(?:type something|type something else|other)\s*(?:\.|…|\.\.\.)?$`)
 )
 
 // 对话框往上最多看这么多行找选项与说明文字。
@@ -140,42 +141,125 @@ const (
 
 // ParseDialog 认出画面底部的对话框，认不出返回 nil。
 //
-// 只认确定的形态，选项必须是画面最底部的内容：
-//   - 最后一行非空文字是按键提示页脚（Claude 的选择框、Codex 的审批框），选项紧贴在它上方；
-//   - 或者没有页脚，带光标的编号选项本身就在画面最底部，且上方有对话框顶边（横线、边框、▔▔▔▔），
-//     如 Claude 的权限确认、Rewind。
+// 只认确定的形态，选项必须在画面底部：
+//   - 最后几行里有按键提示页脚（Claude 的选择框、Codex 的审批框；页脚下方可以还有一两行状态，
+//     如 `⏵⏵ accept edits on`），选项紧贴在页脚上方，中间只有空行；
+//   - 或者没有页脚，带光标的编号选项在画面最底部（下方至多两行状态），且上方有对话框顶边
+//     （横线、边框、▔▔▔▔），如 Claude 的权限确认、Rewind。
 //
-// 选项与页脚之间只能有空行。输入框（下面还有横线和状态行）、Shell 提示符、Codex 历史里回显的
-// `› 1. …` 都不在画面最底部，所以不会被当成对话框。宁可漏判。
+// 选项或页脚下方出现横线或提示符（输入框、Shell、Codex 的输入行）时不算：输入框里的草稿、
+// Codex 历史里回显的 `› 1. …`、Shell 输出都不会被当成对话框。认不出时调用方用 LooksLikeDialog
+// 兜底，宁可不发送。
 func ParseDialog(ansi string) *Dialog {
-	plain, _ := splitLines(ansi)
-	if len(plain) == 0 {
+	lines := screenLines(ansi)
+	if footer := footerLine(lines); footer >= 0 {
+		region := trimDialogTail(lines[:footer])
+		if len(region) == 0 {
+			return nil
+		}
+		if numberedRow.MatchString(region[len(region)-1]) || hasNumberedCursor(region) {
+			return parseNumbered(region, false)
+		}
+		return parseUnnumbered(region)
+	}
+	region, ok := belowStatus(lines, 0)
+	if !ok || len(region) == 0 || !hasNumberedCursor(region) {
 		return nil
 	}
-	footer := footerPattern.MatchString(plain[len(plain)-1])
-	if footer {
-		plain = plain[:len(plain)-1]
+	return parseNumbered(region, true)
+}
+
+// LooksLikeDialog：画面底部像是有一个对话框（最后几行里有按键提示页脚，或底部有带光标的编号选项），
+// 不管 ParseDialog 认不认得出。用于发送前兜底：认不出但像对话框时也不打字。
+func LooksLikeDialog(ansi string) bool {
+	lines := screenLines(ansi)
+	if footerLine(lines) >= 0 {
+		return true
 	}
+	region, ok := belowStatus(lines, 4)
+	return ok && hasNumberedCursor(region)
+}
+
+// screenLines 是去掉边框左右竖线、末尾空行与边框底边后的纯文本行。
+func screenLines(ansi string) []string {
+	plain, _ := splitLines(ansi)
 	lines := make([]string, len(plain))
 	for i, line := range plain {
 		lines[i] = unbox(line)
 	}
-	// 页脚与选项之间只允许空行和对话框边框的底边。
+	return trimDialogTail(lines)
+}
+
+// trimDialogTail 去掉末尾的空行和对话框边框的底边 `╰──╯`。
+func trimDialogTail(lines []string) []string {
 	end := len(lines)
-	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[end-1]), "╰") && isBoxEdge(lines[end-1])) {
+	for end > 0 && (strings.TrimSpace(lines[end-1]) == "" || isBoxBottom(lines[end-1])) {
 		end--
 	}
-	lines = lines[:end]
-	if len(lines) == 0 {
-		return nil
+	return lines[:end]
+}
+
+func isBoxBottom(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "╰") && isBoxEdge(line)
+}
+
+// 页脚在最后这么多行非空文字里找；页脚下方的行不能是横线或提示符。
+const footerReach = 4
+
+// footerLine 返回页脚所在行，没有时为 -1。
+func footerLine(lines []string) int {
+	seen := 0
+	for i := len(lines) - 1; i >= 0 && seen < footerReach; i-- {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" || isBoxBottom(line) {
+			continue
+		}
+		if footerPattern.MatchString(line) {
+			return i
+		}
+		if isEdge(line) || promptRow(line) {
+			return -1
+		}
+		seen++
 	}
-	if numberedRow.MatchString(lines[len(lines)-1]) || hasNumberedCursor(lines) {
-		return parseNumbered(lines, !footer)
+	return -1
+}
+
+// belowStatus 去掉底部至多两行状态（再加 extra 行），返回其上方的选项区。状态行不能是横线、
+// 提示符或编号选项本身；遇到横线或提示符说明下面是输入框或 Shell，返回 false。
+func belowStatus(lines []string, extra int) ([]string, bool) {
+	end := len(lines)
+	for skipped := 0; end > 0; {
+		line := lines[end-1]
+		switch {
+		case strings.TrimSpace(line) == "" || isBoxBottom(line):
+		case isEdge(line) || promptRow(line):
+			return nil, false
+		case numberedRow.MatchString(line):
+			return trimDialogTail(lines[:end]), true
+		default:
+			if skipped == 2+extra {
+				return trimDialogTail(lines[:end]), true
+			}
+			skipped++
+		}
+		end--
 	}
-	if !footer {
-		return nil
+	return nil, true
+}
+
+// promptRow：输入框或 Shell 的提示符行（`❯ `、`› `、`> `、`$ `、`! ` 开头且不是编号选项）。
+func promptRow(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || numberedRow.MatchString(line) {
+		return false
 	}
-	return parseUnnumbered(lines)
+	for _, prefix := range []string{"❯", "›", ">", "$", "!", "%"} {
+		if trimmed == prefix || strings.HasPrefix(trimmed, prefix+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 // hasNumberedCursor：选项区（最后一个空段之后）里有带光标的编号行。
@@ -209,6 +293,10 @@ type optionRow struct {
 // requireEdge：没有页脚时，对话框上方必须有顶边。
 func parseNumbered(lines []string, requireEdge bool) *Dialog {
 	start := max(0, len(lines)-maxScanLines)
+	width := 0
+	for _, line := range lines {
+		width = max(width, cells(line))
+	}
 	var rows []optionRow
 	below := len(lines)
 	for i := len(lines) - 1; i >= start; i-- {
@@ -240,7 +328,7 @@ func parseNumbered(lines []string, requireEdge bool) *Dialog {
 		if len(rows) > 0 && index != rows[0].index-1 {
 			break
 		}
-		if !detailsBelong(lines[i+1:below], utf8.RuneCountInString(match[1]+match[2])) {
+		if !detailsBelong(line, lines[i+1:below], utf8.RuneCountInString(match[1]+match[2]), width) {
 			return nil
 		}
 		rows = append([]optionRow{{line: i, index: index, label: strings.TrimSpace(match[4]), selected: match[2] != ""}}, rows...)
@@ -255,12 +343,16 @@ func parseNumbered(lines []string, requireEdge bool) *Dialog {
 	return build(lines, rows, true, requireEdge)
 }
 
-// detailsBelong：这些行都是上方选项的说明（或分隔线），缩进比选项的编号所在列更深。
-func detailsBelong(lines []string, numberColumn int) bool {
+// detailsBelong：option 下方这些行都属于它——说明行（缩进比编号所在列更深）、分隔线，或折行的
+// 续行（缩进可以与编号列对齐，但上一行几乎占满画面宽度）。缩进不够又不像折行时无法确定，返回 false。
+func detailsBelong(option string, lines []string, numberColumn, width int) bool {
+	previous := option
 	for _, line := range lines {
-		if !isEdge(line) && len(line)-len(strings.TrimLeft(line, " ")) <= numberColumn {
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if !isEdge(line) && indent <= numberColumn && cells(previous) < width-12 {
 			return false
 		}
+		previous = line
 	}
 	return true
 }

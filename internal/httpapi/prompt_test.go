@@ -526,3 +526,32 @@ func TestPromptAuditsWithoutContent(t *testing.T) {
 		t.Fatalf("audit=%+v details=%s", entries[0], details)
 	}
 }
+
+// 认不出的对话框兜底：底部有页脚或带光标的编号选项时不打字，force 也一样。
+func TestPromptRefusesScreensThatLookLikeADialog(t *testing.T) {
+	for name, screen := range map[string]string{
+		"footer only":             promptScreen(promptRule, " Some help text", "", " Esc to cancel"),
+		"footerless without edge": promptScreen("● Steps:", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPromptFixture(t, screen)
+			result := f.prompt(t, map[string]any{"text": "y", "submit": true, "client_msg_id": "m1", "force": true}, 409)
+			if dialog, present := result["dialog"]; result["code"] != "pane_dialog" || !present || dialog != nil || result["error"] != "终端底部像是有一个对话框，请在终端里回答后再发送" {
+				t.Fatalf("result=%v", result)
+			}
+			if len(f.endpoint.callsOf("pane.send_input")) != 0 {
+				t.Fatal("text was typed into an unrecognized dialog")
+			}
+		})
+	}
+	// Codex 的历史回显与输入框草稿照常发送。
+	for name, screen := range map[string]string{
+		"codex history":  promptScreen("› 1. fix the parser", "› 2. add tests", "", "• Working (3s)", "", "› ", "", "  ⏎ send   ⌃C quit"),
+		"numbered draft": promptScreen("● Done.", "", promptRule, "❯ \x1b[2m1. first step\x1b[0m", promptRule, "  ? for shortcuts"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newPromptFixture(t, screen)
+			f.prompt(t, map[string]any{"text": "next", "submit": true, "client_msg_id": "m1"}, 200)
+		})
+	}
+}

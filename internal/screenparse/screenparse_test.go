@@ -382,3 +382,86 @@ func TestParseDialogMarksMultiSelectAndFreeText(t *testing.T) {
 		t.Fatal("cursor on a regular option must not be free text")
 	}
 }
+
+// 漏判会让正文里的数字或 y/n 加回车直接确认光标项，这些真实变体都必须认出来。
+func TestParseDialogRecognizesBottomVariants(t *testing.T) {
+	wide := strings.Repeat("─", 60)
+	cases := map[string]struct {
+		screen   string
+		options  int
+		selected int
+	}{
+		"status under footer":                 {askQuestion + "  ⏵⏵ accept edits on (shift+tab to cycle)\r\n", 4, 1},
+		"status under options without footer": {strings.TrimRight(permissionPrompt, "\r\n") + "\r\n  ⏵⏵ accept edits on (shift+tab to cycle)\r\n", 3, 0},
+		"footer inside the box": {screen(
+			"╭──────────────────────────────────────────╮",
+			"│ Do you want to make this edit?           │",
+			"│ ❯ 1. Yes                                 │",
+			"│   2. No                                  │",
+			"│                                          │",
+			"│ Esc to cancel                            │",
+			"╰──────────────────────────────────────────╯",
+		), 2, 0},
+		"top edge scrolled away": {screen(" Do you want to proceed?", " ❯ 1. Yes", "   2. No, and tell Claude what to do differently", "", " Esc to cancel"), 2, 0},
+		"wrapped option at the number column": {screen(
+			wide,
+			" Do you want to proceed?",
+			" ❯ 1. Yes, and don't ask again for rm commands in this project dir",
+			"   /workspace/example",
+			"   2. No",
+			"",
+			" Esc to cancel",
+		), 2, 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dialog := ParseDialog(tc.screen)
+			if dialog == nil || len(dialog.Options) != tc.options || dialog.Selected() != tc.selected {
+				t.Fatalf("dialog=%+v", dialog)
+			}
+			if !LooksLikeDialog(tc.screen) {
+				t.Fatal("LooksLikeDialog must agree")
+			}
+		})
+	}
+}
+
+// 认不出但像对话框：发送前兜底拒绝。历史回显、输入框草稿、Shell 输出不算。
+func TestLooksLikeDialog(t *testing.T) {
+	suspicious := map[string]string{
+		"footerless without edge": screen("● Steps:", " Do you want to proceed?", " ❯ 1. Yes", "   2. No"),
+		"unparsed footer":         screen(rule, " Some help text", "", " Esc to cancel"),
+		"wrapped unnumbered":      screen(rule, " Trust?", " ❯ Yes, I trust this folder and every project below it too", "   and its subfolders", "   No, exit", "", " Enter to confirm · Esc to cancel"),
+	}
+	for name, text := range suspicious {
+		if !LooksLikeDialog(text) {
+			t.Errorf("%s: not flagged", name)
+		}
+	}
+	calm := map[string]string{
+		"codex history echo": screen("› 1. fix the parser", "› 2. add tests", "", "• Working (3s)", "", "› ", "", "  ⏎ send   ⇧⏎ newline   ⌃C quit"),
+		"numbered draft":     inputBox("❯ 1. first step", "  2. second step"),
+		"cat output":         screen("$ cat notes.txt", " Do you want to proceed?", " ❯ 1. Yes", "   2. No", "", " Enter to confirm · Esc to cancel", "$ "),
+		"idle box":           inputBox("❯ "),
+		"plain shell":        screen("$ ls", "a b c", "$ "),
+		"agent list":         screen("● Plan:", "  1. Parse", "  2. Route", "", grey+rule+reset, "❯ ", grey+rule+reset, "  ? for shortcuts"),
+	}
+	for name, text := range calm {
+		if LooksLikeDialog(text) {
+			t.Errorf("%s: flagged", name)
+		}
+	}
+}
+
+// 自由输入项只认整行精确的文案。
+func TestFreeTextIsAnExactLabel(t *testing.T) {
+	question := func(label string) string {
+		return screen(rule, " Which one?", "  1. Alpha", "❯ 2. "+label, "", " Enter to select · Esc to cancel")
+	}
+	for label, want := range map[string]bool{"Type something.": true, "Type something": true, "Other": true, "Other…": true, "Other projects": false, "Type something else entirely": false, "Others": false} {
+		dialog := ParseDialog(question(label))
+		if dialog == nil || dialog.FreeText != want {
+			t.Errorf("%q: dialog=%+v want free text %v", label, dialog, want)
+		}
+	}
+}

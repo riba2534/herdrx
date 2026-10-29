@@ -14,11 +14,18 @@ const sends = new Map<string, ComposerSendState>()
 const inflight = new Set<string>()
 /**
  * 每个 pane 当前这段草稿的 client_msg_id。正文不变时沿用同一个 id：网络断在半路后用户再点
- * 发送（包括刷新页面之后），服务端能认出已送达的那次（返回 duplicate）或如实说明结果不确定，
- * 而不是再打一遍。正文一改就换新 id；服务端明确说“结果不确定”后也换新 id——用户看过终端、
- * 主动再点发送就是一条新消息。与草稿一样按登录会话存进 localStorage，退出登录时一并清掉。
+ * 发送，服务端能认出已送达的那次（返回 duplicate）或如实说明结果不确定，而不是再打一遍。
+ * 正文一改就换新 id；服务端明确说“结果不确定”后也换新 id——用户看过终端、主动再点发送就是
+ * 一条新消息。
+ *
+ * id 平时只在本标签页内存里：同一登录的两个标签页给同一 pane 发相同正文是两条消息。只有结果
+ * 未知时才按登录会话存进 localStorage，供刷新页面后的重试去重；页面只认加载之前写下的记录，
+ * 不会拿到别的标签页刚写的 id。退出登录时一并清掉。
  */
-type MessageID = { id: string; text: string }
+type MessageID = { id: string; text: string; at?: number }
+// 高精度时间：刷新后的页面与刚写下记录的另一个标签页即使在同一毫秒也能分清先后。
+const now = () => performance.timeOrigin + performance.now()
+const pageLoadedAt = now()
 const messageIDs = new Map<string, MessageID>()
 const listeners = new Set<() => void>()
 let listening = false
@@ -187,7 +194,7 @@ function messageStorageKey(sessionID: string, hostID: string, paneID: string) {
 function storedMessageID(sessionID: string, hostID: string, paneID: string): MessageID | undefined {
   try {
     const value = JSON.parse(localStorage.getItem(messageStorageKey(sessionID, hostID, paneID)) || 'null')
-    if (typeof value?.id === 'string' && typeof value?.text === 'string') return value
+    if (typeof value?.id === 'string' && typeof value?.text === 'string' && typeof value?.at === 'number') return value
   } catch {
     // Storage may be unavailable or hold a malformed record; start a new id.
   }
@@ -195,17 +202,35 @@ function storedMessageID(sessionID: string, hostID: string, paneID: string): Mes
 }
 
 function messageIDFor(key: string, sessionID: string, hostID: string, paneID: string, text: string) {
-  const current = messageIDs.get(key) || storedMessageID(sessionID, hostID, paneID)
-  if (current && current.text === text) return current.id
+  let current = messageIDs.get(key)
+  if (!current) {
+    // 刷新前结果未知的那次：只认本页面加载之前写下的记录。
+    const stored = storedMessageID(sessionID, hostID, paneID)
+    if (stored && (stored.at ?? Infinity) < pageLoadedAt) current = stored
+  }
+  if (current && current.text === text) {
+    messageIDs.set(key, current)
+    return current.id
+  }
   const record = { id: newMessageID(), text }
   messageIDs.set(key, record)
-  try { localStorage.setItem(messageStorageKey(sessionID, hostID, paneID), JSON.stringify(record)) } catch { /* in-memory id still lasts this visit */ }
   return record.id
 }
 
+/** 结果未知：把这次的 id 存下来，刷新页面后重试仍用它。 */
+function rememberUncertainID(key: string, sessionID: string, hostID: string, paneID: string) {
+  const record = messageIDs.get(key)
+  if (!record) return
+  try { localStorage.setItem(messageStorageKey(sessionID, hostID, paneID), JSON.stringify({ ...record, at: now() })) } catch { /* in-memory id still lasts this visit */ }
+}
+
+/** 换新 id；存储里的记录只有是自己这次的才删，不动别的标签页写下的。 */
 function forgetMessageID(key: string, sessionID: string, hostID: string, paneID: string) {
+  const mine = messageIDs.get(key)
   messageIDs.delete(key)
-  try { localStorage.removeItem(messageStorageKey(sessionID, hostID, paneID)) } catch { /* ignore */ }
+  if (mine && storedMessageID(sessionID, hostID, paneID)?.id === mine.id) {
+    try { localStorage.removeItem(messageStorageKey(sessionID, hostID, paneID)) } catch { /* ignore */ }
+  }
 }
 
 /**
@@ -264,6 +289,7 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
     } catch (error) {
       if (!(error instanceof APIError)) {
         // 请求可能已到达服务端：结果未知，保留同一个 id 供用户手动重试时去重。
+        rememberUncertainID(key, sessionID, hostID, paneID)
         settle('unknown', '网络中断，没有收到服务端的回应')
         return { kind: 'failed' }
       }
@@ -283,6 +309,7 @@ export async function runComposerPrompt(hostID: string, paneID: string, options:
       } else if (notSent(error)) {
         settle('failed', error.message)
       } else {
+        rememberUncertainID(key, sessionID, hostID, paneID)
         settle('unknown', error.message)
       }
       return { kind: 'failed' }
