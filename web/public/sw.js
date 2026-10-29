@@ -63,30 +63,45 @@ self.addEventListener('fetch', (event) => {
   })())
 })
 
+// Notifications only open a workbench (optionally one pane in it) or the host
+// list. Every other query parameter, fragment and path is dropped.
+// Keep in step with PANE_PARAM_LIMIT in src/lib/workbenchDeepLink.ts (checked by sw.test.ts).
+const PANE_PARAM_LIMIT = 256
 function notificationTarget(value) {
   try {
     const url = new URL(value || '/', self.location.origin)
-    // Notifications only navigate to a workbench or the host list.
-    if (url.origin === self.location.origin && /^\/h\/[^/]+$/.test(url.pathname)) return url.pathname
+    if (url.origin === self.location.origin && /^\/h\/[^/]+$/.test(url.pathname)) {
+      const pane = url.searchParams.get('pane')
+      return pane && pane.length <= PANE_PARAM_LIMIT ? `${url.pathname}?pane=${encodeURIComponent(pane)}` : url.pathname
+    }
   } catch {}
   return '/'
 }
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const target = notificationTarget(event.notification.data?.url)
+  const target = new URL(notificationTarget(event.notification.data?.url), self.location.origin)
+  const pane = target.searchParams.get('pane')
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
-    // Focusing another terminal must not navigate it away from unsaved input.
-    const existing = clients.find((client) => new URL(client.url).pathname === target)
-    if (existing) return existing.focus()
-    return self.clients.openWindow(target)
+    // Focusing another terminal must not navigate it away from unsaved input:
+    // the open workbench is asked to switch panes itself.
+    const existing = clients.find((client) => new URL(client.url).pathname === target.pathname)
+    if (existing) {
+      if (pane) existing.postMessage({ type: 'FOCUS_PANE', pane })
+      return existing.focus()
+    }
+    return self.clients.openWindow(target.pathname + target.search)
   }))
 })
 self.addEventListener('push', (event) => {
   let payload = { title: 'herdrx', body: 'Agent 状态已更新。', tag: 'herdrx', data: { url: '/' } }
   try { payload = { ...payload, ...event.data.json() } } catch {}
-  event.waitUntil(self.registration.showNotification(String(payload.title), {
+  const shown = self.registration.showNotification(String(payload.title), {
     body: String(payload.body), tag: String(payload.tag),
     data: { url: notificationTarget(payload.data?.url) },
-  }))
+  })
+  // An Agent waiting for input marks the app icon; the open app sets the exact count.
+  const badge = payload.data?.status === 'blocked' && typeof self.navigator.setAppBadge === 'function'
+    ? self.navigator.setAppBadge().catch(() => {}) : undefined
+  event.waitUntil(Promise.all([shown, badge]))
 })

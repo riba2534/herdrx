@@ -58,7 +58,7 @@ function clipboardBlocked() {
 
 const HISTORY_READ_LINES = 1000
 
-export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0 }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number }) {
+export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChange, externalControlsTrigger, inputFocusRequest = 0, client, hostID = '', pane, connectionEpoch, active, connected = true, viewMode = 'terminal', onViewModeChange, onPasteImages, sourceCols, sourceRows, layoutVersion, onFocus, onContextMenu, onControlReady, onSurfaceReady, theme, enhancedContrast, display = defaultDisplay, onFontSizeChange, onDisplayChange, headerControls, directInput = true, onDirectInput, optionAsMeta = false, screenReaderMode = false, keyboardInset = 0, transformInput }: { compact?: boolean; externalControlsTrigger?: RefObject<HTMLButtonElement | null>; inputFocusRequest?: number; controlsOpen?: boolean; onControlsOpenChange?: (open: boolean) => void; client: WorkbenchClient; hostID?: string; pane: Pane; connectionEpoch: number; active: boolean; connected?: boolean; viewMode?: PaneViewMode; onViewModeChange?: (mode: PaneViewMode) => void; onPasteImages?: (files: File[]) => void; sourceCols?: number; sourceRows?: number; layoutVersion?: number; onFocus: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; onSurfaceReady?: (handle: PaneSurfaceHandle | null) => void; theme: ITheme; enhancedContrast: boolean; display?: TerminalDisplay; onFontSizeChange?: (size: number) => void; onDisplayChange?: (patch: Partial<TerminalDisplay>) => void; headerControls?: ReactNode; directInput?: boolean; onDirectInput?: () => void; optionAsMeta?: boolean; screenReaderMode?: boolean; keyboardInset?: number; transformInput?: (data: string) => string }) {
   const { confirm, dialog: confirmationDialog } = useConfirm(client)
   const [localControlsOpen, setLocalControlsOpen] = useState(false)
   const toolbarOpen = controlsOpen ?? localControlsOpen
@@ -360,6 +360,9 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (top < viewport.scrollTop) viewport.scrollTop = top
     else if (top + cellHeight > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + cellHeight - viewport.clientHeight
   }
+  // 键栏粘滞修饰键只作用于本地 xterm 键入的下一个键；键栏自己的按键在工作台里换算。
+  const transformInputRef = useRef(transformInput)
+  transformInputRef.current = transformInput
   const requestInputRef = useRef<(data: string) => void>(() => {})
   requestInputRef.current = (data: string) => {
     if (inputBlockedRef.current) return
@@ -692,7 +695,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     writeSessionRef.current = { pending: 0, waiters: [], pumping: false, closed: false }
     fontMeasureRef.current = createFontMeasure(hostRef.current, terminal.options.fontFamily!)
     searchRef.current = search
-    const inputDisposable = terminal.onData((data) => requestInputRef.current(data))
+    const inputDisposable = terminal.onData((data) => requestInputRef.current(transformInputRef.current?.(data) ?? data))
     const host = hostRef.current
     const revealCursor = () => revealCursorRef.current()
     // Scroll gestures use the outer viewport and the public terminal APIs.

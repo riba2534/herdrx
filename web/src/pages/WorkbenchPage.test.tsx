@@ -68,7 +68,7 @@ vi.mock('../lib/api', () => ({
 // 用可观察的替身替代真实 xterm 面板：暴露收到的 viewMode / connected，
 // 并提供和真实工具栏一致的“终端 / 对话”切换入口。
 vi.mock('../components/TerminalPane', () => ({
-  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void }) => <div
+  TerminalPane: (props: { pane: { pane_id: string }; viewMode: string; connected: boolean; active: boolean; directInput?: boolean; sourceCols?: number; sourceRows?: number; onViewModeChange: (mode: string) => void; onFocus: () => void; onDirectInput?: () => void; onContextMenu?: (event: ReactMouseEvent<HTMLElement>) => void; onControlReady?: (send: ((data: string) => void) | null) => void; transformInput?: (data: string) => string }) => <div
     data-testid={`terminal-pane-${props.pane.pane_id}`}
     data-view-mode={props.viewMode}
     data-connected={props.connected ? 'true' : 'false'}
@@ -80,6 +80,8 @@ vi.mock('../components/TerminalPane', () => ({
     <button aria-label={`点 ${props.pane.pane_id} 终端直接输入`} onClick={() => props.onDirectInput?.()}>点终端</button>
     <button aria-label={`聚焦 ${props.pane.pane_id}`} onClick={() => props.onFocus()}>聚焦</button>
     <button aria-label={`${props.pane.pane_id} 接通终端输入`} onClick={() => props.onControlReady?.((data) => { paneInput.push(data) })}>接通</button>
+    {/* 软键盘在 xterm 里键入一个字母：真实组件在 onData 里先过 transformInput 再发送。 */}
+    <button aria-label={`${props.pane.pane_id} 软键盘输入 a`} onClick={() => paneInput.push(props.transformInput ? props.transformInput('a') : 'a')}>a</button>
     <button aria-label={`${props.pane.pane_id} 切到对话视图`} aria-pressed={props.viewMode === 'chat'} onClick={() => props.onViewModeChange('chat')}>对话</button>
     <button aria-label={`${props.pane.pane_id} 切回终端视图`} aria-pressed={props.viewMode === 'terminal'} onClick={() => props.onViewModeChange('terminal')}>终端</button>
   </div>,
@@ -136,6 +138,27 @@ function emitSnapshot(value: Snapshot = snapshot) {
 }
 
 const savedW2 = { host_id: 'host', workspace_id: 'w2', tab_id: 'w2:t1', pane_id: 'w2:p1', device_id: 'phone-1', client_class: 'mobile' as const }
+
+describe('workbench pane deep link', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('opens the pane named by ?pane= over the restored location and clears the parameter', async () => {
+    vi.mocked(api.workbenchSession).mockResolvedValue({ session: savedW2 })
+    window.history.replaceState(null, '', '/h/host?pane=w1%3Ap2')
+    render(<WorkbenchPage hostID="host"/>)
+    await waitFor(() => expect(screen.getByRole('button', { pressed: true, name: '空闲 2' })).toBeInTheDocument())
+    expect(document.querySelector('.workspace-row.sidebar-row-active')?.textContent).toContain('alpha')
+    expect(window.location.pathname + window.location.search).toBe('/h/host')
+    await waitFor(() => expect(api.saveWorkbenchSession).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: 'w1', tab_id: 'w1:t2', pane_id: 'w1:p2' })))
+  })
+
+  it('tells the user when the pane has been closed', async () => {
+    window.history.replaceState(null, '', '/h/host?pane=w9%3Ap9')
+    render(<WorkbenchPage hostID="host"/>)
+    expect(await screen.findByText('该 Agent 所在的 pane 已关闭')).toBeInTheDocument()
+    expect(window.location.search).toBe('')
+  })
+})
 
 describe('workbench session restore', () => {
   it('lands on the last workspace after a PC ↔ phone handoff', async () => {
@@ -716,6 +739,40 @@ describe('mobile auxiliary keybar paste', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Shift 加 Tab 反向切换' }))
     fireEvent.click(within(toolbar).getByRole('button', { name: '中断 Ctrl+C' }))
     expect(paneInput).toEqual(['\x1b[Z', '\x03'])
+  })
+
+  it('applies sticky Ctrl, Alt and Shift to the next key only, then releases them', async () => {
+    readText('unused')
+    await openKeybar()
+    paneInput.length = 0
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 接通终端输入' }))
+    const toolbar = screen.getByRole('toolbar', { name: '终端辅助键' })
+    const ctrl = within(toolbar).getByRole('button', { name: 'Ctrl 修饰键，作用于下一个键' })
+    const alt = within(toolbar).getByRole('button', { name: 'Alt 修饰键，作用于下一个键' })
+    const shift = within(toolbar).getByRole('button', { name: 'Shift 修饰键，作用于下一个键' })
+    expect(ctrl).toHaveAttribute('aria-pressed', 'false')
+    // Alt+← 按词左移：按下即发带修饰的方向键，并自动释放。
+    fireEvent.click(alt)
+    expect(alt).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.pointerDown(within(toolbar).getByRole('button', { name: '方向键左' }))
+    fireEvent.pointerUp(within(toolbar).getByRole('button', { name: '方向键左' }))
+    expect(alt).toHaveAttribute('aria-pressed', 'false')
+    // 再点一次取消，不影响下一个键。
+    fireEvent.click(shift)
+    fireEvent.click(shift)
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Tab 键' }))
+    // Ctrl+Shift+→ 与 Shift+Tab。
+    fireEvent.click(ctrl)
+    fireEvent.click(shift)
+    fireEvent.keyDown(within(toolbar).getByRole('button', { name: '方向键右' }), { key: 'Enter' })
+    fireEvent.click(shift)
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Tab 键' }))
+    // Ctrl 也作用于软键盘键入的下一个字母。
+    fireEvent.click(ctrl)
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘输入 a' }))
+    fireEvent.click(screen.getByRole('button', { name: 'w1:p1 软键盘输入 a' }))
+    expect(paneInput).toEqual(['\x1b[1;3D', '\t', '\x1b[1;6C', '\x1b[Z', '\x01', 'a'])
+    expect(ctrl).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('sends a repeatable key on keyboard activation too, since it has no click handler', async () => {

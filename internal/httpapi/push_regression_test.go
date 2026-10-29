@@ -67,7 +67,7 @@ func TestDisableStopsPushCollectionAndQueuedDelivery(t *testing.T) {
 							_, _ = io.Copy(io.Discard, conn)
 							return
 						}
-						_, _ = io.WriteString(conn, `{"id":"herdrx","result":{"type":"ok","snapshot":{"agents":[{"pane_id":"w1:p1","name":"fixture","agent_status":"done"}]}}}`+"\n")
+						_, _ = io.WriteString(conn, `{"id":"herdrx","result":{"type":"ok","snapshot":{"agents":[{"pane_id":"w1:p1","name":"fixture","agent_status":"blocked"}]}}}`+"\n")
 					}()
 				}
 			}()
