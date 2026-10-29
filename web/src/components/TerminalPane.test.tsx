@@ -1311,7 +1311,10 @@ describe('TerminalPane chat view', () => {
     fireEvent.click(await within(chatRegion).findByRole('button', { name: /aaaa1111/ }))
     expect(await within(chatRegion).findByText('把 header 高度改成 44')).toBeInTheDocument()
     expect(within(chatRegion).getByText('已改成 44 并补了测试。')).toBeInTheDocument()
-    // 工具调用与工具结果以真实工具名 + call id 折叠呈现，且工具结果不会被当成用户问题。
+    // 已完成的一轮把中间过程收成一行；展开后工具调用与结果以真实工具名 + call id 呈现，
+    // 且工具结果不会被当成用户问题。
+    expect(within(chatRegion).queryByText('Edit')).toBeNull()
+    fireEvent.click(within(chatRegion).getByRole('button', { name: '工具 1' }))
     expect(within(chatRegion).getAllByText('Edit')).toHaveLength(2)
     expect(within(chatRegion).getAllByText('call-1')).toHaveLength(2)
     expect(within(chatRegion).getByText('updated')).toBeInTheDocument()

@@ -735,3 +735,51 @@ describe('media and voice wiring', () => {
     expect(submit).not.toHaveBeenCalled()
   })
 })
+
+describe('verified binding and turn folding', () => {
+  const work: ChatRecord[] = [
+    { ...text('u1', 'user', '补测试'), at: '2026-10-01T08:00:00Z' },
+    text('a1', 'assistant', '先看看'),
+    { id: 'a2', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'call-1', name: 'Bash', input: { command: 'ls' } }] },
+    { id: 't1', role: 'tool', blocks: [{ type: 'tool-result', call_id: 'call-1', output: 'a.go', is_error: false }] },
+    { ...text('q1', 'user', '顺便看 README'), queued: true },
+    { ...text('a3', 'assistant', '已补齐'), at: '2026-10-01T08:00:42Z' },
+  ]
+
+  it('opens the Herdr-verified session without a candidate click', async () => {
+    const mock = transcriptServer(sequence(boundPage(work, { binding: 'verified', session: 'cand-1', candidates: candidatesPage.candidates })))
+    render(<ChatView {...props()}/>)
+    expect(await screen.findByText('已确认')).toBeVisible()
+    expect(screen.getByText('已补齐')).toBeVisible()
+    expect(screen.queryByText('选择此终端的会话记录')).toBeNull()
+    await waitFor(() => expect(mock.mock.calls.length).toBeGreaterThan(1), { timeout: 3000 })
+    expect(String(mock.mock.calls[1][0])).toContain('session=cand-1')
+
+    fireEvent.click(screen.getByRole('button', { name: '重新选择会话记录' }))
+    await waitFor(() => expect(String(mock.mock.calls.at(-1)?.[0])).toContain('manual=1'))
+  })
+
+  it('folds the intermediate steps of a finished turn into one expandable line', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage(work)))
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    const fold = await screen.findByRole('button', { name: '工具 1 · 用时 42 秒' })
+    expect(fold).toHaveAttribute('aria-expanded', 'false')
+    const ids = () => Array.from(document.querySelectorAll('.chat-message')).map((node) => node.getAttribute('data-record-id'))
+    expect(ids()).toEqual(['u1', 'q1', 'a3'])
+    expect(screen.getByText('工作中插入')).toBeVisible()
+
+    fireEvent.click(fold)
+    expect(fold).toHaveAttribute('aria-expanded', 'true')
+    expect(ids()).toEqual(['u1', 'a1', 'a2', 't1', 'q1', 'a3'])
+  })
+
+  it('does not fold the latest turn while the agent is still working', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage(work)))
+    render(<ChatView {...props({ pane: { ...basePane, agent_status: 'working' } })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('已补齐')
+    expect(screen.queryByRole('button', { name: /工具 1/ })).toBeNull()
+    expect(document.querySelectorAll('.chat-message')).toHaveLength(6)
+  })
+})

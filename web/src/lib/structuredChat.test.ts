@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APIError, api, currentSessionID, invalidateAuthentication } from './api'
 import {
   applyStructuredChatPage,
+  chatFoldSummary,
   collectToolCalls,
+  foldChatTurn,
+  formatChatDuration,
   fetchStructuredChat,
   formatChatTime,
   groupChatTurns,
@@ -314,7 +317,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-type FetchCall = { session?: string; cursor?: string; before?: string; source?: ChatSource; signal?: AbortSignal }
+type FetchCall = { session?: string; cursor?: string; before?: string; source?: ChatSource; manual?: boolean; signal?: AbortSignal }
 
 function recorder(handler: (call: FetchCall, index: number) => StructuredChatResponse | Promise<StructuredChatResponse>) {
   const calls: FetchCall[] = []
@@ -658,5 +661,124 @@ describe('StructuredChatSession', () => {
     expect(session.getSnapshot().state.status).toBe('error')
     expect(session.getSnapshot().error).toBe('登录状态已失效，请重新登录后查看')
     session.stop()
+  })
+})
+
+describe('verified binding', () => {
+  it('only sends manual=1 without a session', () => {
+    expect(structuredChatPath('host', 'pane', { manual: true })).toBe('/api/hosts/host/panes/pane/transcript?manual=1')
+    expect(structuredChatPath('host', 'pane', { manual: true, session: 's' })).toBe('/api/hosts/host/panes/pane/transcript?session=s')
+  })
+
+  it('keeps queued and the verified session id from the response, nothing else', () => {
+    const normalized = normalizeStructuredChatResponse({
+      supported: true,
+      binding: 'verified',
+      session: 'cand-1',
+      messages: [
+        { id: 'q', role: 'user', queued: true, blocks: [{ type: 'text', text: '插入' }] },
+        { id: 'a', role: 'assistant', queued: true, blocks: [{ type: 'text', text: '答' }] },
+      ],
+    })
+    expect(normalized.session).toBe('cand-1')
+    expect(normalized.messages[0].queued).toBe(true)
+    expect(normalized.messages[1].queued).toBeUndefined()
+    expect(normalizeStructuredChatResponse({ supported: true, binding: 'selected', session: 'x', messages: [] }).session).toBeUndefined()
+  })
+
+  it('binds a verified page without an explicit selection and keeps the binding on continuation pages', () => {
+    const first = applyStructuredChatPage(state(), page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' }))
+    expect(first).toMatchObject({ status: 'ready', session: 'cand-1', binding: 'verified', sessionID: 's1', nextCursor: 'c1' })
+    const next = applyStructuredChatPage(first, page({ binding: 'selected', session_id: 's1', messages: [textRecord('2', 'assistant', '答')] }))
+    expect(next.binding).toBe('verified')
+    expect(next.messages.map((item) => item.id)).toEqual(['1', '2'])
+    // 没有候选 id 的 verified 页无法续读，不认领。
+    expect(applyStructuredChatPage(state(), page({ binding: 'verified', messages: [textRecord('1', 'user', '问')] })).messages).toEqual([])
+  })
+
+  it('polls the verified session, asks for candidates only after reselect, and re-checks evidence on refresh', async () => {
+    vi.useFakeTimers()
+    const { calls, fetchPage } = recorder((call) => call.session
+      ? page({ binding: 'selected', session_id: 's1', messages: [], next_cursor: 'c2' })
+      : call.manual
+        ? page({ candidates: [candidate('cand-1'), candidate('cand-2')] })
+        : page({ binding: 'verified', session: 'cand-1', session_id: 's1', candidates: [candidate('cand-1')], messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 1000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state).toMatchObject({ session: 'cand-1', binding: 'verified' })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(calls.at(-1)).toMatchObject({ session: 'cand-1', cursor: 'c1' })
+    expect(session.getSnapshot().state.binding).toBe('verified')
+
+    session.refresh()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.at(-1)?.session).toBeUndefined()
+    expect(calls.at(-1)?.manual).toBeUndefined()
+    expect(session.getSnapshot().state.binding).toBe('verified')
+
+    session.reselect()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.at(-1)).toMatchObject({ manual: true })
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['cand-1', 'cand-2'])
+    session.select('cand-2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.at(-1)).toMatchObject({ session: 'cand-2' })
+    expect(calls.at(-1)?.manual).toBeUndefined()
+    expect(session.getSnapshot().state.binding).toBe('selected')
+    session.stop()
+  })
+})
+
+describe('turn folding', () => {
+  function at(record: ChatRecord, time: string): ChatRecord {
+    return { ...record, at: time }
+  }
+  const call = (id: string): ChatRecord => ({ id, role: 'assistant', at: '2026-10-01T08:00:20Z', blocks: [{ type: 'tool-call', call_id: id, name: 'Bash', input: {} }] })
+  const result = (id: string): ChatRecord => ({ id: `${id}-r`, role: 'tool', blocks: [{ type: 'tool-result', call_id: id, output: 'ok', is_error: false }] })
+
+  it('keeps a message typed while the agent works inside the running turn', () => {
+    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
+    const turns = groupChatTurns([textRecord('u', 'user', '问'), call('t1'), queued, textRecord('a', 'assistant', '答')])
+    expect(turns).toHaveLength(1)
+    expect(turns[0].responses.map((item) => item.id)).toEqual(['t1', 'q', 'a'])
+    // 没有前一轮时它就是一轮的开头。
+    expect(groupChatTurns([queued])[0].user?.id).toBe('q')
+  })
+
+  it('folds tools and interim text, leaving the final answer, system notes and queued input visible', () => {
+    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
+    const [turn] = groupChatTurns([
+      at(textRecord('u', 'user', '问'), '2026-10-01T08:00:00Z'),
+      textRecord('a1', 'assistant', '先看看'),
+      call('t1'), result('t1'),
+      textRecord('s', 'system', 'API 错误'),
+      queued,
+      call('t2'), result('t2'),
+      at(textRecord('a2', 'assistant', '答'), '2026-10-01T08:01:05Z'),
+      textRecord('s2', 'system', '本轮已被中断'),
+    ])
+    const fold = foldChatTurn(turn)!
+    expect(fold.folded.map((item) => item.id)).toEqual(['a1', 't1', 't1-r', 't2', 't2-r'])
+    expect(fold.visible.map((item) => item.id)).toEqual(['s', 'q', 'a2', 's2'])
+    expect(fold.toolCount).toBe(2)
+    expect(chatFoldSummary(fold)).toBe('工具 2 · 用时 1 分 5 秒')
+  })
+
+  it('does not fold a turn without intermediate steps and omits unknown durations', () => {
+    expect(foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a', 'assistant', '答')])[0])).toBeNull()
+    const fold = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a1', 'assistant', '想'), textRecord('a2', 'assistant', '答')])[0])!
+    expect(chatFoldSummary(fold)).toBe('过程 1 条')
+    // 没有最终正文（例如被中断）时整段过程都折叠。
+    const interrupted = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), call('t1'), textRecord('s', 'system', '中断')])[0])!
+    expect(interrupted.folded.map((item) => item.id)).toEqual(['t1'])
+    expect(interrupted.visible.map((item) => item.id)).toEqual(['s'])
+  })
+
+  it('formats durations', () => {
+    expect(formatChatDuration(4_400)).toBe('4 秒')
+    expect(formatChatDuration(120_000)).toBe('2 分')
+    expect(formatChatDuration(3_725_000)).toBe('1 小时 2 分')
   })
 })

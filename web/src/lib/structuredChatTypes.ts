@@ -107,6 +107,11 @@ export type ChatRecord = {
   /** RFC3339 时间戳；provider 未提供时省略（不写空串，不写 `null`）。 */
   at?: string
   blocks: ChatBlock[]
+  /**
+   * Agent 工作中用户插入、被并入当前轮的消息（Claude 的 queued_command）。只出现在 `user` 记录上，
+   * 缺省即普通输入。
+   */
+  queued?: boolean
 }
 
 /**
@@ -128,10 +133,10 @@ export type ChatSessionCandidate = {
 /** 服务端是否把该会话绑定到 pane。 */
 export const CHAT_BINDINGS = ['selected', 'verified'] as const
 export type ChatBinding = (typeof CHAT_BINDINGS)[number]
-// 'selected' —— 用户在候选列表里显式选择了这条记录。这是本期唯一允许产生的绑定。
-// 'verified' —— 服务端用严格且已验证的 pane/provider 会话证据自动绑定（例如 agent hook
-//              上报了属于该 pane 的 session_id + transcript_path）。**本期不得产生**：
-//              herdrx 目前没有任何这类证据源，凭空返回 'verified' 就是臆造绑定。
+// 'selected' —— 用户在候选列表里显式选择了这条记录。
+// 'verified' —— 请求未带 `session` 时，Herdr 集成为该 pane 上报的 agent_session
+//              （source `herdr:<agent>`）恰好指向候选集合里的一份文件，服务端直接读取它。
+//              没有这条证据（例如未安装 Herdr 的 Agent 集成）时不产生，回退为用户手选。
 
 /**
  * 降级原因，闭集合。`supported` 的真假与 `reason` 的取值必须一一对应，不允许自造字符串。
@@ -186,6 +191,11 @@ export type StructuredChatQuery = {
    * 该参数不改变当前终端运行的程序，也不改变输入的目标：它只决定"读哪一类会话日志"。
    */
   source?: ChatSource
+  /**
+   * `manual=1`：只列候选，即使 Herdr 证据能确认会话也不自动绑定。用户点「重选」后使用，
+   * 否则 verified 绑定会让候选列表无法停留。
+   */
+  manual?: boolean
 }
 
 /**
@@ -200,6 +210,8 @@ export type StructuredChatQuery = {
  *    同时重新返回 `candidates` 让用户重选，`messages: []`，`reset: true`。
  * 4. `supported: true` 且已绑定 → `messages` 为该页记录，`binding: 'selected'`，
  *    附带 `agent` / `session_id` / 游标。文件为空时 `messages: []`，这不是错误。
+ * 5. `supported: true`、无 `session` 且 Herdr 证据命中 → 同 4，但 `binding: 'verified'`，
+ *    另带 `session`（命中的候选 id，之后续读用它）与完整 `candidates`。
  */
 export type StructuredChatResponse = {
   supported: boolean
@@ -237,8 +249,10 @@ export type StructuredChatResponse = {
    * 被省略的 reasoning 记录**不**计入这里。
    */
   skipped?: number
-  /** 绑定来源。本期只允许 `'selected'`。 */
+  /** 绑定来源。 */
   binding?: ChatBinding
+  /** 仅 `binding: 'verified'` 时出现：服务端认领的候选 id，客户端之后作为 `session` 回传。 */
+  session?: string
 }
 
 /** 前端数据层的请求形状（`hostID` / `paneID` 走路径，其余走进程查询串）。 */
@@ -265,7 +279,7 @@ export type StructuredChatState = {
    * 切换它等于换数据源：必须清空 `session` / `sessionID` / 游标 / 候选与已累积记录。
    */
   source?: ChatSource
-  /** 用户显式选中的候选 id；未选择时为 undefined。 */
+  /** 用户显式选中、或服务端 verified 认领的候选 id；未绑定时为 undefined。 */
   session?: string
   sessionID?: string
   binding?: ChatBinding
