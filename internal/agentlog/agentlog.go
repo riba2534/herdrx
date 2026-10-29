@@ -65,6 +65,9 @@ const (
 // 避免各写一份后随版本分叉。
 const InterruptedNotice = "本轮已被中断，Agent 未完成回复。"
 
+// CompactedNotice 是上下文压缩边界对应的状态提示（Claude 的 compact_boundary、Codex 的 compacted）。
+const CompactedNotice = "上下文已压缩"
+
 // Block 是一个对话块。
 //
 // 字段是「按 type 取子集」的：text 用 Text，tool-call 用 CallID/Name/Input，
@@ -126,6 +129,8 @@ type Record struct {
 	Role   string  `json:"role"`
 	At     string  `json:"at,omitempty"`
 	Blocks []Block `json:"blocks"`
+	// Queued 标记 Agent 工作中用户插入、被并入当前轮的消息（目前只有 Claude 的 queued_command）。
+	Queued bool `json:"queued,omitempty"`
 }
 
 // Candidate 是一个可绑定的会话候选。

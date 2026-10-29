@@ -1,0 +1,22 @@
+{"type":"user","uuid":"u-1","timestamp":"2026-10-01T08:00:00.000Z","cwd":"/home/example/proj","message":{"role":"user","content":"<pasted_content id=\"ae9b\">把 example 模块的测试补齐</pasted_content id=\"ae9b\">"}}
+{"type":"assistant","uuid":"a-1","timestamp":"2026-10-01T08:00:02.000Z","cwd":"/home/example/proj","message":{"role":"assistant","content":[{"type":"text","text":"先看一下现有测试。"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-01T08:00:03.000Z","sessionId":"sess-example","content":"顺便看看 README"}
+{"type":"user","uuid":"u-2","timestamp":"2026-10-01T08:00:04.000Z","cwd":"/home/example/proj","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"a.go\nb.go"}]}}
+{"type":"queue-operation","operation":"remove","timestamp":"2026-10-01T08:00:05.000Z","sessionId":"sess-example","content":"顺便看看 README"}
+{"type":"attachment","uuid":"q-1","timestamp":"2026-10-01T08:00:05.000Z","cwd":"/home/example/proj","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"顺便看看 README","origin":{"kind":"human"}}}
+{"type":"attachment","uuid":"q-2","timestamp":"2026-10-01T08:00:06.000Z","cwd":"/home/example/proj","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<cross-session-message from=\"uds:/tmp/example.sock\">另一个会话</cross-session-message>","origin":{"kind":"peer","name":"example-peer"}}}
+{"type":"attachment","uuid":"q-3","timestamp":"2026-10-01T08:00:06.000Z","cwd":"/home/example/proj","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification><summary>done</summary></task-notification>"}}
+{"type":"attachment","uuid":"q-4","timestamp":"2026-10-01T08:00:06.000Z","cwd":"/home/example/proj","attachment":{"type":"total_tokens_reminder"}}
+{"type":"system","subtype":"api_error","uuid":"s-1","timestamp":"2026-10-01T08:00:07.000Z","cwd":"/home/example/proj","error":{"message":"Overloaded"},"retryAttempt":1,"maxRetries":3}
+{"type":"system","subtype":"api_error","uuid":"s-2","timestamp":"2026-10-01T08:00:08.000Z","cwd":"/home/example/proj","error":{"message":"Overloaded"},"retryAttempt":2,"maxRetries":3}
+{"type":"system","subtype":"api_error","uuid":"s-3","timestamp":"2026-10-01T08:00:09.000Z","cwd":"/home/example/proj","error":{"message":"Overloaded"},"retryAttempt":3,"maxRetries":3}
+{"type":"system","subtype":"compact_boundary","uuid":"s-4","timestamp":"2026-10-01T08:00:10.000Z","cwd":"/home/example/proj","content":"Conversation compacted","compactMetadata":{"trigger":"auto"}}
+{"type":"user","uuid":"u-3","timestamp":"2026-10-01T08:00:11.000Z","cwd":"/home/example/proj","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}
+{"type":"system","subtype":"away_summary","uuid":"s-5","timestamp":"2026-10-01T08:00:12.000Z","cwd":"/home/example/proj","content":"正在补齐 example 模块的测试。 (disable recaps in /config)"}
+{"type":"system","subtype":"turn_duration","uuid":"s-6","timestamp":"2026-10-01T08:00:12.000Z","cwd":"/home/example/proj","durationMs":1200}
+{"type":"user","uuid":"u-4","timestamp":"2026-10-01T08:00:13.000Z","cwd":"/home/example/proj","message":{"role":"user","content":"<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>example-model</command-args>"}}
+{"type":"user","uuid":"u-5","timestamp":"2026-10-01T08:00:14.000Z","cwd":"/home/example/proj","message":{"role":"user","content":"<local-command-stdout>Set model to \u001b[1mexample-model\u001b[22m</local-command-stdout>"}}
+{"type":"system","subtype":"local_command","uuid":"s-7","timestamp":"2026-10-01T08:00:15.000Z","cwd":"/home/example/proj","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}
+{"type":"user","uuid":"u-6","timestamp":"2026-10-01T08:00:16.000Z","cwd":"/home/example/proj","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>注入的上下文</system-reminder>\n继续"}]}}
+{"type":"user","uuid":"u-7","timestamp":"2026-10-01T08:00:17.000Z","cwd":"/home/example/proj","message":{"role":"user","content":"[Request interrupted by user]"}}
+{"type":"assistant","uuid":"a-2","timestamp":"2026-10-01T08:00:18.000Z","cwd":"/home/example/proj","message":{"role":"assistant","content":[{"type":"text","text":"测试已补齐。"}]}}
