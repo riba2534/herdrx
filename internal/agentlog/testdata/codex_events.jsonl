@@ -1,0 +1,17 @@
+{"timestamp":"2026-10-01T08:00:00.000Z","type":"session_meta","payload":{"id":"sess-example","cwd":"/home/example/proj","cli_version":"0.0.0"}}
+{"timestamp":"2026-10-01T08:00:01.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>example</permissions instructions>"}]}}
+{"timestamp":"2026-10-01T08:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /home/example/proj\n\n<INSTRUCTIONS>example</INSTRUCTIONS>"}]}}
+{"timestamp":"2026-10-01T08:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/home/example/proj</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-10-01T08:00:02.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-1"}}
+{"timestamp":"2026-10-01T08:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<external_codex_apps_open_page>{}</external_codex_apps_open_page>"},{"type":"input_text","text":"补齐 example 测试"}]}}
+{"timestamp":"2026-10-01T08:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"补齐 example 测试"}}
+{"timestamp":"2026-10-01T08:00:03.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"x"}}
+{"timestamp":"2026-10-01T08:00:03.000Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"先跑一下测试。"}]}}
+{"timestamp":"2026-10-01T08:00:04.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"call-1","name":"exec","input":"go test ./..."}}
+{"timestamp":"2026-10-01T08:00:05.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"ok"}}
+{"timestamp":"2026-10-01T08:00:06.000Z","type":"compacted","payload":{"message":"summary for the model","replacement_history":[]}}
+{"timestamp":"2026-10-01T08:00:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"测试已通过。"}]}}
+{"timestamp":"2026-10-01T08:00:07.000Z","type":"event_msg","payload":{"type":"agent_message","message":"测试已通过。","phase":"final_answer"}}
+{"timestamp":"2026-10-01T08:00:08.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t-1"}}
+{"timestamp":"2026-10-01T08:00:09.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user interrupted the previous turn.\n</turn_aborted>"}]}}
+{"timestamp":"2026-10-01T08:00:09.000Z","type":"event_msg","payload":{"type":"turn_aborted","reason":"interrupted"}}

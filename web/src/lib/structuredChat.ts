@@ -41,7 +41,7 @@ const TRANSCRIPT_PATH_SUFFIX = '/transcript'
 /**
  * 请求路径：hostID / paneID 只出现在路径里，不透明值与显式读取源只出现在查询串里。
  *
- * 查询串里**只有** `session` / `cursor` / `before` / `source` 四个键：客户端绝不发送
+ * 查询串里**只有** `session` / `cursor` / `before` / `source` / `manual` 五个键：客户端绝不发送
  * `agent=`、`cwd=` 或任何路径，也不发闭集合之外的 source 值。
  */
 export function structuredChatPath(hostID: string, paneID: string, query: StructuredChatQuery = {}) {
@@ -50,6 +50,7 @@ export function structuredChatPath(hostID: string, paneID: string, query: Struct
   if (query.cursor) params.set('cursor', query.cursor)
   if (query.before) params.set('before', query.before)
   if (query.source && (CHAT_SOURCES as readonly string[]).includes(query.source)) params.set('source', query.source)
+  if (query.manual && !query.session) params.set('manual', '1')
   const search = params.toString()
   return `/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}${TRANSCRIPT_PATH_SUFFIX}${search ? `?${search}` : ''}`
 }
@@ -123,7 +124,9 @@ export function normalizeStructuredChatResponse(value: unknown): StructuredChatR
       if (!Array.isArray(item.blocks)) continue
       const blocks = item.blocks.map(normalizeBlock).filter((block): block is ChatBlock => block !== null)
       const at = optionalText(item.at)
-      messages.push(at ? { id: item.id, role: item.role, at, blocks } : { id: item.id, role: item.role, blocks })
+      const message: ChatRecord = at ? { id: item.id, role: item.role, at, blocks } : { id: item.id, role: item.role, blocks }
+      if (item.role === 'user' && item.queued === true) message.queued = true
+      messages.push(message)
     }
   }
   const candidates: ChatSessionCandidate[] = []
@@ -153,6 +156,7 @@ export function normalizeStructuredChatResponse(value: unknown): StructuredChatR
     has_more: optionalBoolean(raw.has_more),
     skipped: optionalNumber(raw.skipped),
     binding: raw.binding === 'selected' || raw.binding === 'verified' ? (raw.binding as ChatBinding) : undefined,
+    session: raw.binding === 'verified' ? optionalText(raw.session) : undefined,
   }
 }
 
@@ -258,8 +262,11 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
       skipped: 0,
     }
   }
-  // 只有用户显式选择过候选（`state.session`）才允许渲染消息：服务端即便误发记录也不认领。
-  const bound = state.session !== undefined
+  // 只有用户显式选择过候选（`state.session`），或服务端用 Herdr 证据 verified 认领并给出候选 id，
+  // 才允许渲染消息：服务端即便误发记录也不认领。
+  // `page.session` 只在 verified 页上出现（见 normalize）。
+  const session = state.session ?? page.session
+  const bound = session !== undefined
   const carried = bound && !page.reset ? state.messages : []
   let messages: ChatRecord[] = carried
   if (!bound) {
@@ -281,9 +288,10 @@ function mergePage(state: StructuredChatState, page: StructuredChatResponse, dir
     reason: page.reason,
     agent: page.agent || state.agent,
     source: state.source,
-    session: state.session,
+    session,
     sessionID: page.session_id || (bound ? state.sessionID : undefined),
-    binding: bound ? page.binding || state.binding || 'selected' : undefined,
+    // 绑定来源在同一次绑定内不变：verified 之后的续读页由服务端标成 selected，但那只是续读。
+    binding: bound ? state.binding || page.binding || 'selected' : undefined,
     messages,
     nextCursor: page.next_cursor ?? (page.reset ? undefined : state.nextCursor),
     // 反向请求（加载更早）的响应是**权威**的：服务端不再给 previous_cursor 就表示已经读到
@@ -312,11 +320,14 @@ export function prependStructuredChatPage(state: StructuredChatState, page: Stru
   return mergePage(state, page, 'earlier')
 }
 
-/** 轮次分组：连续的 assistant / tool / system 记录归到前一条 user 之下。 */
+/**
+ * 轮次分组：连续的 assistant / tool / system 记录归到前一条 user 之下。
+ * Agent 工作中插入的消息（`queued`）已被并入正在进行的那一轮，留在该轮里，不另起一轮。
+ */
 export function groupChatTurns(messages: readonly ChatRecord[]): ChatTurn[] {
   const turns: ChatTurn[] = []
   for (const item of messages) {
-    if (item.role === 'user') {
+    if (item.role === 'user' && !(item.queued && turns.length)) {
       turns.push({ key: item.id, user: item, responses: [] })
       continue
     }
@@ -325,6 +336,60 @@ export function groupChatTurns(messages: readonly ChatRecord[]): ChatTurn[] {
     else turns.push({ key: item.id, responses: [item] })
   }
   return turns
+}
+
+/** 一轮回复的折叠视图：中间过程收成一行，只露出最后一条助手正文。 */
+export type ChatTurnFold = {
+  /** 被折叠的中间过程（工具调用 / 结果、非最终的助手文本）。 */
+  folded: ChatRecord[]
+  /** 折叠时仍然直接显示的记录，按原顺序：系统提示、工作中插入的消息、最终助手正文及其后的记录。 */
+  visible: ChatRecord[]
+  toolCount: number
+  /** 从提问到最后一条过程记录的用时（毫秒）；时间戳缺失时为 undefined。 */
+  durationMs?: number
+}
+
+function hasText(item: ChatRecord) {
+  return item.blocks.some((block) => block.type === 'text' && block.text.trim() !== '')
+}
+
+/**
+ * 折叠一轮回复。最终正文是该轮最后一条带文本的助手记录；它之前的 assistant / tool 记录
+ * 是中间过程。系统提示与插入的用户消息不折叠。没有可折叠的过程时返回 null，调用方原样渲染。
+ * 正在进行的那一轮由调用方决定不折叠：此时"最后一条正文"还不是最终回答。
+ */
+export function foldChatTurn(turn: ChatTurn): ChatTurnFold | null {
+  let final = -1
+  turn.responses.forEach((item, index) => { if (item.role === 'assistant' && hasText(item)) final = index })
+  const end = final < 0 ? turn.responses.length : final
+  const folded: ChatRecord[] = []
+  const visible: ChatRecord[] = []
+  turn.responses.forEach((item, index) => {
+    if (index < end && (item.role === 'assistant' || item.role === 'tool')) folded.push(item)
+    else visible.push(item)
+  })
+  if (!folded.length) return null
+  const toolCount = folded.reduce((count, item) => count + item.blocks.filter((block) => block.type === 'tool-call').length, 0)
+  const start = Date.parse(turn.user?.at || folded[0].at || '')
+  const last = Date.parse((final >= 0 ? turn.responses[final].at : folded[folded.length - 1].at) || '')
+  const durationMs = Number.isNaN(start) || Number.isNaN(last) || last < start ? undefined : last - start
+  return { folded, visible, toolCount, durationMs }
+}
+
+/** 用时文案：秒级精度，超过一分钟带分钟，超过一小时带小时。 */
+export function formatChatDuration(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return seconds % 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${minutes} 分`
+  return minutes % 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分` : `${Math.floor(minutes / 60)} 小时`
+}
+
+/** 折叠行的摘要：「工具 N · 用时 X」；没有工具调用时说过程条数。 */
+export function chatFoldSummary(fold: ChatTurnFold) {
+  const parts = [fold.toolCount ? `工具 ${fold.toolCount}` : `过程 ${fold.folded.length} 条`]
+  if (fold.durationMs !== undefined) parts.push(`用时 ${formatChatDuration(fold.durationMs)}`)
+  return parts.join(' · ')
 }
 
 /** 收集会话里所有 tool-call，供只带结果的 tool 记录回填真实工具名与入参。 */
@@ -450,7 +515,7 @@ export type StructuredChatSessionOptions = {
 /**
  * 会话状态机。职责边界：
  *
- * - **不自动认领候选**：没有显式 `select()` 之前永不发带 `session` 的请求；
+ * - **不自动认领候选**：没有显式 `select()`、也没有服务端 verified 认领（Herdr 证据）之前永不发带 `session` 的请求；
  * - 一次只跑一个请求（不重叠轮询），`cursor` 递增，不重读全量；
  * - 每个异步结果都绑定「host + pane + 登录身份 + 会话代次」，迟到的旧响应直接丢弃；
  * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session；
@@ -464,6 +529,8 @@ export class StructuredChatSession {
   private readonly maxCatchUpPages: number
   /** 显式读取源：会话内单一真值来源，`publish` 每次都把它写回状态。 */
   private source: ChatSource | undefined
+  /** 用户点过「重选」：之后只列候选，不让 Herdr 证据把候选列表又自动绑定回去。 */
+  private manual = false
   private generation = 0
   private running = false
   private active = true
@@ -526,6 +593,7 @@ export class StructuredChatSession {
   setReadSource(source: ChatSource | undefined) {
     if (this.source === source) return
     this.source = source
+    this.manual = false
     rememberPaneReadSource(this.options.hostID, this.options.paneID, source)
     if (!this.running) return
     this.invalidate()
@@ -569,18 +637,31 @@ export class StructuredChatSession {
     void this.load({ session: candidateID })
   }
 
-  /** 放弃当前选择，回到候选列表。 */
+  /** 放弃当前选择，回到候选列表；本会话之后不再按 Herdr 证据自动绑定。 */
   reselect() {
     if (this.snapshotValue.state.session === undefined) return
+    this.manual = true
+    this.restartUnbound()
+  }
+
+  /** 作废在途请求、清空记录，重新不带 `session` 请求（列候选或重新按 Herdr 证据认领）。 */
+  private restartUnbound() {
     this.invalidate()
     this.publish({ ...EMPTY_STRUCTURED_CHAT_STATE, status: 'loading' })
     void this.load({})
   }
 
-  /** 用户手动重试 / 刷新：丢掉在途请求，按当前选择重新取尾部窗口。 */
+  /**
+   * 用户手动重试 / 刷新：丢掉在途请求，按当前选择重新取尾部窗口。
+   * verified 绑定不沿用旧候选，而是重新按 Herdr 证据认领：Agent 换了会话（如 /clear）后能跟上。
+   */
   refresh() {
     if (!this.running) return
-    const { session } = this.snapshotValue.state
+    const { session, binding } = this.snapshotValue.state
+    if (binding === 'verified') {
+      this.restartUnbound()
+      return
+    }
     this.invalidate()
     void this.load(session ? { session } : {})
   }
@@ -650,7 +731,7 @@ export class StructuredChatSession {
           paneID,
           // 显式读取源只在用户选过时出现；请求里永远没有 `agent` / `cwd` / 路径。
           ...(this.source ? { source: this.source } : {}),
-          ...(query.session ? { session: query.session } : {}),
+          ...(query.session ? { session: query.session } : this.manual ? { manual: true } : {}),
           ...(query.before ? { before: query.before } : {}),
           ...(cursor ? { cursor } : {}),
           signal: controller.signal,

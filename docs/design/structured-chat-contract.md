@@ -1,6 +1,6 @@
 # 结构化对话记录契约（structured chat contract）
 
-日期：2026-09-13。状态：结构化 Chat 契约；DSH 扩展按本文与两端类型共同更新，实际验收以对应测试结果为准。
+日期：2026-09-13（2026-10-29 增补 verified 绑定、Claude/Codex 事件与轮次折叠）。状态：结构化 Chat 契约；DSH 扩展按本文与两端类型共同更新，实际验收以对应测试结果为准。
 
 本契约定义 Chat 视图真正需要的**带 role 的逐轮问答数据层**：数据来自 Agent 自己写的
 append-only 会话日志，经 owner 认证的 HTTP 端点按游标增量读取，前端按 role 分列渲染。
@@ -34,12 +34,13 @@ Chat 视图（`web/src/components/ChatView.tsx`）按本契约读取结构化记
 
 ```
 GET /api/hosts/{hostID}/panes/{paneID}/transcript
-      ?session=<opaqueCandidateId>&cursor=<opaqueCursor>&before=<opaqueBefore>
+      ?session=<opaqueCandidateId>&cursor=<opaqueCursor>&before=<opaqueBefore>&manual=1
 ```
 
 - 挂在 `internal/httpapi/hosts.go` 的 `hostRoutes` 内、`authenticate` 之后，沿用 `ownedHost`
   owner 校验；非 owner 一律 404。
 - 客户端传 `hostID` / `paneID` / 三个不透明参数，可另显式选择 `source=dsh`；**绝不接受**客户端 agent、cwd 或路径作为事实。
+- `manual` 只接受空值或单个 `1`（否则 400 `invalid_manual`）：只列候选，不按 Herdr 证据自动绑定（§3.2），供用户点「重选」后使用。
 - `source` 只接受空值或单个 `dsh`。默认读取源来自服务端 `pane.agent`；只有程序未识别、未支持或本来就是 DSH 时允许显式选择 DSH，不能覆盖已识别的 Claude/Codex。非法/重复/冲突 source 返回 400 `invalid_source`。
 - 读取源选择不证明当前终端程序身份，不改变输入目标，也不自动选定某个会话。所有请求仍重新检查 owner、pane 与 snapshot cwd。
 - 真实 `pane.agent` 与 cwd 由服务端调 `endpoint.Snapshot(ctx)` 现取（`Pane.Agent` /
@@ -55,7 +56,7 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 
 ### 3.1 无 `session` 时只列候选
 
-无 `session` 参数时，服务端返回 `candidates`，`messages: []`。候选集合已被
+无 `session` 参数且没有命中的 Herdr 证据（§3.2.1）时，服务端返回 `candidates`，`messages: []`。候选集合已被
 **当前 pane 的默认或用户显式选定的读取源**与**精确 cwd**两个条件限定，每个候选只含
 `{id, agent, session_id, updated_at}`：
 
@@ -63,18 +64,48 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 - **不返回任何用户 prompt 预览**；
 - 候选列表本身不构成对会话内容的读取。
 
-### 3.2 禁止自动绑定（纠正）
+### 3.2 只按 Herdr 证据自动绑定（纠正）
 
-**禁止"取 cwd 对应目录下 mtime 最新的文件"作为自动绑定。** 即使候选集合里只剩一个文件，
-服务端也**不得**自动认领：`messages` 保持 `[]`，由用户在列表里显式选择。
+**禁止"取 cwd 对应目录下 mtime 最新的文件"作为自动绑定。** 没有 §3.2.1 的证据时，即使候选
+集合里只剩一个文件，服务端也**不得**自动认领：`messages` 保持 `[]`，由用户在列表里显式选择。
 
 - 用户操作文案固定为 **"选择此终端的会话记录"**。不要写成"已自动识别""检测到会话"这类
   暗示服务端已经确定归属的措辞。
 - 选择不是任意路径权限：`session` 只是一个不透明 id，服务端把它解析回自己已经认定过的
   那一个文件；客户端无法用它指向别处。
-- 自动绑定 `binding: 'verified'` 在契约中预留，**本期不得产生**。它要求严格且已验证的
-  pane/provider 会话证据（例如 agent hook 上报属于该 pane 的 session_id + transcript_path）。
-  herdrx 目前没有这类证据源，凭空返回 `verified` 就是臆造绑定。
+
+#### 3.2.1 `binding: 'verified'`
+
+证据来源是 Herdr 自己的 Agent 集成：集成 hook 通过 `pane.report_agent_session` 上报该 pane
+正在写的 provider 会话，Herdr 在 snapshot 的 pane（及 agents[]）里以
+`agent_session {source, agent, kind: id|path, value}` 给出。服务端从**同一次** `endpoint.Snapshot`
+取它（pane 自带的优先，其次 agents[] 里同一 pane 的），从不接受客户端传入。
+
+请求**没有** `session`、也没有 `manual=1` 时，服务端先照常列候选（reader 白名单 + 精确 cwd），
+再看证据是否指向其中一份文件：
+
+- `source` 必须是 `herdr:<reader>` 且 `agent` 等于 reader；第三方 source（如 `custom:claude`）、
+  其它 Agent 的 source 一律不认。
+- `kind: id`：`value` 与候选的 provider 会话 id 精确相等。
+- `kind: path`：`value` 必须是规范的绝对路径（`Clean` 后不变），且恰好以「固定日志根 +
+  候选相对路径」结尾（如 `…/.claude/projects/<编码目录>/<id>.jsonl`）。远端 `$HOME` 不在工作台侧，
+  前缀无法独立核对；但路径**从不被打开**，读取的始终是候选集合里那一份文件。
+- 命中：直接读取该候选，返回 `binding: 'verified'`，另带 `session`（该候选的不透明 id，之后续读
+  用它）和完整 `candidates`（供「重选」）。未命中、证据缺失、或文件在列候选与读取之间消失：
+  保持「只列候选」。
+
+边界：
+
+- 证据只用于**挑选**候选，候选资格（cwd 精确相等、文件名与深度规则）不因证据放宽；证据指向候选
+  集合之外的会话（另一个 cwd、另一个根）一律不算命中。
+- 未安装 Herdr 的 Agent 集成、或集成未上报（Herdr 当前只为 claude/codex 等记录 `kind: id`）时
+  没有证据，回退手选。
+- 用户显式选择的 `session` 永远是 `selected`，即使证据恰好指向同一份文件；带 `session` 的续读页
+  同样标 `selected`，客户端在同一次绑定内保留首页的 `verified`。
+- 用户点「重选」后客户端带 `manual=1`，否则证据会把候选列表立即绑定回去。手动刷新一个 verified
+  绑定时客户端不带 `session` 重新请求，Agent 换了会话（如 `/clear`）后能跟到新会话；后台轮询
+  只按游标续读，不重新核对证据。
+- 浏览器拿到的 snapshot 不含 `agent_session`（它可能带远端绝对路径），只在服务端使用。
 
 ### 3.3 目录名编码不能证明 cwd 归属（纠正）
 
@@ -86,7 +117,7 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
   **只能用于缩小搜索范围**，绝不能作为 cwd 归属的证明；
 - 归属判定必须落到记录内容：读文件头若干行，要求其中至少一条记录的真实 cwd 字段
   （Claude 的 `record.cwd`、Codex 的 `session_meta` cwd）与 pane cwd **精确相等**；
-- 即便如此，这也只是"候选资格"，不是自动绑定——仍须用户在列表里显式选择（§3.2）。
+- 即便如此，这也只是"候选资格"，不是自动绑定——没有 Herdr 证据时仍须用户显式选择（§3.2）。
 
 ---
 
@@ -98,6 +129,7 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
 | supported，无 `session` | `supported:true` + `candidates` + `messages:[]`；候选为空时 `reason:'no_session_candidates'` |
 | supported，`session` 失效 | `supported:true` + `reason:'session_unavailable'` + 重新给出的 `candidates` + `messages:[]` + `reset:true` |
 | supported，已绑定 | `supported:true` + `messages` + `agent` + `session_id` + `binding:'selected'` + 游标 |
+| supported，无 `session`，Herdr 证据命中 | 同上，但 `binding:'verified'`，另带 `session`（候选 id）与 `candidates` |
 
 `reason` 取值是闭集合，见类型文件 `CHAT_REASONS`。文件为空时 `messages: []` 且无 `reason`——
 那是正常的空会话，不是降级。
@@ -116,6 +148,26 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
   `tool`。因此**工具结果永远不会被当成用户问题**渲染到右侧；只要该 user 记录里还夹着任何非
   tool-result 块，它就仍然是 `user`。
 - 不输出图片引用、编辑补丁、token 用量、请求 id、原始 provider 帧等 provider 内部字段。
+- 记录可带可选的 `queued: true`：Agent 工作中用户插入、被并入当前轮的消息（只出现在 `user` 上）。
+
+### 5.1 Claude 事件
+
+除 user / assistant 行外，下列形状也会产出记录（样本见 `internal/agentlog/testdata/claude_events.jsonl`）：
+
+| 源记录 | 输出 |
+|---|---|
+| `attachment{type:queued_command, commandMode:prompt}`，origin 缺省或 `kind:human` | `user` + `queued:true`。其它会话发来的消息（`origin.kind:peer`）、`task-notification` 不是用户输入，省略 |
+| `queue-operation`（enqueue / dequeue / remove） | 不产出。排队中的消息不显示：分页读取下无法回收已发布的「排队中」记录；消息被吸收时以 `queued_command` 出现，出队后以普通 user 记录出现 |
+| `<pasted_content id=…>` 包装 | 去掉包装，保留用户粘贴的正文 |
+| `<command-name>` / `<command-message>` / `<command-args>` | `user`，正文为 `/命令 参数`；新版写成 `system{subtype:local_command}` 的同样处理 |
+| `<local-command-stdout>` / `<local-command-stderr>` | `system`，去掉 ANSI 转义 |
+| `<task-notification>` 用户行 | `system`「后台任务：<summary>」 |
+| `<system-reminder>` / `<local-command-caveat>` | 从用户文本里删除 |
+| `[Request interrupted by user]` 文本 | `system` 中断提示 |
+| `system{subtype:compact_boundary}` | `system`「上下文已压缩」 |
+| `system{subtype:api_error}` | 只保留第一次（`retryAttempt:1`，标「正在重试」）和最终放弃的一次（`retryAttempt ≥ maxRetries`） |
+| `system{subtype:away_summary}` | `system`「离开期间回顾：…」 |
+| 其它 system / attachment（turn_duration、stop_hook_summary、reminder 类） | 运行时元数据，不产出、不计 skipped |
 
 ### 5.2 记录 id 与去重（纠正）
 
@@ -153,6 +205,12 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
   该文件完全没有 `response_item` 帧时才走 `event_msg`。
 - 身份头部不足以判定规范路径。若尚未看到 `response_item`，继续有界扫描：总量最多 8 MiB，单行最多 1 MiB；只有扫描到文件末尾才能采用 `event_msg`。超预算返回 `read_limit_exceeded`。追加首个 `response_item` 导致规范路径切换时重置旧视图，避免同一轮双记。
 - `event_msg` 的生命周期信号（`turn_aborted` → `system` 记录）在任何情况下都保留。
+- 顶层 `compacted` 检查点 → `system`「上下文已压缩」。
+- `developer` / `system` 角色的 message 是给模型的指令，省略且不计 skipped。user 角色里注入的
+  模型上下文（`<skill>`、`# AGENTS.md instructions`、`<environment_context>`、`<user_instructions>`、
+  `<external_codex_apps_…>`、`<turn_aborted>`）逐块删除；整条都是注入时省略。
+- assistant message 的 `phase`（`commentary` / `final_answer`）不下发；commentary 作为普通助手文本，
+  在前端随轮次折叠（§9.1）。
 - 旧式「未包裹的 `response_item`」形态必须与包裹形态一并处理；只处理一种会在部分 Codex
   版本上得到空会话。
 
@@ -256,6 +314,14 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 
 ---
 
+### 9.1 轮次折叠
+
+`groupChatTurns` 以 user 记录分轮；`queued` 的 user 记录留在正在进行的那一轮里，不另起一轮。
+已完成的一轮里，最后一条带文本的 assistant 记录是最终回答，它之前的 assistant / tool 记录折叠成
+一行「工具 N · 用时 X」（没有工具调用时为「过程 N 条」），点开按原顺序显示全部记录；system 记录、
+插入的用户消息与最终回答始终可见。用时取提问到最终回答的时间戳差，缺时间戳时省略。
+pane 处于 working / blocked 时最新一轮不折叠。打开会话仍然滚到底部。
+
 ## 10. 并行实现的文件归属（互斥）
 
 | 归属 | 文件 |
@@ -289,7 +355,13 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    node 下执行的参考实现，端到端只用合成产物。压缩产物超过 8 MiB 时返回
    `read_limit_exceeded`（长会话在首版不可读）；只有旧代际（如 v2）产物时按
    `unrecognized_format` 报告，不按版本名区分。
-7. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
+7. **Herdr `agent_session` 证据未与真实集成端到端验证**——字段形状取自 Herdr v0.9.1 源码
+   （`src/api/schema/panes.rs`、`src/agent_resume.rs`），测试只用合成 snapshot；`kind: path` 的
+   命中规则按任务约定实现，Herdr 当前不为 claude/codex 记录 path。
+8. **Claude 事件形状**（queued_command、api_error 的 retryAttempt/maxRetries、away_summary、
+   local_command）只对照过字段名，fixture 是合成的；Codex 顶层 `compacted` 与注入前缀表同样未经
+   多版本样本验证。
+9. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
    一律拒绝；"未 seeded 的 header 却带继承标记"只有读完所有帧才能发现，与有界读取预算冲突，
    **未强制**。不得声称该不变式已完整验证。
 
@@ -304,7 +376,7 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    cwd 不匹配不算候选、编码碰撞（`/a-b` vs `/a/b`）被拒、符号链接被拒、单次上限、
    半行不消费且下次续读、`skipped` 计数、Codex 两种记录形状各一份。
 2. **端点**：非 owner 404；未知 agent 返回 `supported:false`；第二次带 `cursor` 只返回增量；
-   `reset` 分支；审计条目落库；**无 `session` 时不返回任何消息**。
+   `reset` 分支；审计条目落库；**无 `session` 且无 Herdr 证据命中时不返回任何消息**。
 3. **前端**：`user` 在右、`assistant` 在左、工具卡片可折叠且显示真实工具名、
    同源重复 prompt 渲染成两条、同 uuid 重发只更新不重复、`reset` 清空重建、
    `ChatView` **从不调用 `pane.read`**。

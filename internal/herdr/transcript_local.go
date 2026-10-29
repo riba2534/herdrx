@@ -41,17 +41,10 @@ type localTranscriptFS struct {
 }
 
 func (f *localTranscriptFS) rootParts(root transcriptRootKind) ([]string, error) {
-	switch root {
-	case transcriptRootClaude:
-		return []string{".claude", "projects"}, nil
-	case transcriptRootCodex:
-		return []string{".codex", "sessions"}, nil
-	case transcriptRootDSH:
-		// 固定根，来自上游 `dshHomePath('sessions')`；自定义 DSH_HOME 不在本期支持范围。
-		return []string{".dsh", "sessions"}, nil
-	default:
-		return nil, errTranscriptRoot
+	if parts := transcriptRootParts(root); parts != nil {
+		return parts, nil
 	}
+	return nil, errTranscriptRoot
 }
 
 // anchored 把「日志根 + 相对路径」拼成从 HOME 起算的绝对路径与路径分量。

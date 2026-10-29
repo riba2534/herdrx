@@ -43,11 +43,13 @@ type transcriptResponse struct {
 	HasMore        bool                 `json:"has_more,omitempty"`
 	Skipped        int                  `json:"skipped,omitempty"`
 	Binding        string               `json:"binding,omitempty"`
+	Session        string               `json:"session,omitempty"`
 }
 
 // readTranscript 是结构化会话记录的读取端点。
 //
-// 客户端只传 hostID / paneID / 三个不透明参数，可显式选择白名单 source=dsh。
+// 客户端只传 hostID / paneID / 三个不透明参数，可显式选择白名单 source=dsh，
+// 以及 manual=1（只列候选、不按 Herdr 上报的 agent_session 自动绑定）。
 // cwd 一律由服务端 `endpoint.Snapshot` 现取；默认 reader 来自 pane.agent，
 // 未识别的程序允许用户选择 DSH 日志源，但不宣称验证了终端程序或会话绑定。
 // 路径永远由「reader 白名单 + 服务端自己取到的 cwd」推导，不接受客户端路径。
@@ -71,6 +73,12 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 	source := query.Get("source")
 	if len(query["source"]) > 1 || (source != "" && source != "dsh") {
 		writeError(writer, http.StatusBadRequest, "invalid_source", "unsupported transcript source")
+		return
+	}
+	// manual=1：用户点了「重选」，只列候选，不按 Herdr 证据自动绑定。
+	manual := query.Get("manual")
+	if len(query["manual"]) > 1 || (manual != "" && manual != "1") {
+		writeError(writer, http.StatusBadRequest, "invalid_manual", "invalid manual flag")
 		return
 	}
 	read := herdr.TranscriptRequest{Session: query.Get("session"), Cursor: query.Get("cursor"), Before: query.Get("before")}
@@ -122,6 +130,9 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 			cwd = strings.TrimSpace(pane.CWD)
 		}
 		scope := herdr.TranscriptScope{PaneID: paneID, Agent: agent, CWD: cwd}
+		if manual == "" {
+			scope.Evidence = paneAgentSession(snapshot, pane)
+		}
 		value, callErr := reader.Transcript(ctx, scope, read)
 		if callErr != nil {
 			writeError(writer, http.StatusBadGateway, "transcript_unavailable", callErr.Error())
@@ -150,6 +161,7 @@ func (a *API) readTranscript(writer http.ResponseWriter, request *http.Request) 
 		HasMore:        page.HasMore,
 		Skipped:        page.Skipped,
 		Binding:        page.Binding,
+		Session:        page.Session,
 	})
 }
 
@@ -165,13 +177,28 @@ func (a *API) recordTranscriptAccess(request *http.Request, host store.Host, pag
 	case page.Reason == herdr.ChatReasonUnsupportedTransport:
 		// 诊断文本是「远端缺 python3」这类可执行信息，只进审计与日志，不进冻结的响应字段。
 		a.audit(request, "transcript.unavailable", "host", host.ID, map[string]any{"pane_id": paneID, "transport": host.Transport, "detail": detail})
-	case page.Binding == herdr.ChatBindingSelected && requested:
+	case page.Binding == herdr.ChatBindingVerified || (page.Binding == herdr.ChatBindingSelected && requested):
 		a.audit(request, "transcript.opened", "host", host.ID, map[string]any{
 			"pane_id":    paneID,
 			"agent":      page.Agent,
 			"session_id": page.SessionID,
+			"binding":    page.Binding,
 		})
 	}
+}
+
+// paneAgentSession 取 Herdr 为该 pane 上报的会话引用：pane 自带的优先，
+// 否则看同一份 snapshot 里 agents[] 的同一 pane。
+func paneAgentSession(snapshot herdr.Snapshot, pane *herdr.Pane) *herdr.AgentSession {
+	if pane.AgentSession != nil {
+		return pane.AgentSession
+	}
+	for index := range snapshot.Agents {
+		if snapshot.Agents[index].PaneID == pane.ID {
+			return snapshot.Agents[index].AgentSession
+		}
+	}
+	return nil
 }
 
 func findPane(panes []herdr.Pane, paneID string) *herdr.Pane {

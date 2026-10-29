@@ -12,6 +12,7 @@ const (
 	codexRecordResponseItem = "response_item"
 	codexRecordEventMsg     = "event_msg"
 	codexEventTurnAborted   = "turn_aborted"
+	codexRecordCompacted    = "compacted"
 )
 
 // decodeCodexLine 把一行 Codex JSONL 解码成一条记录。
@@ -30,6 +31,10 @@ func decodeCodexLine(context LineContext, line string) (*Record, bool) {
 	at := parseTimestamp(record["timestamp"])
 
 	payload := asRecord(record["payload"])
+	if extractString(record["type"]) == codexRecordCompacted {
+		// 上下文压缩检查点：payload 是给模型的摘要，只显示一条状态提示。
+		return &Record{ID: id, Role: RoleSystem, At: at, Blocks: []Block{{Type: BlockText, Text: CompactedNotice}}}, false
+	}
 	if payload == nil {
 		// 旧式未包裹形态：整条记录本身就是 response_item。
 		return codexItem(record, id, at)
@@ -66,12 +71,21 @@ func codexItem(item map[string]any, id, at string) (*Record, bool) {
 	switch extractString(item["type"]) {
 	case "message":
 		role := extractString(item["role"])
+		if role == "developer" || role == RoleSystem {
+			// 开发者 / 系统指令是给模型的上下文，不是对话，也不是格式漂移。
+			return nil, false
+		}
 		if role != RoleUser && role != RoleAssistant {
 			return nil, true
 		}
 		blocks := codexMessageBlocks(item["content"])
 		if role == RoleUser {
-			blocks = dropSkillContext(blocks)
+			kept := dropInjectedContext(blocks)
+			if len(kept) == 0 && len(blocks) > 0 {
+				// 整条都是注入的上下文：按设计省略。
+				return nil, false
+			}
+			blocks = kept
 		}
 		if len(blocks) == 0 {
 			return nil, true
@@ -216,14 +230,38 @@ func codexToolResult(callID string, output any) Block {
 	return Block{Type: BlockToolResult, CallID: callID, Output: toolResultOutput(payload), IsError: isError}
 }
 
-// dropSkillContext 过滤显式的技能展开：那是模型上下文，不是用户真实输入的 prompt。
-func dropSkillContext(blocks []Block) []Block {
-	kept := blocks[:0]
+// codexInjectedPrefixes 是 Codex 以 user 角色写进 response_item 的模型上下文：
+// 技能展开、AGENTS.md 指令、环境信息、应用页面状态与中断标记。它们不是用户输入的 prompt。
+var codexInjectedPrefixes = []string{
+	"<skill>",
+	"# agents.md instructions",
+	"<instructions>",
+	"<user_instructions>",
+	"<environment_context>",
+	"<external_codex_apps_",
+	"<turn_aborted>",
+}
+
+// dropInjectedContext 过滤用户记录里注入的模型上下文，只留下用户真实输入。
+func dropInjectedContext(blocks []Block) []Block {
+	kept := make([]Block, 0, len(blocks))
 	for _, block := range blocks {
-		if block.Type == BlockText && strings.HasPrefix(strings.ToLower(strings.TrimSpace(block.Text)), "<skill>") {
+		if block.Type == BlockText && codexInjected(block.Text) {
 			continue
 		}
 		kept = append(kept, block)
 	}
 	return kept
+}
+
+func codexInjected(text string) bool {
+	// 前缀都很短：只把开头一段转小写，不复制整段长文本。
+	text = strings.TrimSpace(text)
+	text = strings.ToLower(text[:min(len(text), 64)])
+	for _, prefix := range codexInjectedPrefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
