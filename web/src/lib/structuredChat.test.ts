@@ -79,13 +79,19 @@ describe('structuredChatPath', () => {
 
 describe('paneAgentRejectsReadSource', () => {
   it('rejects an explicit DSH source only for recognized non-DSH agents', () => {
-    // 已识别的 claude / codex：服务端不接受客户端覆盖读取源。
+    // 已识别的读取源：服务端不接受客户端覆盖。
     expect(paneAgentRejectsReadSource('claude')).toBe(true)
     expect(paneAgentRejectsReadSource(' codex ')).toBe(true)
+    expect(paneAgentRejectsReadSource('cursor')).toBe(true)
+    expect(paneAgentRejectsReadSource('gemini')).toBe(true)
+    expect(paneAgentRejectsReadSource('agy')).toBe(true)
+    expect(paneAgentRejectsReadSource('pi')).toBe(true)
+    expect(paneAgentRejectsReadSource('grok')).toBe(true)
+    expect(paneAgentRejectsReadSource('traex')).toBe(true)
     // 未识别 / 未知 / 本来就是 dsh：都允许用户显式选择 DSH。
     expect(paneAgentRejectsReadSource('')).toBe(false)
     expect(paneAgentRejectsReadSource(undefined)).toBe(false)
-    expect(paneAgentRejectsReadSource('gemini')).toBe(false)
+    expect(paneAgentRejectsReadSource('omp')).toBe(false)
     expect(paneAgentRejectsReadSource('dsh')).toBe(false)
   })
 })
@@ -135,12 +141,17 @@ describe('normalizeStructuredChatResponse', () => {
       supported: true,
       candidates: [
         { id: 'c1', agent: 'claude', session_id: 's1', updated_at: '2026-09-13T04:00:00Z' },
-        { id: 'c2', agent: 'gemini', session_id: 's2', updated_at: '' },
-        { id: 'c3', agent: 'codex', session_id: 's3' },
+        { id: 'c2', agent: 'omp', session_id: 's2', updated_at: '' },
+        { id: 'c3', agent: 'cursor', session_id: 's3' },
+        { id: 'c4', agent: 'gemini', session_id: 's4', updated_at: '' },
+        { id: 'c5', agent: 'agy', session_id: 's5', updated_at: '' },
+        { id: 'c6', agent: 'pi', session_id: 's6', updated_at: '' },
+        { id: 'c7', agent: 'grok', session_id: 's7', updated_at: '' },
+        { id: 'c8', agent: 'traex', session_id: 's8', updated_at: '' },
       ],
       reason: 'made_up_reason',
     })
-    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3'])
+    expect(normalized.candidates?.map((item) => item.id)).toEqual(['c1', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'])
     expect(normalized.reason).toBeUndefined()
   })
 
@@ -264,6 +275,17 @@ describe('page merging', () => {
     const empty = applyStructuredChatPage(withRecords, page({ messages: [], binding: 'selected', skipped: 1 }))
     expect(empty.status).toBe('ready')
     expect(empty.skipped).toBe(3)
+  })
+
+  it('counts truncated records apart from skipped ones and clears them on reset', () => {
+    const cut = applyStructuredChatPage(state({ session: 'c1' }), page({ messages: [textRecord('a', 'user', '问')], binding: 'selected', truncated: 40 }))
+    expect(cut.truncated).toBe(40)
+    expect(cut.skipped).toBe(0)
+    const more = applyStructuredChatPage(cut, page({ messages: [], binding: 'selected', truncated: 2 }))
+    expect(more.truncated).toBe(42)
+    const rebuilt = applyStructuredChatPage(more, page({ messages: [textRecord('b', 'user', '新')], binding: 'selected', reset: true }))
+    expect(rebuilt.truncated).toBe(0)
+    expect(normalizeStructuredChatResponse({ supported: true, messages: [], truncated: 'x' }).truncated).toBeUndefined()
   })
 })
 

@@ -32,6 +32,9 @@ type LineContext struct {
 type lineOutcome struct {
 	// record 非 nil 表示这一行产出了一条记录。
 	record *Record
+	// records 是一行产出的多条记录（traex 的 history_mutation 把多个 item 写在同一行）。
+	// 非空时优先于 record，并且这些记录共享这一行的字节区间。
+	records []*Record
 	// skipped 表示「这条消息形状的行没能产出任何内容」，即契约里的 skipped。
 	skipped bool
 	// superseded 表示这一行是落在模型可见 surface 上的改写，按设计不落地。
@@ -80,11 +83,19 @@ func decodeLine(context LineContext, line string) lineOutcome {
 	case AgentClaude:
 		record, skipped := decodeClaudeLine(context, line)
 		return lineOutcome{record: record, skipped: skipped}
-	case AgentCodex:
-		record, skipped := decodeCodexLine(context, line)
-		return lineOutcome{record: record, skipped: skipped}
+	case AgentCodex, AgentTraex:
+		return decodeCodexOutcome(context, line)
 	case AgentDSH:
 		return decodeDSHLine(context, line)
+	case AgentCursor:
+		record, skipped := decodeCursorLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
+	case AgentPi:
+		record, skipped := decodePiLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
+	case AgentGrok:
+		record, skipped := decodeGrokLine(context, line)
+		return lineOutcome{record: record, skipped: skipped}
 	default:
 		return lineOutcome{}
 	}
@@ -172,13 +183,20 @@ func DecodeRange(context LineContext, data []byte, start int64) RangeResult {
 		if outcome.superseded {
 			replacements++
 		}
-		entry := RangeEntry{Start: offset, End: offset + int64(indexByte) + 1}
-		if outcome.record != nil {
-			elided := ElideOversized(*outcome.record, MaxBlockBytes)
-			entry.Record = &elided
+		end := offset + int64(indexByte) + 1
+		produced := outcome.records
+		if len(produced) == 0 && outcome.record != nil {
+			produced = []*Record{outcome.record}
 		}
-		entries = append(entries, entry)
-		offset = entry.End
+		if len(produced) == 0 {
+			entries = append(entries, RangeEntry{Start: offset, End: end})
+		} else {
+			for _, record := range produced {
+				elided := ElideOversized(*record, MaxBlockBytes)
+				entries = append(entries, RangeEntry{Record: &elided, Start: offset, End: end})
+			}
+		}
+		offset = end
 		data = data[indexByte+1:]
 	}
 	if entries == nil {
@@ -240,6 +258,9 @@ func ReadFileShape(agent string, data []byte) FileShape {
 	if agent == AgentDSH {
 		return dshFileShape(data)
 	}
+	if agent == AgentTraex {
+		agent = AgentCodex
+	}
 	var shape FileShape
 	for _, line := range completeLines(data) {
 		record := parseJSONObject(line)
@@ -256,7 +277,8 @@ func ReadFileShape(agent string, data []byte) FileShape {
 		case AgentCodex:
 			recordType := extractString(record["type"])
 			payload := asRecord(record["payload"])
-			if recordType == codexRecordResponseItem {
+			if recordType == codexRecordResponseItem || recordType == "history_mutation" {
+				// history_mutation 是 traex 的规范消息路径，出现后就不再采用 event_msg。
 				shape.ResponseItemPath = true
 			}
 			if payload == nil {
@@ -276,6 +298,21 @@ func ReadFileShape(agent string, data []byte) FileShape {
 			}
 			if shape.SessionID == "" {
 				shape.SessionID = extractString(payload["id"])
+			}
+			if shape.SessionID == "" {
+				shape.SessionID = extractString(payload["session_id"])
+			}
+		case AgentPi:
+			if extractString(record["type"]) != "session" {
+				continue
+			}
+			if shape.CWD == "" {
+				if cwd := extractString(record["cwd"]); strings.HasPrefix(cwd, "/") {
+					shape.CWD = cwd
+				}
+			}
+			if shape.SessionID == "" {
+				shape.SessionID = extractString(record["id"])
 			}
 		}
 	}

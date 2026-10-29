@@ -1,6 +1,6 @@
 # 结构化对话记录契约（structured chat contract）
 
-日期：2026-09-13（2026-10-29 增补 verified 绑定、Claude/Codex 事件与轮次折叠）。状态：结构化 Chat 契约；DSH 扩展按本文与两端类型共同更新，实际验收以对应测试结果为准。
+日期：2026-09-13（2026-10-29 增补 verified 绑定、Claude/Codex 事件与轮次折叠；2026-10-30 增补 Cursor、Gemini、agy、Pi、Grok、traex 读取器与 Tailcat 读取命令）。状态：结构化 Chat 契约；DSH 扩展按本文与两端类型共同更新，实际验收以对应测试结果为准。
 
 本契约定义 Chat 视图真正需要的**带 role 的逐轮问答数据层**：数据来自 Agent 自己写的
 append-only 会话日志，经 owner 认证的 HTTP 端点按游标增量读取，前端按 role 分列渲染。
@@ -84,12 +84,15 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 请求**没有** `session`、也没有 `manual=1` 时，服务端先照常列候选（reader 白名单 + 精确 cwd），
 再看证据是否指向其中一份文件：
 
-- `source` 必须是 `herdr:<reader>` 且 `agent` 等于 reader；第三方 source（如 `custom:claude`）、
-  其它 Agent 的 source 一律不认。
+- `source` / `agent` 必须是该 reader 对应的 Herdr 官方集成（对照 Herdr `agent_resume.rs` 的
+  `is_official_agent_source`）：一般是 `herdr:<reader>` / `<reader>`；traex 没有自己的集成，
+  Codex 的 hook 把它报成 `herdr:codex` / `codex`；agy 是 `herdr:antigravity_cli` / `agy`。
+  第三方 source（如 `custom:claude`）、其它 Agent 的 source 一律不认。
 - `kind: id`：`value` 与候选的 provider 会话 id 精确相等。
 - `kind: path`：`value` 必须是规范的绝对路径（`Clean` 后不变），且恰好以「固定日志根 +
   候选相对路径」结尾（如 `…/.claude/projects/<编码目录>/<id>.jsonl`）。远端 `$HOME` 不在工作台侧，
-  前缀无法独立核对；但路径**从不被打开**，读取的始终是候选集合里那一份文件。
+  前缀无法独立核对；但路径**从不被打开**，读取的始终是候选集合里那一份文件。Herdr 目前只为
+  pi / omp 上报 path，agy 不接受 path。
 - 命中：直接读取该候选，返回 `binding: 'verified'`，另带 `session`（该候选的不透明 id，之后续读
   用它）和完整 `candidates`（供「重选」）。未命中、证据缺失、或文件在列候选与读取之间消失：
   保持「只列候选」。
@@ -98,7 +101,15 @@ HTTP 错误码仅保留真正的传输 / 权限失败：404 `host_not_found` / `
 
 - 证据只用于**挑选**候选，候选资格（cwd 精确相等、文件名与深度规则）不因证据放宽；证据指向候选
   集合之外的会话（另一个 cwd、另一个根）一律不算命中。
-- 未安装 Herdr 的 Agent 集成、或集成未上报（Herdr 当前只为 claude/codex 等记录 `kind: id`）时
+- codex 与 traex 共用 rollout 格式：主根（codex 是 `~/.codex/sessions`，traex 是
+  `~/.trae/cli/sessions`）的候选没有命中、且证据来源正确时，再列另一个 rollout 根的候选，同样先按
+  cwd 核对，再按证据挑选。命中的候选 id 里记着它属于哪个根，续读不再回到另一个根。
+- agy 是唯一例外：Antigravity 的会话库没有 cwd 字段，无法按 cwd 列候选，没有证据时也不扫描
+  conversations 目录。证据是 `kind: id` 且 `value` 是严格的 uuid 时，唯一的候选是固定根下的
+  `<uuid>.db`；读取时仍校验文件名形状并逐段拒绝符号链接。归属完全依赖 Herdr 为这个 pane 上报的
+  集成证据，不比较 cwd。所以 agy 的续读和带 `session` 的请求同样要求当前 pane 的证据 uuid 等于
+  令牌里的会话 id，否则按 `session_unavailable` 处理，别的 pane 的令牌拿过来也读不到。
+- 未安装 Herdr 的 Agent 集成、或集成未上报（Herdr 为大多数 Agent 记录 `kind: id`，pi / omp 记录 `kind: path`）时
   没有证据，回退手选。
 - 用户显式选择的 `session` 永远是 `selected`，即使证据恰好指向同一份文件；带 `session` 的续读页
   同样标 `selected`，客户端在同一次绑定内保留首页的 `verified`。
@@ -277,8 +288,13 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
 
 1. **客户端永不提供路径**：路径只能由「agent 白名单表 + 服务端自己取到的 pane cwd」推导。
 2. **日志根固定**：Claude 的 `<远端 $HOME>/.claude/projects/`、Codex 的
-   `<远端 $HOME>/.codex/sessions/`、DSH 的 `<远端 $HOME>/.dsh/sessions/`。
-   `$HOME` 用受限命令取回，并要求以 `/` 开头且非空；不接受浏览器指定根目录。
+   `<远端 $HOME>/.codex/sessions/`、traex 的 `.trae/cli/sessions/`、DSH 的 `.dsh/sessions/`、
+   Cursor 的 `.cursor/projects/`、Gemini 的 `.gemini/tmp/`、agy 的
+   `.gemini/antigravity-cli/conversations/`、Pi 的 `.pi/agent/sessions/`、Grok 的 `.grok/sessions/`。
+   `$HOME` 自身是符号链接时只解析这一层，其下每一段仍拒绝符号链接；pane cwd 与记录 cwd
+   允许家目录前缀的两种写法互认，不替换其它路径段。
+   `$HOME` 用受限命令取回（同一条连接第一次读取前先探测一次，首次打开就能匹配两种写法），
+   并要求以 `/` 开头且非空；不接受浏览器指定根目录。
    DSH 自定义 `DSH_HOME` / root 暂不自动发现。
    不使用通配（如 `~/.claude/projects/*`）跨目录收集。
 3. **路径逃逸拒绝**：拼接后 `Clean`，必须是白名单根的严格子路径；拒绝任何含 `..` 的段；
@@ -287,17 +303,40 @@ replace 检查点或裁剪副本追加为第二轮对话。未知非 `ignorable`
    Codex 只收 `sessions` 下的 `rollout-*.jsonl`。DSH 只收
    `<projectKey>/<encodedSessionID>/session.v3.jsonl[.zstd]`；header 的版本、id、绝对 cwd
    必须匹配。目录名只用于缩小搜索范围，不做递归通配。
+   Gemini 的项目目录有两代，来源是 Gemini CLI（google-gemini/gemini-cli main）：
+   `packages/core/src/utils/paths.ts` 的 `getProjectHash(projectRoot)` = `sha256(projectRoot)`
+   十六进制，会话头 `projectHash` 按它写（`services/chatRecordingService.ts`）；
+   `packages/core/src/config/storage.ts` 的 `getProjectTempDir()` 是 `~/.gemini/tmp/<shortId>`，
+   shortId 由 `config/projectRegistry.ts` 的注册表 `~/.gemini/projects.json` 分配（项目目录名
+   slugify，冲突加 `-1`、`-2`），slug 目录里的 `.project_root` 记着项目根；旧的
+   `tmp/<sha256>` 目录会被迁移成 slug 目录。工作台的候选目录 = `tmp/<sha256(pane cwd)>`（旧版）
+   ∪ `.project_root` 内容与 pane cwd 精确相等的 `tmp/<slug>`（家目录两种写法各算一次；标记按 64 个
+   一批读）。`projects.json` 可能过期，不读也不作信任依据。两代都要求会话头 `projectHash` 等于
+   sha256(pane cwd)，读取已绑定会话时再核对一次目录归属；不从正文推断工作目录。会话在
+   `<目录>/chats/` 或 `<目录>/chats/<parentId>/` 下。macOS seatbelt 沙箱下 Gemini 的根是
+   `~/.cache/.gemini`，不在固定根内，不支持。
+   单个文件读不了只跳过该文件。agy 的库由 sqlite 按路径名打开：调用方先按 fd 逐段核对出
+   inode，打开前 `lstat` 比对同一 inode，查询结束、连接还开着时再确认本进程有 fd 指向这个
+   inode（`/proc/self/fd`，macOS 用 `/dev/fd`），否则丢弃结果。sqlite 用 `mode=ro` +
+   `query_only`，看得到 Agent 还没 checkpoint 的 `-wal`；库为 WAL 模式而 `-shm` 不存在时，
+   sqlite 会在同目录建一个 `-shm` 索引文件（与 Agent 自己打开时相同），库和 `-wal` 内容不被
+   改写。不用 `immutable=1`：它会漏掉 `-wal` 里的最新写入，Agent 正在写时还可能读到半页。
+   远端 python3 缺 `sqlite3` 模块时只有 agy 返回 `unsupported_transport`，其它读取器照常。
    DSH zstd 由工作台 Go 解压，远端不安装解压工具；验证帧边界和校验，未写完的尾帧等待续读。
    单次压缩输入预算 8 MiB、解压总预算 32 MiB，响应仍受原记录数和字节预算约束；超限明确返回
    `read_limit_exceeded`。候选发现只读取首帧 header，不读取会话正文。
 5. **读取上限**：单次响应 ≤ 256 KiB，单块 ≤ 64 KiB，游标必须落在 `0 ≤ cursor ≤ fileSize`
-   且行对齐。远端命令等价于 `tail -c +<N> | head -c <cap>`。
+   且行对齐。一行写了多条记录（traex 的 `history_mutation`）时不拆到两页；单独一行就超过记录数或
+   字节上限时整行算已读，只返回上限内的部分，没返回的条数放进响应的 `truncated`（不计入
+   `skipped`，前端提示“这一行记录过大，部分内容未显示，可在终端查看”）。远端命令等价于 `tail -c +<N> | head -c <cap>`。
 6. **owner 校验**：沿用 `ownedHost`；非 owner 返回 404，不泄露 host 是否存在。
 7. **审计**：每次打开会话写一条 `transcript.opened`（含 pane_id / agent / session_id），
    越界拒绝写一条 `transcript.denied`。
 8. **不进 RPC 白名单**：见 §1。
 
-进程内和远端实现共用同一套语义；Tailcat 复用 SSH 通道时自动获得同样能力，不额外放权。
+进程内和远端实现共用同一套语义。Tailcat 的 access daemon 没有任意 exec，也不接受 shell 或 python 读取器。结构化读取是白名单命令 `herdrx-transcript`（与 `pane.read` 一样只允许这一个固定名字，命令行不带路径）。请求走 stdin，daemon 在进程内按与现有读取器相同的边界执行：固定日志根、逐段拒绝符号链接、单次字节数有界，响应沿用 `TranscriptPage`，不回传 cwd。命令执行失败可以重试，不得把这台主机缓存成永久不支持；只有接入方式本身没有该能力时才返回 `unsupported_transport`。SSH 主机继续使用原有受限读取器。
+
+Tailcat 主机要把受控端 CLI 更新到带 `herdrx-transcript` 的版本（最低 v0.1.0-rc.3）才能读结构化对话；旧版受控端按白名单拒绝这个命令名，工作台把它当作暂时不可用，不缓存成永久不支持。该命令和其它受控命令一样只对已配对的永久凭据开放，临时配对凭据只能调用配对子协议。
 
 ---
 
@@ -357,13 +396,39 @@ pane 处于 working / blocked 时最新一轮不折叠。打开会话仍然滚�
    `unrecognized_format` 报告，不按版本名区分。
 7. **Herdr `agent_session` 证据未与真实集成端到端验证**——字段形状取自 Herdr v0.9.1 源码
    （`src/api/schema/panes.rs`、`src/agent_resume.rs`），测试只用合成 snapshot；`kind: path` 的
-   命中规则按任务约定实现，Herdr 当前不为 claude/codex 记录 path。
+   命中规则按任务约定实现，Herdr 当前只为 pi / omp 记录 path；traex 报成 codex、agy 的
+   `herdr:antigravity_cli` 来源取自源码，没有对真实集成复核。
 8. **Claude 事件形状**（queued_command、api_error 的 retryAttempt/maxRetries、away_summary、
    local_command）只对照过字段名，fixture 是合成的；Codex 顶层 `compacted` 与注入前缀表同样未经
    多版本样本验证。
 9. **DSH `isSeeded` 不变式只强制了一半**——seeded header 在读路径上（含从尾部开始的分页）
    一律拒绝；"未 seeded 的 header 却带继承标记"只有读完所有帧才能发现，与有界读取预算冲突，
    **未强制**。不得声称该不变式已完整验证。
+10. **Cursor Composer 的 `state.vscdb` 与其它未落地 connector**——Cursor 只读取
+   `agent-transcripts/<sid>/<sid>.jsonl`，工作区只认 `.workspace-trusted` 的
+   `workspacePath`。Gemini 只读取 `session-*.json[l]`，归属见 §8.4（hash 与 slug 规则
+   已对照 Gemini CLI 源码，测试只用合成样本，未对真实会话复核）。
+   没有 id 的消息按行的绝对字节位置命名，工具结果按在消息里的位置命名，`thought: true` 的
+   part 丢弃；整份文档的游标身份是会话 id + `startTime`，位置是记录下标加前一条记录 id 的
+   摘要，单纯增长不 reset，被 /rewind 或压缩截短后再长回来就对不上而 reset。尾部窗口的游标是
+   字节偏移加偏移前最多 64 字节的摘要，追加不 reset，同一 inode 原地改写就 reset。
+   Antigravity CLI（`agy`）读取 `conversations/<uuid>.db` 的 `steps.step_payload`
+   （未加密 protobuf）。角色按 CortexStepType 的名字落地：14 user、15 assistant、
+   132 tool、101/17/23 system。23 是检查点而不是 planner 回复。思考字段不输出。
+   不认识的 step_type 跳过。这条映射还没有对着一份真实的长会话复核；
+   `herdrx transcript-debug --agy <file>` 只打印 idx、step_type、role、块种类和
+   文本长度，供在持有真实文件的机器上核对。
+   `traex` 的日志在 `~/.trae/cli/sessions`，行是 `history_mutation`。hook 把 agent
+   报成 `codex` 时按 §3.2.1 在两个 rollout 根的候选里挑，候选的会话 id 来自
+   `session_meta`，不按 mtime 挑选。`replace` 是压缩，跳过。
+   Pi 读取
+   `~/.pi/agent/sessions/--<cwd>--/<时间戳>_<id>.jsonl`，会话 id 来自文件名与
+   header，cwd 必须与 pane 一致；hook 上报的绝对路径只用来按 §3.2.1 挑候选，不直接打开。Grok 只读
+   `chat_history.jsonl`，目录名是百分号编码的 cwd，`reasoning` 丢掉，
+   `synthetic_reason` 记成 system。已识别的 Cursor 会话从尾部分页，不再因为
+   其它项目的 transcript 占满 500 项目录预算而整页 `read_limit_exceeded`。
+   `openclaude` / `omp` 以及没有按各自 fixture 落地的 harness 仍是
+   `unsupported_agent`。不得用 `pane.read` 终端文本填充 `messages`。
 
 在这些点被真实隔离会话验证之前，正确行为是返回 §4 的降级形状，而不是返回看起来合理的假记录。
 

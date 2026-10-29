@@ -398,14 +398,54 @@ func TestBlockMarshalsContractShape(t *testing.T) {
 	}
 }
 
+func TestCursorAgentTranscriptUsesTheProvenShape(t *testing.T) {
+	// 形状逐字来自 franken_agent_detection cursor.rs 的 agent_transcript_tests。
+	const userLine = `{"role":"user","message":{"content":[{"type":"text","text":"find the bug"}]}}`
+	const assistantLine = `{"role":"assistant","message":{"content":[{"type":"text","text":"on it"},{"type":"tool_use","name":"Grep","input":{"pattern":"bug"}}]}}`
+	decoded := DecodeRange(LineContext{Agent: AgentCursor, SessionID: "sess-1"}, []byte(userLine+"\n"+assistantLine+"\nthis is not json\n"), 0)
+	if decoded.Failure != nil || decoded.Skipped != 1 {
+		t.Fatalf("decode = %+v", decoded)
+	}
+	records := UpsertEntries(decoded.Entries)
+	if len(records) != 2 || records[0].Role != RoleUser || records[0].Blocks[0].Text != "find the bug" {
+		t.Fatalf("user record = %+v", records)
+	}
+	if records[1].Role != RoleAssistant || records[1].Blocks[0].Text != "on it" || records[1].Blocks[1].Type != BlockToolCall || records[1].Blocks[1].Name != "Grep" {
+		t.Fatalf("assistant record = %+v", records[1])
+	}
+	// 终端文本、没有 role 的 Composer bubble，都不是这条 JSONL。
+	for _, line := range []string{
+		"user: hello from the terminal",
+		`{"type":"user","text":"composer bubble"}`,
+		`{"role":"user","message":{"content":[]}}`,
+	} {
+		record, skipped := DecodeLine(LineContext{Agent: AgentCursor, SessionID: "sess-1"}, line)
+		if record != nil {
+			t.Fatalf("%q became a cursor record: %+v", line, record)
+		}
+		if line == "user: hello from the terminal" && !skipped {
+			t.Fatal("terminal text was treated as a valid cursor record")
+		}
+	}
+	if CursorTranscriptRel("globalStorage/state.vscdb") || CursorTranscriptRel("proj/agent-transcripts/sid/subagents/sub/sub.jsonl") || CursorTranscriptRel("proj/agent-transcripts/sid/notes.jsonl") {
+		t.Fatal("non-primary cursor path was accepted")
+	}
+	if CursorWorkspacePath([]byte(`{"workspacePath":"Users-example-workspace-foo"}`)) != "" {
+		t.Fatal("slug was accepted as a workspace path")
+	}
+	if got := CursorWorkspacePath([]byte(`{"workspacePath":"/Users/example/workspace/foo"}`)); got != "/Users/example/workspace/foo" {
+		t.Fatalf("workspace = %q", got)
+	}
+}
+
 func TestSupportedAgentsIsClosedSet(t *testing.T) {
-	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH} {
+	for _, agent := range []string{AgentClaude, AgentCodex, AgentDSH, AgentCursor, AgentGemini, AgentAgy, AgentPi, AgentGrok, "traex", "traecli"} {
 		if !Supported(agent) {
 			t.Fatalf("%s should be supported", agent)
 		}
 	}
-	// 与 claude/codex 同格式族的这些 agent 在各自的 decoder 与日志根被真实验证前一律不支持。
-	for _, agent := range []string{"openclaude", "grok", "omp", "gemini", "cursor", "", "CLAUDE", "DSH"} {
+	// 这些 harness 即使长得像已经支持的读取器，也没有在这里落地各自的 decoder。
+	for _, agent := range []string{"openclaude", "omp", "copilot", "opencode", "", "CLAUDE", "DSH"} {
 		if Supported(agent) {
 			t.Fatalf("%q must not be claimed as supported", agent)
 		}

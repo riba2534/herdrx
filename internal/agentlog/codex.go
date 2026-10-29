@@ -15,6 +15,56 @@ const (
 	codexRecordCompacted    = "compacted"
 )
 
+// decodeCodexOutcome 解码一行 Codex 或 traex 日志。history_mutation 的 append
+// 可以在同一行产出多条记录；replace 是压缩，整行跳过。
+func decodeCodexOutcome(context LineContext, line string) lineOutcome {
+	record := parseJSONObject(line)
+	if record == nil {
+		return lineOutcome{skipped: true}
+	}
+	if extractString(record["type"]) == "history_mutation" {
+		return decodeHistoryMutation(context, record)
+	}
+	decoded, skipped := decodeCodexLine(context, line)
+	return lineOutcome{record: decoded, skipped: skipped}
+}
+
+func decodeHistoryMutation(context LineContext, record map[string]any) lineOutcome {
+	payload := asRecord(record["payload"])
+	if payload == nil || extractString(payload["operation"]) != "append" {
+		return lineOutcome{}
+	}
+	items, _ := payload["items"].([]any)
+	at := parseTimestamp(record["timestamp"])
+	records := make([]*Record, 0, len(items))
+	for index, value := range items {
+		item := asRecord(value)
+		if item == nil {
+			continue
+		}
+		switch extractString(item["type"]) {
+		case "reasoning", "trae_extra_info":
+			continue
+		case "message":
+			if extractString(item["role"]) == "developer" {
+				continue
+			}
+		}
+		id := extractString(item["id"])
+		if id == "" {
+			id = context.SessionID + ":" + strconv.FormatInt(context.Offset, 10) + ":" + strconv.Itoa(index)
+		}
+		decoded, _ := codexItem(item, id, at)
+		if decoded != nil {
+			records = append(records, decoded)
+		}
+	}
+	if len(records) == 0 {
+		return lineOutcome{}
+	}
+	return lineOutcome{record: records[0], records: records}
+}
+
 // decodeCodexLine 把一行 Codex JSONL 解码成一条记录。
 //
 // 双记形态的规范路径按**文件**判定，由 LineContext.ResponseItemPath 传入：

@@ -585,6 +585,15 @@ describe('degraded states', () => {
     expect(screen.queryByRole('button', { name: '读取 DSH 会话记录' })).toBeNull()
   })
 
+  it('says an oversized line was cut short instead of calling it unrecognized', async () => {
+    transcriptServer(sequence(candidatesPage,
+      { supported: true, agent: 'codex', session_id: 'aaaa1111bbbb', binding: 'selected', truncated: 40, messages: [{ id: 'u1', role: 'user', blocks: [{ type: 'text', text: '问' }] }] }))
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    expect(await screen.findByText('这一行记录过大，部分内容未显示，可在终端查看。')).toBeVisible()
+    expect(screen.queryByText(/格式无法识别/)).toBeNull()
+  })
+
   it('keeps the selected session on a read limit and does not call it empty', async () => {
     transcriptServer(sequence(candidatesPage,
       { supported: true, agent: 'claude', session_id: 'aaaa1111bbbb', binding: 'selected', reason: 'read_limit_exceeded', messages: [] }))

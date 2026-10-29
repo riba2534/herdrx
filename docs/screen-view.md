@@ -70,7 +70,7 @@
 - 只拉起默认会话；命名会话不自动拉起。
 - 设置 `HERDRX_HERDR_AUTOSTART=0` 关闭，例如 `systemctl --user edit herdrx` 加入 `Environment=HERDRX_HERDR_AUTOSTART=0`。
 
-这项能力随 herdrx CLI 发布：需要 v0.1.0-rc.2 之后发布的 CLI 版本；更早的 CLI 不会自动拉起 Herdr。
+这项能力随 herdrx CLI 发布：需要 CLI v0.1.0-rc.3 或更新版本；更早的 CLI 不会自动拉起 Herdr。
 
 ## 验证记录
 

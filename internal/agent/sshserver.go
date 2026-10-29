@@ -187,6 +187,11 @@ func (s *SSHServer) handleSession(newChannel ssh.NewChannel, isPairedAtAuth bool
 			} else {
 				_, _ = io.WriteString(channel, remotePath+"\n")
 			}
+		case "transcript":
+			if err := ServeTranscript(channel, channel); err != nil {
+				_, _ = io.WriteString(channel.Stderr(), "transcript reader failed\n")
+				status = 1
+			}
 		default:
 			command := executableCommand(spec, latest.HerdrBin)
 			command.Stdin = channel
