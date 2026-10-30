@@ -1,13 +1,16 @@
 package herdr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/riba2534/herdrx/internal/agent"
 	"github.com/riba2534/herdrx/internal/agentlog"
 )
 
@@ -187,10 +190,63 @@ func TestRemoteReaderRootsMatchGoRoots(t *testing.T) {
 			t.Fatalf("%s: go root %q, remote root %q", agent, got, root)
 		}
 	}
-	for _, agent := range []string{agentlog.AgentClaude, agentlog.AgentCodex, agentlog.AgentTraex, agentlog.AgentDSH, agentlog.AgentCursor, agentlog.AgentGemini, agentlog.AgentAgy, agentlog.AgentPi, agentlog.AgentGrok} {
+	for _, agent := range transcriptRootAgents {
 		if _, ok := roots[agent]; !ok {
 			t.Fatalf("remote reader has no root for %s", agent)
 		}
+	}
+}
+
+// transcriptRootAgents 是有固定日志根的全部 reader。
+var transcriptRootAgents = []string{agentlog.AgentClaude, agentlog.AgentCodex, agentlog.AgentTraex, agentlog.AgentDSH, agentlog.AgentCursor, agentlog.AgentGemini, agentlog.AgentAgy, agentlog.AgentPi, agentlog.AgentGrok}
+
+// 受控端 `herdrx-transcript` 的日志根表也必须与 Go 侧逐项一致：同一个 agent 经 Tailcat
+// 读到的目录，要和本机、SSH 读到的是同一个。每个根下放一个以 agent 命名的标记文件，
+// 受控端列出的必须正好是自己那一个；根指错到别的 agent 或父目录都会列出别的东西。
+func TestControlledSideRootsMatchGoRoots(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, name := range transcriptRootAgents {
+		dir := filepath.Join(append([]string{home}, transcriptRootParts(transcriptRootFor(name))...)...)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "root-"+name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type listResponse struct {
+		OK      bool   `json:"ok"`
+		Error   string `json:"error"`
+		Entries []struct {
+			Rel string `json:"rel"`
+			Dir bool   `json:"dir"`
+		} `json:"entries"`
+	}
+	list := func(name string) (listResponse, error) {
+		var response listResponse
+		request, err := json.Marshal(map[string]any{"op": "list", "agent": name, "rel": "", "depth": 1})
+		if err != nil {
+			return response, err
+		}
+		var out bytes.Buffer
+		if err := agent.ServeTranscript(bytes.NewReader(request), &out); err != nil {
+			return response, err
+		}
+		return response, json.Unmarshal(out.Bytes(), &response)
+	}
+	for _, name := range transcriptRootAgents {
+		response, err := list(name)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !response.OK || len(response.Entries) != 1 || response.Entries[0].Dir || response.Entries[0].Rel != "root-"+name {
+			t.Fatalf("%s: controlled side listed %+v, want only root-%s under %s", name, response, name, strings.Join(transcriptRootParts(transcriptRootFor(name)), "/"))
+		}
+	}
+	// 受控端不能比 Go 侧多认一个 agent。
+	if response, err := list("unknown"); err != nil || response.Error != "unknown_agent" {
+		t.Fatalf("unknown agent = %+v %v", response, err)
 	}
 }
 
