@@ -14,6 +14,8 @@ const FLAG_FULL = 1
 const pageVisible = () => document.visibilityState !== 'hidden'
 /** 回前台探测等待 pong 的默认时长；超时视为半开连接。 */
 export const RESUME_PROBE_TIMEOUT_MS = 4000
+/** 仍有请求未完成时探测最多等这么久，避免慢主机上的 terminal.open/call 让 pong 迟到而误断。 */
+export const RESUME_PROBE_MAX_MS = 30_000
 
 export type ConnectionState = 'connecting' | 'ready' | 'degraded' | 'offline'
 export type TerminalControlState = { pane_id: string; terminal_id?: string; state: 'available' | 'pending' | 'owned' | 'other' | 'blocked'; stream_id?: number; stream_epoch?: string; control_generation?: string; reason?: string }
@@ -150,12 +152,20 @@ export class WorkbenchClient {
       return
     }
     if (socket.readyState !== WebSocket.OPEN || this.probeTimer) return
+    this.probe(Date.now())
+  }
+
+  private probe(startedAt: number) {
     this.sendJSON({ t: 'ping' })
+    const remaining = RESUME_PROBE_MAX_MS - (Date.now() - startedAt)
     // 换连接、断开和 dispose 都会清掉这个定时器，触发时 socket 仍是当前连接。
     this.probeTimer = window.setTimeout(() => {
       this.probeTimer = 0
-      this.retryNow()
-    }, this.options.probeTimeoutMs ?? RESUME_PROBE_TIMEOUT_MS)
+      // 服务端在同一读循环里同步处理 terminal.open 和 call，慢主机上 pong 会排在它们之后：
+      // 还有请求未完成时再 ping 一轮，到总上限才判定半开。
+      if (this.pending.size && Date.now() - startedAt < RESUME_PROBE_MAX_MS) this.probe(startedAt)
+      else this.retryNow()
+    }, Math.min(this.options.probeTimeoutMs ?? RESUME_PROBE_TIMEOUT_MS, remaining))
   }
 
   private clearProbe() {
@@ -173,7 +183,9 @@ export class WorkbenchClient {
     this.reconnectAttempt = 0
     const socket = this.socket
     if (socket) {
-      this.socket = null
+      // 旧连接的 onclose 会因 socket !== this.socket 被忽略，这里同步清掉它的流和请求：
+      // 新连接的 stream ID 从 1 重新编号，旧流 ID 不能再把输入发到新连接里的其他 pane。
+      this.dropConnection()
       if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CLOSING) {
         socket.close(1000, 'retry')
       }
@@ -414,24 +426,29 @@ export class WorkbenchClient {
     }
     socket.onclose = (event) => {
       if (socket !== this.socket) return
-      this.socket = null
-      window.clearInterval(this.presenceTimer)
-      window.clearInterval(this.controlTimer)
-      this.clearProbe()
-      this.resetControls()
+      this.dropConnection()
       this.emitState('offline', this.connectionError || event.reason || '连接已断开')
-      for (const request of this.pending.values()) {
-        window.clearTimeout(request.timer)
-        request.reject(new Error('连接已断开'))
-      }
-      this.pending.clear()
-      this.terminalHandlers.clear()
-      this.terminalCloseHandlers.clear()
-      this.terminalStreams.clear()
-      this.pendingTerminalClosures.clear()
-      this.pendingFrames.clear()
       if (!this.disposed) void this.afterDisconnect(event.code)
     }
+  }
+
+  /** 丢弃当前连接上的一切状态：定时器、尺寸控制、未完成请求和终端流。 */
+  private dropConnection() {
+    this.socket = null
+    window.clearInterval(this.presenceTimer)
+    window.clearInterval(this.controlTimer)
+    this.clearProbe()
+    this.resetControls()
+    for (const request of this.pending.values()) {
+      window.clearTimeout(request.timer)
+      request.reject(new Error('连接已断开'))
+    }
+    this.pending.clear()
+    this.terminalHandlers.clear()
+    this.terminalCloseHandlers.clear()
+    this.terminalStreams.clear()
+    this.pendingTerminalClosures.clear()
+    this.pendingFrames.clear()
   }
 
   private async afterDisconnect(code: number) {

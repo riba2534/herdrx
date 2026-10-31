@@ -809,6 +809,13 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     return () => { unsubscribe(); unsubscribeResize() }
   }, [client, pane.pane_id, connectionEpoch])
 
+  // 换到另一个 pane 等同于重新首开：旧 pane 的暂存输入不能发到新 pane。
+  useEffect(() => () => {
+    streamOpenedRef.current = false
+    pendingInputRef.current = []
+    pendingInputSizeRef.current = 0
+  }, [pane.pane_id])
+
   useEffect(() => {
     if ((compact && !active) || overlayMode || !connected) releaseSizing()
   }, [active, compact, overlayMode, connected])
@@ -865,6 +872,8 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         if (cancelled) { client.closeTerminal(streamID); return }
         streamRef.current = streamID
         streamOpenedRef.current = true
+        // 流已恢复，断线期间的“输入未发送”提示随之失效；其他提示保留。
+        setHistoryError((current) => current === INPUT_NOT_SENT ? '' : current)
         setStatus('可输入')
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
@@ -1238,7 +1247,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       {displayMenu}
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
-      {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
+      {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭终端提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
       <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; if (directInputRef.current) termRef.current?.focus() }}/>
       {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
       {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">

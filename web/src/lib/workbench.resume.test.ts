@@ -151,3 +151,45 @@ it('reports whether terminal input was actually written to the connection', asyn
   const frames = socket.send.mock.calls.filter(([data]) => data instanceof Uint8Array)
   expect(frames).toHaveLength(1)
 })
+
+it('waits longer for a pong while requests are still in flight, up to the total limit', async () => {
+  const socket = FakeSocket.instances[0]
+  socket.onopen?.()
+  // 慢主机还在处理 terminal.open/call，pong 排在它们之后。
+  void client.call('pane.read', {}).catch(() => {})
+  comeBack()
+  await vi.advanceTimersByTimeAsync(4000)
+  expect(FakeSocket.instances).toHaveLength(1)
+  expect(socket.pings()).toBe(2)
+  // 第一个请求 15s 超时前再发一个，保持始终有请求未完成。
+  await vi.advanceTimersByTimeAsync(10_000)
+  void client.call('pane.read', {}).catch(() => {})
+  await vi.advanceTimersByTimeAsync(15_999)
+  expect(FakeSocket.instances).toHaveLength(1)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(socket.close).toHaveBeenCalledWith(1000, 'retry')
+  expect(FakeSocket.instances).toHaveLength(2)
+})
+
+it('drops the old connection state when retryNow replaces the socket', async () => {
+  const socket = FakeSocket.instances[0]
+  socket.onopen?.()
+  const opening = client.openTerminal('p1', 80, 24)
+  const request = JSON.parse(socket.send.mock.lastCall![0])
+  socket.receive({ t: 'terminal.opened', id: request.id, pane_id: 'p1', stream_id: 1, stream_epoch: 'e1' })
+  expect(await opening).toBe(1)
+  const closed = vi.fn()
+  client.onTerminal(1, vi.fn(), closed)
+  const pending = client.call('pane.read', {}).catch((reason: Error) => reason.message)
+  client.retryNow()
+  expect(await pending).toBe('连接已断开')
+  expect(client.hasOpenTerminals()).toBe(false)
+  // 旧连接迟到的 close 不再触发任何东西。
+  socket.end(1000)
+  expect(closed).not.toHaveBeenCalled()
+  // 新连接的 stream ID 从 1 重新编号：新流打开前，旧流 ID 不能把输入送进去。
+  const next = FakeSocket.instances[1]
+  next.onopen?.()
+  expect(client.sendInput(1, 'stale stream')).toBe(false)
+  expect(next.send.mock.calls.some(([data]) => data instanceof Uint8Array)).toBe(false)
+})
