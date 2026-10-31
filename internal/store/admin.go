@@ -36,7 +36,7 @@ type UserFilter struct{ Query, Role, Status string }
 
 func (s *Store) ListUsers(ctx context.Context, page Page, filters ...UserFilter) ([]AdminUser, error) {
 	page = page.Bounded()
-	query := `SELECT u.id,u.email,u.display_name,u.role,u.disabled,u.created_at,
+	query := `SELECT u.id,u.email,u.display_name,u.role,u.disabled,u.must_change_password,u.created_at,
  (SELECT COUNT(*) FROM sessions s WHERE s.user_id=u.id AND julianday(s.expires_at)>julianday('now') AND u.disabled=0)
  FROM users u WHERE 1=1`
 	args := []any{}
@@ -66,7 +66,7 @@ func (s *Store) ListUsers(ctx context.Context, page Page, filters ...UserFilter)
 	for rows.Next() {
 		var item AdminUser
 		var created string
-		if err := rows.Scan(&item.ID, &item.Email, &item.DisplayName, &item.Role, &item.Disabled, &created, &item.ActiveSessions); err != nil {
+		if err := rows.Scan(&item.ID, &item.Email, &item.DisplayName, &item.Role, &item.Disabled, &item.MustChangePassword, &created, &item.ActiveSessions); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = parseTime(created)

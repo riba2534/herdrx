@@ -45,12 +45,15 @@ func (s *Store) BootstrapUser(ctx context.Context, user User, events ...AuditEve
 	return tx.Commit()
 }
 
+// userColumns matches the field order read by scanUser.
+const userColumns = "id,email,password_hash,display_name,role,disabled,must_change_password,created_at"
+
 func (s *Store) UserByEmail(ctx context.Context, email string) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT id,email,password_hash,display_name,role,disabled,created_at FROM users WHERE email=?`, strings.ToLower(strings.TrimSpace(email))))
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE email=?`, strings.ToLower(strings.TrimSpace(email))))
 }
 
 func (s *Store) UserByID(ctx context.Context, id string) (User, error) {
-	return scanUser(s.db.QueryRowContext(ctx, `SELECT id,email,password_hash,display_name,role,disabled,created_at FROM users WHERE id=?`, id))
+	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userColumns+` FROM users WHERE id=?`, id))
 }
 
 func (s *Store) CreateSession(ctx context.Context, session Session, tokenHash []byte, userAgent, remoteIP string, events ...AuditEvent) error {
@@ -83,13 +86,13 @@ const timeFormat = "2006-01-02T15:04:05.999999999Z07:00"
 func (s *Store) SessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, User, error) {
 	var session Session
 	var user User
-	var disabled int
+	var disabled, mustChange int
 	var expires, created string
 	err := s.db.QueryRowContext(ctx, `
-SELECT s.id,s.user_id,s.csrf_token,s.expires_at,u.id,u.email,u.password_hash,u.display_name,u.role,u.disabled,u.created_at
+SELECT s.id,s.user_id,s.csrf_token,s.expires_at,u.id,u.email,u.password_hash,u.display_name,u.role,u.disabled,u.must_change_password,u.created_at
 FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`, tokenHash).Scan(
 		&session.ID, &session.UserID, &session.CSRFToken, &expires,
-		&user.ID, &user.Email, &user.PasswordHash, &user.DisplayName, &user.Role, &disabled, &created)
+		&user.ID, &user.Email, &user.PasswordHash, &user.DisplayName, &user.Role, &disabled, &mustChange, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, User{}, ErrNotFound
 	}
@@ -98,6 +101,7 @@ FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?`, tokenHash)
 	}
 	session.ExpiresAt = parseTime(expires)
 	user.Disabled = disabled != 0
+	user.MustChangePassword = mustChange != 0
 	user.CreatedAt = parseTime(created)
 	return session, user, nil
 }

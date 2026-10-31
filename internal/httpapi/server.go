@@ -184,6 +184,7 @@ func (a *API) Handler() http.Handler {
 		router.Group(func(router chi.Router) {
 			router.Use(a.authenticate)
 			a.registerAuthenticatedMeRoutes(router)
+			a.registerPasswordRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
 			router.Route("/agents", a.agentRoutes)
@@ -239,6 +240,12 @@ func (a *API) authenticate(next http.Handler) http.Handler {
 		session, user, err := a.lookupSession(request)
 		if err != nil {
 			a.authenticationError(writer, err)
+			return
+		}
+		// One gate for every authenticated surface, WebSocket upgrades and
+		// voice included, so no route can forget the forced password change.
+		if user.MustChangePassword && !passwordChangeExempt(request) {
+			passwordChangeRequired(writer)
 			return
 		}
 		lease, err := a.access.attach(request.Context(), user.ID, session.ID)
