@@ -27,6 +27,8 @@ import { Button, StatusDot } from './ui'
 // fall back to the cropped fixed-size view this component once shipped.
 const pageVisible = () => document.visibilityState !== 'hidden'
 const defaultDisplay: TerminalDisplay = { ...DEFAULT_DISPLAY.desktop }
+// 终端输入没有真正发出时的统一提示：断线期间的输入不暂存、不补发。
+const INPUT_NOT_SENT = '终端未连接，输入未发送，请等待重连后重新输入'
 // Coalesce a controller's viewport changes into one remote resize: agents such
 // as Claude Code and Codex repaint their whole transcript on every SIGWINCH.
 const RESIZE_SETTLE_MS = 250
@@ -372,14 +374,15 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (historyRef.current.active) returnToLiveRef.current()
     revealCursorRef.current()
     if (streamRef.current == null) {
-      if (streamOpenedRef.current) setHistoryError('终端未连接，输入未发送，请等待重连后重新输入')
+      if (streamOpenedRef.current) setHistoryError(INPUT_NOT_SENT)
       else if (pendingInputSizeRef.current + data.length <= 32 * 1024) {
         pendingInputRef.current.push(data)
         pendingInputSizeRef.current += data.length
       }
       return
     }
-    client.sendInput(streamRef.current, data)
+    // 主机连接断开后、新流打开前 streamRef 仍是旧流，发送会失败：同样只提示，不暂存。
+    if (!client.sendInput(streamRef.current, data)) setHistoryError(INPUT_NOT_SENT)
   }
 
   // Herdr 按键接口（如 Shift+Enter）不经过终端流：硬件按键和键栏粘滞修饰键共用这一处。
@@ -906,7 +909,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         }, failed)
         fitRef.current() // The viewport may have changed while opening the stream.
         if (!inputBlockedRef.current && pendingInputRef.current.length > 0) {
-          for (const data of pendingInputRef.current) client.sendInput(streamID, data)
+          if (!pendingInputRef.current.every((data) => client.sendInput(streamID, data))) setHistoryError(INPUT_NOT_SENT)
           pendingInputRef.current = []
           pendingInputSizeRef.current = 0
         }

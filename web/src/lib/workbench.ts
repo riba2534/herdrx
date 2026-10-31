@@ -281,9 +281,11 @@ export class WorkbenchClient {
     }
   }
 
+  /** 返回输入是否真的写入了连接；连接未就绪或流已不在当前连接上时不发送，也不暂存。 */
   sendInput(streamID: number, data: string | Uint8Array) {
+    if (!this.terminalStreams.has(streamID)) return false
     const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-    this.sendFrame(OP_INPUT, streamID, 0n, payload)
+    return this.sendFrame(OP_INPUT, streamID, 0n, payload)
   }
 
   supportsTerminalControl() {
@@ -598,7 +600,7 @@ export class WorkbenchClient {
   }
 
   private sendFrame(opcode: number, streamID: number, seq: bigint, payload: Uint8Array) {
-    if (this.socket?.readyState !== WebSocket.OPEN) return
+    if (this.socket?.readyState !== WebSocket.OPEN) return false
     const frame = new Uint8Array(HEADER_SIZE + payload.byteLength)
     const view = new DataView(frame.buffer)
     view.setUint8(0, KIND)
@@ -608,6 +610,7 @@ export class WorkbenchClient {
     view.setBigUint64(8, seq, true)
     frame.set(payload, HEADER_SIZE)
     this.socket.send(frame)
+    return true
   }
 
   private emitState(state: ConnectionState, message?: string, retryAt = this.nextRetryAt) {

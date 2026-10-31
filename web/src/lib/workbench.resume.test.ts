@@ -134,3 +134,20 @@ it('wakes every host client and stops listening after dispose', async () => {
   await vi.advanceTimersByTimeAsync(60_000)
   expect(FakeSocket.instances).toHaveLength(4)
 })
+
+it('reports whether terminal input was actually written to the connection', async () => {
+  const socket = FakeSocket.instances[0]
+  socket.onopen?.()
+  const opening = client.openTerminal('p1', 80, 24)
+  const request = JSON.parse(socket.send.mock.lastCall![0])
+  socket.receive({ t: 'terminal.opened', id: request.id, pane_id: 'p1', stream_id: 7, stream_epoch: 'e1' })
+  expect(await opening).toBe(7)
+  expect(client.sendInput(7, 'live')).toBe(true)
+  expect(client.sendInput(8, 'unknown stream')).toBe(false)
+  socket.readyState = 3
+  expect(client.sendInput(7, 'closing socket')).toBe(false)
+  socket.end(1006)
+  expect(client.sendInput(7, 'after close')).toBe(false)
+  const frames = socket.send.mock.calls.filter(([data]) => data instanceof Uint8Array)
+  expect(frames).toHaveLength(1)
+})
