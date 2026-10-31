@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,9 +62,18 @@ func dialStatus(t *testing.T, srv *httptest.Server, client *http.Client) int {
 	return response.StatusCode
 }
 
+func TestPasswordLengthCountsCharacters(t *testing.T) {
+	if validatePassword("密码密码") == nil {
+		t.Fatal("four CJK characters (12 bytes) passed the 12-character rule")
+	}
+	if err := validatePassword("这是一个十二个字的新密码"); err != nil {
+		t.Fatalf("twelve CJK characters rejected: %v", err)
+	}
+}
+
 func TestChangePasswordValidatesAndKeepsOnlyCurrentLogin(t *testing.T) {
 	calls := fakeHerdrSocket(t)
-	_, db, srv, current, info := authFixture(t)
+	a, db, srv, current, info := authFixture(t)
 	csrf := info["csrf_token"].(string)
 	id := info["user"].(map[string]any)["id"].(string)
 	if err := db.CreateHost(context.Background(), store.Host{ID: "hst_fixture", OwnerID: id, Name: "Isolated fixture", Transport: "local", Port: 22}); err != nil {
@@ -74,6 +84,11 @@ func TestChangePasswordValidatesAndKeepsOnlyCurrentLogin(t *testing.T) {
 	defer cancel()
 	otherSocket := fixtureSocket(t, ctx, srv, other)
 	currentSocket := fixtureSocket(t, ctx, srv, current)
+	background, err := a.access.attach(ctx, id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer background.release()
 
 	url := srv.URL + "/api/me/password"
 	postJSON(t, current, url, "", map[string]string{"current_password": fixtureAdminPassword, "new_password": fixtureNewPassword}, 403)
@@ -84,6 +99,7 @@ func TestChangePasswordValidatesAndKeepsOnlyCurrentLogin(t *testing.T) {
 		{"", fixtureNewPassword, "invalid_current_password"},
 		{fixtureAdminPassword, "too-short", "invalid_password"},
 		{fixtureAdminPassword, fixtureAdminPassword, "password_unchanged"},
+		{fixtureAdminPassword, "密码密码", "invalid_password"},
 	} {
 		result := postJSON(t, current, url, csrf, map[string]string{"current_password": tc.current, "new_password": tc.next}, 400)
 		if result["code"] != tc.code {
@@ -95,6 +111,11 @@ func TestChangePasswordValidatesAndKeepsOnlyCurrentLogin(t *testing.T) {
 		t.Fatalf("change result %v", result)
 	}
 	requestJSON(t, other, "GET", srv.URL+"/api/me", "", nil, 401)
+	select {
+	case <-background.ctx.Done():
+	default:
+		t.Fatal("background push lease survived the password change")
+	}
 	requestJSON(t, current, "GET", srv.URL+"/api/me", "", nil, 200)
 	requestJSON(t, current, "GET", srv.URL+"/api/hosts/", "", nil, 200)
 	for {
@@ -180,7 +201,7 @@ func TestConcurrentPasswordChangesOnlyOneWins(t *testing.T) {
 }
 
 func TestAdminResetForcesPasswordChange(t *testing.T) {
-	_, _, srv, admin, info := authFixture(t)
+	a, _, srv, admin, info := authFixture(t)
 	adminCSRF := info["csrf_token"].(string)
 	adminID := info["user"].(map[string]any)["id"].(string)
 	member, registered := registerMember(t, srv, admin, adminCSRF)
@@ -192,7 +213,13 @@ func TestAdminResetForcesPasswordChange(t *testing.T) {
 	if result := postJSON(t, admin, srv.URL+"/api/admin/users/"+adminID+"/password-reset", adminCSRF, nil, 409); result["code"] != "self_reset" {
 		t.Fatalf("self reset %v", result)
 	}
+	var hashes atomic.Int32
+	hash := a.hashPassword
+	a.hashPassword = func(password string) (string, error) { hashes.Add(1); return hash(password) }
 	postJSON(t, admin, srv.URL+"/api/admin/users/usr_missing/password-reset", adminCSRF, nil, 404)
+	if hashes.Load() != 0 {
+		t.Fatal("reset of an unknown user spent a password hash")
+	}
 	reset := postJSON(t, admin, srv.URL+"/api/admin/users/"+memberID+"/password-reset", adminCSRF, nil, 200)
 	temporary, _ := reset["temporary_password"].(string)
 	if len(temporary) < minPasswordLength || reset["user_id"] != memberID {

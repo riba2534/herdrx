@@ -21,6 +21,14 @@ func TestChangePasswordKeepsOnlyCurrentLoginAndIsConditional(t *testing.T) {
 	ctx := context.Background()
 	passwordSessions(t, s, "member", "current", "other-a", "other-b")
 	passwordSessions(t, s, "admin", "admin-login")
+	for _, sub := range []PushSubscription{
+		{ID: "lost-device", UserID: "member", Endpoint: "https://push.example.test/lost", P256DH: "test", Auth: "test"},
+		{ID: "admin-device", UserID: "admin", Endpoint: "https://push.example.test/admin", P256DH: "test", Auth: "test"},
+	} {
+		if err := s.UpsertPushSubscription(ctx, sub); err != nil {
+			t.Fatal(err)
+		}
+	}
 	revoked, err := s.ChangePassword(ctx, "member", "current", "test-only", "test-only:new", AuditEvent{UserID: "member", Action: "password.changed"})
 	if err != nil || revoked != 2 {
 		t.Fatalf("change: revoked=%d err=%v", revoked, err)
@@ -31,6 +39,12 @@ func TestChangePasswordKeepsOnlyCurrentLoginAndIsConditional(t *testing.T) {
 	}
 	if admin, _ := s.ListSessions(ctx, "admin", Page{}); len(admin) != 1 {
 		t.Fatal("another user's login was revoked")
+	}
+	var memberSubs, adminSubs int
+	s.db.QueryRow(`SELECT COUNT(*) FROM push_subscriptions WHERE user_id='member'`).Scan(&memberSubs)
+	s.db.QueryRow(`SELECT COUNT(*) FROM push_subscriptions WHERE user_id='admin'`).Scan(&adminSubs)
+	if memberSubs != 0 || adminSubs != 1 {
+		t.Fatalf("push subscriptions after change: member=%d admin=%d", memberSubs, adminSubs)
 	}
 	// A second change based on the stale verified hash must lose.
 	if _, err := s.ChangePassword(ctx, "member", "current", "test-only", "test-only:other", AuditEvent{Action: "password.changed"}); !errors.Is(err, ErrConflict) {

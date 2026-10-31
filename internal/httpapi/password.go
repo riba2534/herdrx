@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/riba2534/herdrx/internal/secure"
@@ -15,7 +16,7 @@ import (
 const minPasswordLength = 12
 
 func validatePassword(password string) error {
-	if len(password) < minPasswordLength {
+	if utf8.RuneCountInString(password) < minPasswordLength {
 		return &fieldError{fmt.Sprintf("密码至少需要 %d 个字符", minPasswordLength)}
 	}
 	return nil
@@ -38,12 +39,12 @@ func passwordChangeRequired(w http.ResponseWriter) {
 	writeError(w, http.StatusForbidden, "password_change_required", "管理员已重置你的密码，请先修改密码后再继续使用")
 }
 
-// changeExcept ends every Web access lease of the user except those of
-// keepSessionID. Background leases (push monitors) are not affected; the
-// account stays enabled. Like change, it never touches Herdr itself.
+// changeExcept ends every access lease of the user except those of
+// keepSessionID, background push leases included because the change also
+// removes the user's push subscriptions. Like change, it never touches Herdr.
 func (m *accessManager) changeExcept(userID, keepSessionID string, mutate func() error) error {
 	return m.changeMatching(userID, mutate, func(lease *accessLease) bool {
-		return lease.sessionID != "" && lease.sessionID != keepSessionID
+		return lease.sessionID != keepSessionID
 	})
 }
 
@@ -132,6 +133,11 @@ func (a *API) resetUserPassword(w http.ResponseWriter, r *http.Request) {
 	actor := userFromContext(r.Context()).ID
 	if id == actor {
 		a.adminError(w, store.ErrSelfReset)
+		return
+	}
+	// Reject unknown targets before Argon2 so they cannot consume hash slots.
+	if _, err := a.store.UserByID(r.Context(), id); err != nil {
+		a.adminError(w, err)
 		return
 	}
 	temporary, err := secure.Token(18)
