@@ -209,7 +209,7 @@ describe('TerminalPane paste interception', () => {
     const client = new WorkbenchClient('hst_test')
     const open = vi.spyOn(client, 'openTerminal').mockResolvedValueOnce(7).mockResolvedValue(8)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
-    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockReturnValue(true)
     const call = vi.spyOn(client, 'call')
     let send: ((data: string) => void) | null = null
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} onControlReady={(handler) => { send = handler }} theme={{}} enhancedContrast={false}/>)
@@ -229,11 +229,44 @@ describe('TerminalPane paste interception', () => {
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
   })
+  it('sends input typed before the first open, but never replays input typed while reconnecting', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const resolvers: Array<(id: number) => void> = []
+    vi.spyOn(client, 'openTerminal').mockImplementation(() => new Promise<number>((resolve) => { resolvers.push(resolve) }))
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockReturnValue(true)
+    let send: ((data: string) => void) | null = null
+    const props = { client, pane: mockPane, active: true, onFocus: () => {}, onControlReady: (handler: ((data: string) => void) | null) => { send = handler }, theme: {}, enhancedContrast: false }
+    const view = render(<TerminalPane {...props} connectionEpoch={1}/>)
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    // 首次打开前的输入保留原有体验：流打开后发送一次。
+    act(() => send!('typed early'))
+    expect(input).not.toHaveBeenCalled()
+    await act(async () => { resolvers[0](7) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    expect(input.mock.calls).toEqual([[7, 'typed early']])
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    // 主机连接已断开但新流还没打开：旧流发送失败，同样提示且不暂存。
+    input.mockReturnValueOnce(false)
+    act(() => send!('typed on a dropped socket'))
+    expect(screen.getByRole('alert')).toHaveTextContent('终端未连接，输入未发送')
+    fireEvent.click(screen.getByRole('button', { name: '关闭历史错误提示' }))
+    // 主机连接重建：断流期间的输入既不排队也不补发，并提示用户。
+    view.rerender(<TerminalPane {...props} connectionEpoch={2}/>)
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    act(() => send!('typed while reconnecting'))
+    expect(screen.getByRole('alert')).toHaveTextContent('终端未连接，输入未发送')
+    await act(async () => { resolvers[1](8) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(2))
+    expect(input.mock.calls).toEqual([[7, 'typed early'], [7, 'typed on a dropped socket']])
+    act(() => send!('typed after reconnect'))
+    expect(input).toHaveBeenLastCalledWith(8, 'typed after reconnect')
+  })
   it('passes typed input through transformInput and sends nothing when it returns an empty string', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
-    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockReturnValue(true)
     // 键栏粘滞修饰键的替身：a 变成 Ctrl+A，回车改走 Herdr 按键接口（返回空串）。
     const transformInput = (data: string) => data === 'a' ? '\x01' : data === '\r' ? '' : data
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false} transformInput={transformInput}/>)
@@ -246,7 +279,7 @@ describe('TerminalPane paste interception', () => {
     let resolveOpen: (id: number) => void = () => {}
     vi.spyOn(client, 'openTerminal').mockImplementation(() => new Promise<number>((resolve) => { resolveOpen = resolve }))
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
-    vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    vi.spyOn(client, 'sendInput').mockReturnValue(true)
     const call = vi.spyOn(client, 'call').mockResolvedValue({})
     let sendKey: ((key: string) => void) | undefined
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} onControlReady={(_send, key) => { sendKey = key }} theme={{}} enhancedContrast={false}/>)
@@ -891,7 +924,7 @@ describe('TerminalPane paste interception', () => {
   it('sends Shift+Enter through pane.send_keys without submitting or duplicating keyup', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)
-    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockReturnValue(true)
     const call = vi.spyOn(client, 'call').mockResolvedValue({})
     const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => true)
     render(<TerminalPane client={client} pane={mockPane} connectionEpoch={1} active onFocus={() => {}} theme={{}} enhancedContrast={false}/>)

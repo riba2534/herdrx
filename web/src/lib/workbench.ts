@@ -1,6 +1,7 @@
 import type { Snapshot } from '../types'
 import { APIError, api, authenticationGeneration, invalidateAuthentication } from './api'
 import type { ScreenFrame } from './ansiScreen'
+import { installForegroundResume } from './foregroundResume'
 
 const KIND = 0x74
 const VERSION = 1
@@ -11,6 +12,8 @@ const OP_INPUT = 3
 const OP_RELEASE = 6
 const FLAG_FULL = 1
 const pageVisible = () => document.visibilityState !== 'hidden'
+/** 回前台探测等待 pong 的默认时长；超时视为半开连接。 */
+export const RESUME_PROBE_TIMEOUT_MS = 4000
 
 export type ConnectionState = 'connecting' | 'ready' | 'degraded' | 'offline'
 export type TerminalControlState = { pane_id: string; terminal_id?: string; state: 'available' | 'pending' | 'owned' | 'other' | 'blocked'; stream_id?: number; stream_epoch?: string; control_generation?: string; reason?: string }
@@ -100,10 +103,12 @@ export class WorkbenchClient {
   private nextControlAttempt = 0
   private handleVisibility = () => { if (!pageVisible()) this.releaseAllControls() }
   private handlePageHide = () => this.releaseAllControls()
+  private uninstallResume: (() => void) | null = null
+  private probeTimer = 0
   private deviceID = persistentID(localStorage, 'herdrx.device.v1')
   private browserID = persistentID(sessionStorage, 'herdrx.browser.v1')
 
-  constructor(private hostID: string) {}
+  constructor(private hostID: string, private options: { probeTimeoutMs?: number } = {}) {}
 
   getHostID() {
     return this.hostID
@@ -127,7 +132,35 @@ export class WorkbenchClient {
     this.authGeneration = authenticationGeneration()
     document.addEventListener('visibilitychange', this.handleVisibility)
     window.addEventListener('pagehide', this.handlePageHide)
+    this.uninstallResume ??= installForegroundResume(() => this.resume())
     this.openSocket()
+  }
+
+  /**
+   * 回到前台（切回 App、网络恢复、设备唤醒）时调用。退避等待中立即重连；
+   * 已连接则发 ping 探测，超时没有任何消息才视为半开连接并重建。
+   * 不可重试的状态（登录失效、协议不兼容、主机拒绝）不会因此重连。
+   */
+  private resume() {
+    if (this.disposed) return
+    const socket = this.socket
+    if (!socket) {
+      // 只有 afterDisconnect 安排了退避重连时 nextRetryAt 才非零。
+      if (this.nextRetryAt) this.retryNow()
+      return
+    }
+    if (socket.readyState !== WebSocket.OPEN || this.probeTimer) return
+    this.sendJSON({ t: 'ping' })
+    // 换连接、断开和 dispose 都会清掉这个定时器，触发时 socket 仍是当前连接。
+    this.probeTimer = window.setTimeout(() => {
+      this.probeTimer = 0
+      this.retryNow()
+    }, this.options.probeTimeoutMs ?? RESUME_PROBE_TIMEOUT_MS)
+  }
+
+  private clearProbe() {
+    window.clearTimeout(this.probeTimer)
+    this.probeTimer = 0
   }
 
   retryNow() {
@@ -157,6 +190,9 @@ export class WorkbenchClient {
     window.clearInterval(this.controlTimer)
     document.removeEventListener('visibilitychange', this.handleVisibility)
     window.removeEventListener('pagehide', this.handlePageHide)
+    this.uninstallResume?.()
+    this.uninstallResume = null
+    this.clearProbe()
     this.socket?.close(1000, 'unmount')
     this.socket = null
     for (const request of this.pending.values()) {
@@ -245,9 +281,11 @@ export class WorkbenchClient {
     }
   }
 
+  /** 返回输入是否真的写入了连接；连接未就绪或流已不在当前连接上时不发送，也不暂存。 */
   sendInput(streamID: number, data: string | Uint8Array) {
+    if (!this.terminalStreams.has(streamID)) return false
     const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-    this.sendFrame(OP_INPUT, streamID, 0n, payload)
+    return this.sendFrame(OP_INPUT, streamID, 0n, payload)
   }
 
   supportsTerminalControl() {
@@ -346,6 +384,7 @@ export class WorkbenchClient {
     this.connectionErrorCode = ''
     this.retryAfter = 0
     this.nextRetryAt = 0
+    this.clearProbe()
     this.emitState('connecting')
     this.resetControls()
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -368,6 +407,8 @@ export class WorkbenchClient {
     }
     socket.onmessage = (event) => {
       if (this.disposed || socket !== this.socket) return
+      // 收到任何消息都说明连接仍然存活，回前台探测到此结束。
+      this.clearProbe()
       if (typeof event.data === 'string') this.handleJSON(event.data)
       else if (event.data instanceof ArrayBuffer) this.handleBinary(event.data)
     }
@@ -376,6 +417,7 @@ export class WorkbenchClient {
       this.socket = null
       window.clearInterval(this.presenceTimer)
       window.clearInterval(this.controlTimer)
+      this.clearProbe()
       this.resetControls()
       this.emitState('offline', this.connectionError || event.reason || '连接已断开')
       for (const request of this.pending.values()) {
@@ -558,7 +600,7 @@ export class WorkbenchClient {
   }
 
   private sendFrame(opcode: number, streamID: number, seq: bigint, payload: Uint8Array) {
-    if (this.socket?.readyState !== WebSocket.OPEN) return
+    if (this.socket?.readyState !== WebSocket.OPEN) return false
     const frame = new Uint8Array(HEADER_SIZE + payload.byteLength)
     const view = new DataView(frame.buffer)
     view.setUint8(0, KIND)
@@ -568,6 +610,7 @@ export class WorkbenchClient {
     view.setBigUint64(8, seq, true)
     frame.set(payload, HEADER_SIZE)
     this.socket.send(frame)
+    return true
   }
 
   private emitState(state: ConnectionState, message?: string, retryAt = this.nextRetryAt) {
