@@ -204,12 +204,8 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 		release()
 	}
 	if !valid {
-		timer := time.NewTimer(150 * time.Millisecond)
-		defer timer.Stop()
-		select {
-		case <-r.Context().Done():
+		if !failedCredentialDelay(r.Context()) {
 			return
-		case <-timer.C:
 		}
 		a.store.Audit(r.Context(), "", "login.failed", "", "", ip, "{}")
 		writeError(w, 401, "invalid_credentials", "邮箱或密码不正确")
@@ -264,10 +260,7 @@ func validateNewUser(input *credentialsRequest) error {
 	if input.DisplayName == "" || utf8.RuneCountInString(input.DisplayName) > 80 {
 		return &fieldError{"显示名称需要 1–80 个字符"}
 	}
-	if len(input.Password) < 12 {
-		return &fieldError{"密码至少需要 12 个字符"}
-	}
-	return nil
+	return validatePassword(input.Password)
 }
 
 func (a *API) createUserRecord(input credentialsRequest, role string) (store.User, error) {
@@ -299,7 +292,8 @@ func userError(w http.ResponseWriter, err error) {
 
 func (a *API) me(w http.ResponseWriter, r *http.Request) {
 	session := sessionFromContext(r.Context())
-	writeJSON(w, 200, map[string]any{"user": userFromContext(r.Context()), "csrf_token": session.CSRFToken, "session_id": session.ID})
+	user := userFromContext(r.Context())
+	writeJSON(w, 200, map[string]any{"user": user, "csrf_token": session.CSRFToken, "session_id": session.ID, "must_change_password": user.MustChangePassword})
 }
 
 func (a *API) clearCookie(w http.ResponseWriter) {

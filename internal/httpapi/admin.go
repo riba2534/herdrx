@@ -21,6 +21,7 @@ func (a *API) adminRoutes(r chi.Router) {
 	r.Get("/users", a.listUsers)
 	r.With(a.requireCSRF, requireJSON).Patch("/users/{userID}", a.setUserDisabled)
 	r.Get("/users/{userID}/sessions", a.listUserSessions)
+	r.With(a.requireCSRF).Post("/users/{userID}/password-reset", a.resetUserPassword)
 	r.With(a.requireCSRF).Delete("/users/{userID}/sessions", a.revokeUserSessions)
 	r.With(a.requireCSRF).Delete("/users/{userID}/sessions/{sessionID}", a.revokeUserSessions)
 	r.Get("/invites", a.listInvites)
@@ -76,6 +77,8 @@ func (a *API) adminError(w http.ResponseWriter, err error) {
 		writeError(w, 403, "admin_required", "管理员权限已失效，请重新登录")
 	case errors.Is(err, store.ErrSelfDisable):
 		writeError(w, 409, "self_disable", "不能禁用当前登录的管理员")
+	case errors.Is(err, store.ErrSelfReset):
+		writeError(w, 409, "self_reset", "不能重置自己的密码，请在账号设置中修改密码")
 	case errors.Is(err, store.ErrLastAdmin):
 		writeError(w, 409, "last_admin", "必须保留至少一位可用管理员")
 	case errors.Is(err, store.ErrConflict):

@@ -27,6 +27,8 @@ import { Button, StatusDot } from './ui'
 // fall back to the cropped fixed-size view this component once shipped.
 const pageVisible = () => document.visibilityState !== 'hidden'
 const defaultDisplay: TerminalDisplay = { ...DEFAULT_DISPLAY.desktop }
+// 终端输入没有真正发出时的统一提示：断线期间的输入不暂存、不补发。
+const INPUT_NOT_SENT = '终端未连接，输入未发送，请等待重连后重新输入'
 // Coalesce a controller's viewport changes into one remote resize: agents such
 // as Claude Code and Codex repaint their whole transcript on every SIGWINCH.
 const RESIZE_SETTLE_MS = 250
@@ -343,8 +345,12 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     })
   }
   const searchRef = useRef<SearchAddon | null>(null)
+  // 只在本组件首次打开终端流之前暂存输入；流打开过以后，断流/重连期间的输入一律不暂存、不补发。
+  // 断线前后远端状态不确定（之前的输入是否送达、屏幕是否已变化），重连后自动补发的按键
+  // 可能落在用户没看到的界面上，所以只提示，让用户看清当前画面后再输入。
   const pendingInputRef = useRef<string[]>([])
   const pendingInputSizeRef = useRef(0)
+  const streamOpenedRef = useRef(false)
   const revealCursorRef = useRef<() => void>(() => {})
   revealCursorRef.current = () => {
     const terminal = termRef.current, viewport = viewportRef.current
@@ -367,17 +373,16 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (inputBlockedRef.current) return
     if (historyRef.current.active) returnToLiveRef.current()
     revealCursorRef.current()
-    const queue = () => {
-      if (pendingInputSizeRef.current + data.length <= 32 * 1024) {
+    if (streamRef.current == null) {
+      if (streamOpenedRef.current) setHistoryError(INPUT_NOT_SENT)
+      else if (pendingInputSizeRef.current + data.length <= 32 * 1024) {
         pendingInputRef.current.push(data)
         pendingInputSizeRef.current += data.length
       }
-    }
-    if (streamRef.current == null) {
-      queue()
       return
     }
-    client.sendInput(streamRef.current, data)
+    // 主机连接断开后、新流打开前 streamRef 仍是旧流，发送会失败：同样只提示，不暂存。
+    if (!client.sendInput(streamRef.current, data)) setHistoryError(INPUT_NOT_SENT)
   }
 
   // Herdr 按键接口（如 Shift+Enter）不经过终端流：硬件按键和键栏粘滞修饰键共用这一处。
@@ -804,6 +809,13 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     return () => { unsubscribe(); unsubscribeResize() }
   }, [client, pane.pane_id, connectionEpoch])
 
+  // 换到另一个 pane 等同于重新首开：旧 pane 的暂存输入不能发到新 pane。
+  useEffect(() => () => {
+    streamOpenedRef.current = false
+    pendingInputRef.current = []
+    pendingInputSizeRef.current = 0
+  }, [pane.pane_id])
+
   useEffect(() => {
     if ((compact && !active) || overlayMode || !connected) releaseSizing()
   }, [active, compact, overlayMode, connected])
@@ -859,6 +871,9 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         const streamID = await client.openTerminal(pane.pane_id, cols, rows)
         if (cancelled) { client.closeTerminal(streamID); return }
         streamRef.current = streamID
+        streamOpenedRef.current = true
+        // 流已恢复，断线期间的“输入未发送”提示随之失效；其他提示保留。
+        setHistoryError((current) => current === INPUT_NOT_SENT ? '' : current)
         setStatus('可输入')
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
@@ -903,7 +918,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         }, failed)
         fitRef.current() // The viewport may have changed while opening the stream.
         if (!inputBlockedRef.current && pendingInputRef.current.length > 0) {
-          for (const data of pendingInputRef.current) client.sendInput(streamID, data)
+          if (!pendingInputRef.current.every((data) => client.sendInput(streamID, data))) setHistoryError(INPUT_NOT_SENT)
           pendingInputRef.current = []
           pendingInputSizeRef.current = 0
         }
@@ -1232,7 +1247,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
       {displayMenu}
       {!streamFailed && status !== '可输入' && <div className="terminal-pending" role="status">{status}</div>}
       {streamFailed && <div className="terminal-connection-feedback" role="alert" aria-label="终端连接错误"><span>{status}</span><Button className="button-primary" onClick={() => setStreamGeneration((value) => value + 1)}>重连终端</Button></div>}
-      {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭历史错误提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
+      {historyError && <div className="image-paste-feedback image-paste-error" role="alert"><span>{historyError}</span><button aria-label="关闭终端提示" onClick={() => setHistoryError('')}><X size={14}/></button></div>}
       <Input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden aria-label="选择图片" onChange={(event) => { uploadImagesRef.current(Array.from(event.target.files || [])); event.target.value = ''; if (directInputRef.current) termRef.current?.focus() }}/>
       {copyStatus && <div className="image-paste-feedback" role="status" aria-label="复制提示"><span>{copyStatus}</span><button aria-label="关闭复制提示" onClick={() => setCopyStatus('')}><X size={14}/></button></div>}
       {imageFeedback && <div className={`image-paste-feedback ${imageFeedback.failed ? 'image-paste-error' : ''}`} role={imageFeedback.failed ? 'alert' : 'status'} aria-label="图片粘贴提示">

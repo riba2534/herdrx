@@ -88,6 +88,8 @@ export const api = {
   me: (init?: RequestInit) => request<{ user: User; csrf_token: string; session_id: string }>('/api/me', init),
   workbenchSession: () => workbenchPositionRequest<{ session: WorkbenchSession | null }>(),
   saveWorkbenchSession: (input: WorkbenchSession & { writer_id?: string; sequence?: number }) => workbenchPositionRequest<{ session: WorkbenchSession }>({ method: 'PUT', body: JSON.stringify(input), keepalive: true }),
+  changePassword: (input: { current_password: string; new_password: string }) =>
+    request<{ ok: boolean; user: User; revoked_sessions: number }>('/api/me/password', { method: 'POST', body: JSON.stringify(input) }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
   hostCapabilities: (id: string) => request<{ capabilities: HerdrCapabilities }>(`/api/hosts/${encodeURIComponent(id)}/capabilities`),
   startHerdr: (id: string) => request<{ result: HerdrStartResult }>(`/api/hosts/${encodeURIComponent(id)}/herdr/start`, { method: 'POST' }),
@@ -116,6 +118,7 @@ export const api = {
   setRegistration: (registration: InstanceSettings['registration'], revision: number) => request<{ settings: InstanceSettings }>('/api/admin/settings', { method: 'PATCH', body: JSON.stringify({ registration, revision }) }),
   adminUsers: (offset = 0, filters: Record<string, string> = {}) => request<Pagination & { users: AdminUser[] }>('/api/admin/users?' + new URLSearchParams({ ...filters, offset: String(offset) })),
   setUserDisabled: (id: string, disabled: boolean) => request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ disabled }) }),
+  resetUserPassword: (id: string) => request<{ user_id: string; temporary_password: string }>(`/api/admin/users/${encodeURIComponent(id)}/password-reset`, { method: 'POST' }),
   adminSessions: (id: string, offset = 0) => request<Pagination & { sessions: LoginSession[] }>(`/api/admin/users/${encodeURIComponent(id)}/sessions?offset=${offset}`),
   revokeSession: (userID: string, sessionID: string) => request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userID)}/sessions/${encodeURIComponent(sessionID)}`, { method: 'DELETE' }),
   revokeAllSessions: (userID: string) => request<{ ok: boolean }>(`/api/admin/users/${encodeURIComponent(userID)}/sessions`, { method: 'DELETE' }),

@@ -139,6 +139,7 @@ button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 .auth-shell { background: var(--ui-background); color: var(--ui-text); }
 .auth-entry { position: relative; padding-top: 100px; padding-bottom: 64px; }
 .auth-topbar { position: absolute; top: 0; left: 0; right: 0; min-height: 44px; padding: 4px clamp(20px, 4vw, 48px); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--ui-border); }
+.auth-topbar-actions { display: flex; align-items: center; gap: 8px; }
 .auth-card { width: min(100%, 400px); }
 .auth-card h1 { font-size: 30px; font-weight: 600; letter-spacing: -.02em; margin: 10px 0; }
 .auth-caption { font-size: 13px; color: var(--ui-accent); margin-bottom: 16px; }
