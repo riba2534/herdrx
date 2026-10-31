@@ -230,12 +230,16 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 	_ = socketWriter.JSON(ctx, map[string]any{"t": "conn", "state": "ready", "path": host.Transport})
 	go session.pollSnapshots()
 	// Ping needs the read loop below to consume the pong, so it starts here.
-	go keepWorkbenchAlive(ctx, connection, readCancel)
+	activity := &readActivity{}
+	go keepWorkbenchAlive(ctx, connection, readCancel, activity)
 	for {
+		activity.busy.Store(false)
 		messageType, encoded, err := connection.Read(readCtx)
 		if err != nil {
 			return
 		}
+		activity.messages.Add(1)
+		activity.busy.Store(true)
 		if lease.check() != nil {
 			return
 		}
@@ -261,9 +265,17 @@ func snapshotFailureMessage(err error) string {
 	return "读取 Herdr 工作区失败，请确认远程主机上的 Herdr 正常运行后点“立即重连”：" + err.Error()
 }
 
+// readActivity tells the keepalive whether the read loop could have seen a
+// pong. Message handling such as terminal.open and call runs synchronously and
+// may wait on a slow remote host, during which pongs stay unread.
+type readActivity struct {
+	busy     atomic.Bool
+	messages atomic.Uint64
+}
+
 // keepWorkbenchAlive only drops the browser's access connection; the handler's
 // normal cleanup detaches observers and never closes Herdr panes or sessions.
-func keepWorkbenchAlive(ctx context.Context, conn *websocket.Conn, cancelRead context.CancelFunc) {
+func keepWorkbenchAlive(ctx context.Context, conn *websocket.Conn, cancelRead context.CancelFunc, activity *readActivity) {
 	interval, timeout := workbenchPingInterval, workbenchPingTimeout
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -273,10 +285,16 @@ func keepWorkbenchAlive(ctx context.Context, conn *websocket.Conn, cancelRead co
 			return
 		case <-ticker.C:
 		}
+		seen := activity.messages.Load()
 		pingCtx, cancel := context.WithTimeout(ctx, timeout)
 		err := conn.Ping(pingCtx)
 		cancel()
 		if err != nil {
+			// A pong timeout leaves the connection usable, so a busy loop or a
+			// message received meanwhile just defers the verdict a cycle.
+			if activity.busy.Load() || activity.messages.Load() != seen {
+				continue
+			}
 			if ctx.Err() == nil {
 				// A dead peer never answers the close handshake; canceling the
 				// blocked read is what tears the socket down.
