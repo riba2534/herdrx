@@ -21,6 +21,13 @@ import (
 
 const maxWSMessage = 8 << 20
 
+// NAT and proxy idle timeouts drop quiet sockets, and a half-open one would
+// hold remote observers until TCP gives up. Variables so tests can shorten them.
+var (
+	workbenchPingInterval = 25 * time.Second
+	workbenchPingTimeout  = 10 * time.Second
+)
+
 type socketWriter struct {
 	mu   sync.Mutex
 	conn *websocket.Conn
@@ -222,11 +229,17 @@ func (a *API) workbench(writer http.ResponseWriter, request *http.Request) {
 	}
 	_ = socketWriter.JSON(ctx, map[string]any{"t": "conn", "state": "ready", "path": host.Transport})
 	go session.pollSnapshots()
+	// Ping needs the read loop below to consume the pong, so it starts here.
+	activity := &readActivity{}
+	go keepWorkbenchAlive(ctx, connection, readCancel, activity)
 	for {
+		activity.busy.Store(false)
 		messageType, encoded, err := connection.Read(readCtx)
 		if err != nil {
 			return
 		}
+		activity.messages.Add(1)
+		activity.busy.Store(true)
 		if lease.check() != nil {
 			return
 		}
@@ -252,6 +265,46 @@ func snapshotFailureMessage(err error) string {
 	return "读取 Herdr 工作区失败，请确认远程主机上的 Herdr 正常运行后点“立即重连”：" + err.Error()
 }
 
+// readActivity tells the keepalive whether the read loop could have seen a
+// pong. Message handling such as terminal.open and call runs synchronously and
+// may wait on a slow remote host, during which pongs stay unread.
+type readActivity struct {
+	busy     atomic.Bool
+	messages atomic.Uint64
+}
+
+// keepWorkbenchAlive only drops the browser's access connection; the handler's
+// normal cleanup detaches observers and never closes Herdr panes or sessions.
+func keepWorkbenchAlive(ctx context.Context, conn *websocket.Conn, cancelRead context.CancelFunc, activity *readActivity) {
+	interval, timeout := workbenchPingInterval, workbenchPingTimeout
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		seen := activity.messages.Load()
+		pingCtx, cancel := context.WithTimeout(ctx, timeout)
+		err := conn.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			// A pong timeout leaves the connection usable, so a busy loop or a
+			// message received meanwhile just defers the verdict a cycle.
+			if activity.busy.Load() || activity.messages.Load() != seen {
+				continue
+			}
+			if ctx.Err() == nil {
+				// A dead peer never answers the close handshake; canceling the
+				// blocked read is what tears the socket down.
+				closeWebSocketOr(conn, websocket.StatusGoingAway, "keepalive timeout", cancelRead)
+			}
+			return
+		}
+	}
+}
+
 func closeAccessWebSocket(conn *websocket.Conn, ctx context.Context) {
 	code, reason := websocket.StatusNormalClosure, "closed"
 	switch context.Cause(ctx) {
@@ -266,7 +319,14 @@ func closeAccessWebSocket(conn *websocket.Conn, ctx context.Context) {
 }
 
 func closeWebSocket(conn *websocket.Conn, code websocket.StatusCode, reason string) {
-	timer := time.AfterFunc(500*time.Millisecond, func() { _ = conn.CloseNow() })
+	closeWebSocketOr(conn, code, reason, func() { _ = conn.CloseNow() })
+}
+
+// closeWebSocketOr runs abort if the close handshake has not finished in 500ms.
+// CloseNow cannot interrupt a Close already in progress; canceling the context
+// of a blocked Read can.
+func closeWebSocketOr(conn *websocket.Conn, code websocket.StatusCode, reason string, abort func()) {
+	timer := time.AfterFunc(500*time.Millisecond, abort)
 	defer timer.Stop()
 	_ = conn.Close(code, reason)
 }

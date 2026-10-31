@@ -147,6 +147,17 @@ func (l *accessLease) release() {
 // A successful transaction is followed by cancellation before returning to the
 // caller. Late connection attachment rechecks SQLite under the same gate.
 func (m *accessManager) change(userID, sessionID string, includeBackground bool, mutate func() error) error {
+	return m.changeMatching(userID, mutate, func(lease *accessLease) bool {
+		if sessionID != "" && lease.sessionID != sessionID {
+			return false
+		}
+		return lease.sessionID != "" || includeBackground
+	})
+}
+
+// changeMatching runs mutate under the user's gate, then ends that user's
+// leases selected by match.
+func (m *accessManager) changeMatching(userID string, mutate func() error, match func(*accessLease) bool) error {
 	g := m.gate(userID)
 	g.Lock()
 	defer g.Unlock()
@@ -155,16 +166,9 @@ func (m *accessManager) change(userID, sessionID string, includeBackground bool,
 	}
 	m.mu.Lock()
 	for lease := range m.leases {
-		if lease.userID != userID {
-			continue
+		if lease.userID == userID && match(lease) {
+			lease.cancel(errLoginEnded)
 		}
-		if sessionID != "" && lease.sessionID != sessionID {
-			continue
-		}
-		if lease.sessionID == "" && !includeBackground {
-			continue
-		}
-		lease.cancel(errLoginEnded)
 	}
 	m.mu.Unlock()
 	return nil

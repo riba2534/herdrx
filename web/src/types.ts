@@ -3,6 +3,8 @@ export type User = {
   email: string
   display_name: string
   role: 'admin' | 'user'
+  /** Set after an administrator reset; only the password change page is usable. */
+  must_change_password?: boolean
 }
 
 export type InstanceSettings = {

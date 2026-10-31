@@ -86,7 +86,7 @@
 35. **完成。** ≤600px 站点顶栏改为「更多」菜单，退出需确认。
 36. **完成。** `labels.ts` 中文映射；计数、通知、StatusDot aria-label。
 37. **部分。** 骨架屏 shimmer、失败空态+重试、搜索匹配用户名/文件夹、文件夹计数含子树。**选中父文件夹时列表显示子树主机**（与子树计数一致；审查时旧行为只显示直接子项）。主机在线/离线需要后端 `last_seen`，本轮未做。
-38. **部分。** 密码显隐、Toast 成功反馈、空态、注册开关确认、SSH 保存提示、`autoCapitalize=none` 已做。用户可见「Pane」统一为「终端」，`...`/`「」` 改为 `…`/`“”`。styles.css 去掉已被 ui-theme 覆盖的颜色，`.xterm-dim` 改为基于 `--terminal-ink` 的 `color-mix`，深色下粘贴反馈按钮 hover 可见，`.notice` 圆角 6px，删除 ui-theme 中被 controls.css 覆盖的 `.button-danger`，`.button` 基类 `background: transparent`。管理员「重置密码」前后端都没有，未做。
+38. **部分。** 密码显隐、Toast 成功反馈、空态、注册开关确认、SSH 保存提示、`autoCapitalize=none` 已做。用户可见「Pane」统一为「终端」，`...`/`「」` 改为 `…`/`“”`。styles.css 去掉已被 ui-theme 覆盖的颜色，`.xterm-dim` 改为基于 `--terminal-ink` 的 `color-mix`，深色下粘贴反馈按钮 hover 可见，`.notice` 圆角 6px，删除 ui-theme 中被 controls.css 覆盖的 `.button-danger`，`.button` 基类 `background: transparent`。自助修改密码与管理员「重置密码」已在后续子项补上（见 `docs/operations.md`「登录与访问管理」），真实 Mac/手机 PWA 上的改密流程未验收。
 
 ## 验证方式
 
@@ -99,5 +99,5 @@
 - 真实 Mac/iPhone/Android PWA 安装与通知权限。
 - iOS 软键盘滚页、Courier 回退、双击缩放。
 - 主机在线/离线（`last_seen`）。
-- 管理员重置密码。
+- 自助改密与管理员重置密码的真实 Mac/手机 PWA 验收（功能已实现，自动化覆盖见 `scripts/test-browser-auth.mjs`）。
 - Firefox/WebKit、HTTP+IP 非安全上下文剪贴板、真实跨网 Herdr。

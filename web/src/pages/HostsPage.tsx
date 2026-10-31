@@ -4,7 +4,7 @@ import { Input, Form, Textarea } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, MoreHorizontal, Pencil, Play, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Copy, FolderInput, KeyRound, Settings2, Laptop, LoaderCircle, LogOut, MoreHorizontal, Pencil, Play, Plus, Search, Server, ShieldAlert, Trash2, ShieldCheck, UserRound } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { useAuth } from '../auth'
 import { Button, EmptyState, Field } from '../components/ui'
@@ -383,6 +383,7 @@ export function HostsPage() {
         <AgentOverviewLink/>
         <Button className="button-ghost topbar-nav-action" aria-label="密钥" data-tooltip="密钥管理" onClick={() => navigate('/keys')}><KeyRound size={16}/><span className="nav-action-label">密钥</span></Button>
         <span className="user-chip"><span data-tooltip={auth.user?.display_name}>{auth.user?.display_name}</span><small>{auth.user?.role === 'admin' ? '管理员' : '普通用户'}</small></span>
+        <Button className="button-ghost topbar-nav-action" aria-label="账号" data-tooltip="修改密码" onClick={() => navigate('/account')}><UserRound size={16}/><span className="nav-action-label">账号</span></Button>
         {auth.user?.role === 'admin' && <Button className="button-ghost topbar-nav-action" aria-label="管理" data-tooltip="访问管理" onClick={() => navigate('/admin')}><ShieldCheck size={16} /><span className="nav-action-label">管理</span></Button>}
         <Button className="button-ghost topbar-nav-action" aria-label="退出" data-tooltip="退出登录" pending={signingOut} onClick={() => void signOut()}><LogOut size={16} /><span className="nav-action-label">退出</span></Button>
         <Button className="button-ghost topbar-more" aria-label="更多" aria-haspopup="menu" aria-expanded={Boolean(moreMenu)} onClick={(event) => {
@@ -394,6 +395,7 @@ export function HostsPage() {
     {moreMenu && <ContextMenu x={moreMenu.x} y={moreMenu.y} label="更多" onClose={() => setMoreMenu(null)} items={([
       { id: 'user', label: `${auth.user?.display_name || '当前用户'} · ${auth.user?.role === 'admin' ? '管理员' : '普通用户'}`, disabled: true, onSelect: () => {} },
       { id: 'keys', label: '密钥', icon: <KeyRound size={15}/>, onSelect: () => navigate('/keys') },
+      { id: 'account', label: '修改密码', icon: <UserRound size={15}/>, onSelect: () => navigate('/account') },
       ...(auth.user?.role === 'admin' ? [{ id: 'admin', label: '管理', icon: <ShieldCheck size={15}/>, onSelect: () => navigate('/admin') }] : []),
       { id: 'logout', label: '退出登录', icon: <LogOut size={15}/>, danger: true, separatorBefore: true, onSelect: () => { void signOut() } },
     ] satisfies ContextMenuItem[])}/>}
