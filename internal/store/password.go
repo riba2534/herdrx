@@ -2,8 +2,10 @@ package store
 
 import "context"
 
-// ChangePassword replaces the caller's own password hash and ends every other
-// Web login of that user in one transaction. The update is conditioned on the
+// ChangePassword replaces the caller's own password hash and, in one
+// transaction, ends every other Web login and every push subscription of the
+// user (subscriptions are bound to the user, not to a login, so a lost device
+// would otherwise keep receiving notifications). The update is conditioned on the
 // hash the caller verified, so two concurrent changes cannot both succeed.
 // keepSessionID must still be a live session of the user; it stays valid.
 // Only Web login rows change here: no Herdr session, pane or task is touched.
@@ -35,6 +37,9 @@ func (s *Store) ChangePassword(ctx context.Context, userID, keepSessionID, verif
 	}
 	revoked, err := result.RowsAffected()
 	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE user_id=?`, userID); err != nil {
 		return 0, err
 	}
 	if err := auditTx(ctx, tx, event); err != nil {

@@ -5,11 +5,10 @@ import { ArrowLeft, KeyRound, LogOut } from 'lucide-react'
 import { useAuth } from '../auth'
 import { api } from '../lib/api'
 import { navigate } from '../lib/navigation'
+import { MIN_PASSWORD_LENGTH, resubscribeThisDevice } from '../lib/password'
 import { Button, Field } from '../components/ui'
 import { AppearanceToggle } from '../components/AppearanceToggle'
 import type { User } from '../types'
-
-const MIN_PASSWORD_LENGTH = 12
 
 /** Form checks empty fields and length; these rules compare two fields. */
 function passwordFormError(current: string, next: string, confirmation: string) {
@@ -31,7 +30,7 @@ export function AccountPage({ forced = false }: { forced?: boolean }) {
   const [pending, setPending] = useState(false)
   const [signingOut, setSigningOut] = useState(false)
   const [error, setError] = useState('')
-  const [done, setDone] = useState<User | null>(null)
+  const [done, setDone] = useState<{ user: User; push: Awaited<ReturnType<typeof resubscribeThisDevice>> } | null>(null)
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -43,7 +42,8 @@ export function AccountPage({ forced = false }: { forced?: boolean }) {
     try {
       const result = await api.changePassword({ current_password: current, new_password: next })
       setCurrent(''); setNext(''); setConfirmation('')
-      setDone(result.user)
+      // The change ended every push subscription of the account; keep this device's.
+      setDone({ user: result.user, push: await resubscribeThisDevice() })
       // A forced change waits for the user to continue, so the result stays visible.
       if (!forced) auth.setAuthenticated(result.user)
     } catch (reason) {
@@ -73,11 +73,11 @@ export function AccountPage({ forced = false }: { forced?: boolean }) {
       <h1 id="account-title">{forced ? '请先修改密码' : '修改密码'}</h1>
       <p className="auth-intro">{forced
         ? '管理员已为你重置密码。设置新密码后才能进入工作台，远程 Herdr 和任务不受影响。'
-        : '修改后，其他设备上的 Web 登录会退出，当前设备保持登录。远程 Herdr 和任务不受影响。'}</p>
+        : '修改后，其他设备上的 Web 登录会退出并停止通知，当前设备保持登录。远程 Herdr 和任务不受影响。'}</p>
       {done
         ? <>
-          <p className="notice" role="status">密码已修改，其他设备已退出登录。</p>
-          {forced && <Button className="button-primary button-wide" onClick={() => { navigate('/'); auth.setAuthenticated(done) }}>进入工作台</Button>}
+          <p className="notice" role="status">密码已修改，其他设备已退出登录并停止通知。{done.push === 'failed' && '本设备的通知未能恢复，如需通知请在本设备重新开启。'}</p>
+          {forced && <Button className="button-primary button-wide" onClick={() => { navigate('/'); auth.setAuthenticated(done.user) }}>进入工作台</Button>}
         </>
         : <Form onSubmit={submit} className="form-stack" aria-label="修改密码">
           <Field name="current_password" label={forced ? '临时密码' : '当前密码'} type="password" autoComplete="current-password" value={current} onChange={(event) => setCurrent(event.target.value)} required />
