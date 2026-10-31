@@ -58,7 +58,7 @@ export const PREFIX_BINDINGS: PrefixBinding[] = [
   { action: 'switch-workspace', key: 'shift+w', group: 'navigation', label: '切换到下一个工作区', chord: 'Ctrl+B Shift+W', implemented: true },
   { action: 'new-workspace', key: 'shift+n', group: 'navigation', label: '新建工作区', chord: 'Ctrl+B Shift+N', implemented: true },
   { action: 'close-workspace', key: 'shift+d', group: 'navigation', label: '关闭当前工作区', chord: 'Ctrl+B Shift+D', implemented: true },
-  { action: 'new-tab', key: 'c', group: 'tab', label: '新建标签页', chord: 'Ctrl+B C', implemented: true, modeBar: 'c 新标签' },
+  { action: 'new-tab', key: 'c', group: 'tab', label: '启动程序', chord: 'Ctrl+B C', implemented: true, modeBar: 'c 启动' },
   { action: 'next-tab', key: 'n', group: 'tab', label: '下一个标签页', chord: 'Ctrl+B N', implemented: true, modeBar: 'n/p 标签' },
   { action: 'previous-tab', key: 'p', group: 'tab', label: '上一个标签页', chord: 'Ctrl+B P', implemented: true },
   { action: 'switch-tab', key: '1..9', group: 'tab', label: '切换到标签 1–9', chord: 'Ctrl+B 1..9', implemented: true, modeBar: '1..9 标签' },

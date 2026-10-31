@@ -20,8 +20,19 @@ const snapshot = {
   agents: [],
 }
 const ansi = Array.from({ length: 40 }, (_, i) => `\x1b[${i + 1};1H\x1b[0m${String(i + 1).padStart(2)}  ${i % 3 === 0 ? '\x1b[38;2;142;192;170m终端（Terminal），中文标点与对齐。' : 'const status = "ready"; // display settings'}\x1b[0m\x1b[${i + 1};70H\x1b[48;2;38;38;38m RIGHT EDGE`).join('') + '\x1b[0m\x1b[40;7H'
+let customLaunchers = []
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname
+  if (path === '/api/me/launchers') {
+    if (req.method === 'PUT') {
+      const chunks = []
+      for await (const chunk of req) chunks.push(chunk)
+      customLaunchers = JSON.parse(Buffer.concat(chunks).toString() || '{}').launchers || []
+    }
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify({ launchers: customLaunchers }))
+    return
+  }
   const json = path === '/api/bootstrap/status' ? { required: false } : path === '/api/me' ? { user: { id: 'display-user', email: 'display@example.test', display_name: 'Display', role: 'admin' }, csrf_token: 'display-fixture', session_id: 'display-session' } : path === '/api/me/workbench-session' ? { session: null } : path === '/api/hosts/' ? { hosts: [host] } : path === '/api/hosts/display-test/' ? { host } : null
   if (json) { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(json)); return }
   if (path.startsWith('/api/')) { res.writeHead(404); res.end(); return }
@@ -110,6 +121,16 @@ async function fixture(browser, options, fixtureSnapshot = snapshot, storedDispl
           // Exercise the real ordering: the creation result arrives before the
           // refreshed snapshot, so selection must not revert to the old pane.
           setTimeout(() => ws.send(JSON.stringify({ t: 'snapshot', snapshot: fixtureSnapshot })), 200)
+          return
+        }
+        if (message.method === 'tab.create') {
+          const tab = { workspace_id: message.params.workspace_id, tab_id: `launched-${fixtureSnapshot.tabs.length}`, label: '2', number: 2, pane_count: 1, agent_status: 'idle', focused: false }
+          const root_pane = { workspace_id: tab.workspace_id, tab_id: tab.tab_id, pane_id: `launched-pane-${fixtureSnapshot.panes.length}`, terminal_id: `term-${tab.tab_id}`, revision: 1, agent_status: 'idle', focused: true }
+          fixtureSnapshot.tabs.push(tab)
+          fixtureSnapshot.panes.push(root_pane)
+          fixtureSnapshot.layouts.push({ workspace_id: tab.workspace_id, tab_id: tab.tab_id, focused_pane_id: root_pane.pane_id, area: { x: 0, y: 0, width: 80, height: 40 }, panes: [{ pane_id: root_pane.pane_id, focused: true, rect: { x: 0, y: 0, width: 80, height: 40 } }], splits: [], zoomed: false })
+          ws.send(JSON.stringify({ t: 'result', id: message.id, result: { tab, root_pane } }))
+          ws.send(JSON.stringify({ t: 'snapshot', snapshot: fixtureSnapshot }))
           return
         }
         if (message.method === 'worktree.list') {
@@ -360,11 +381,40 @@ async function touchAndKeyboardChecks(context, page) {
   await cdp.detach()
 }
 
+async function assertAgentLauncher(browser) {
+  customLaunchers = []
+  const f = await fixture(browser, { viewport: { width: 1440, height: 900 } })
+  const sent = (text) => f.messages.filter((message) => message.method === 'pane.send_text' && message.params?.text === text)
+  await f.page.getByRole('button', { name: '启动程序', exact: true }).click()
+  await expect(f.page.getByRole('menu', { name: '启动程序' })).toBeVisible()
+  await f.page.getByRole('menuitem', { name: 'Claude Code' }).click()
+  await expect.poll(() => sent('claude\r').length).toBe(1)
+  assert.equal(sent('claude\r')[0].params.pane_id, 'launched-pane-2')
+  await f.page.getByRole('button', { name: '启动程序', exact: true }).click()
+  await f.page.keyboard.press('1')
+  await expect.poll(() => f.messages.filter((message) => message.method === 'tab.create').length).toBe(2)
+  assert.equal(sent('claude\r').length, 1, 'an empty shell must not type a command')
+  await f.page.getByRole('button', { name: '启动程序', exact: true }).click()
+  await f.page.getByRole('menuitem', { name: '编辑启动项…' }).click()
+  await f.page.getByRole('textbox', { name: '启动项 JSON' }).fill('{"launchers":[{"id":"review","name":"审查","command":"codex review"}]}')
+  await f.page.getByRole('button', { name: '导入 JSON' }).click()
+  await expect(f.page.getByText('codex review')).toBeVisible()
+  await f.page.getByRole('button', { name: '关闭', exact: true }).click()
+  await f.page.getByRole('button', { name: '启动程序', exact: true }).click()
+  await expect(f.page.getByRole('menuitem', { name: '审查' })).toBeVisible()
+  await f.page.keyboard.press('9')
+  await expect.poll(() => sent('codex review\r').length).toBe(1)
+  assert.deepEqual(f.errors, [])
+  await f.context.close()
+  console.log('agent launcher: + menu, number keys, and imported command passed')
+}
+
 const engines = process.env.HERDRX_TEST_ENGINES?.split(',') || ['chromium']
 try {
   for (const name of engines) {
     const browser = await ({ chromium, firefox, webkit })[name].launch({ headless: true, ...(name === 'chromium' && process.env.HERDRX_TEST_CHROMIUM ? { executablePath: process.env.HERDRX_TEST_CHROMIUM } : {}) })
     try {
+      await assertAgentLauncher(browser)
       for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
         const restored = await fixture(browser, { viewport }, snapshot, {
           desktop: { mode: 'responsive', fontSize: 14, zoom: 100 },

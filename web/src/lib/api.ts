@@ -1,4 +1,5 @@
 import type { HerdrCapabilities, HerdrStartResult, Host, User, AdminUser, LoginSession, Invite, AuditEntry, Pagination, InstanceSettings, SSHKey, HostFolder, WorkbenchSession, AgentOverview, PanePromptInput, PanePromptResult, PaneDialog } from '../types'
+import type { UserLauncher } from './launchers'
 
 let csrfToken = ''
 let sessionID = ''
@@ -88,6 +89,8 @@ export const api = {
   me: (init?: RequestInit) => request<{ user: User; csrf_token: string; session_id: string }>('/api/me', init),
   workbenchSession: () => workbenchPositionRequest<{ session: WorkbenchSession | null }>(),
   saveWorkbenchSession: (input: WorkbenchSession & { writer_id?: string; sequence?: number }) => workbenchPositionRequest<{ session: WorkbenchSession }>({ method: 'PUT', body: JSON.stringify(input), keepalive: true }),
+  launchers: () => request<{ launchers: UserLauncher[] }>('/api/me/launchers'),
+  saveLaunchers: (launchers: UserLauncher[]) => request<{ launchers: UserLauncher[] }>('/api/me/launchers', { method: 'PUT', body: JSON.stringify({ launchers }) }),
   logout: () => request<{ ok: boolean }>('/api/logout', { method: 'POST' }),
   hostCapabilities: (id: string) => request<{ capabilities: HerdrCapabilities }>(`/api/hosts/${encodeURIComponent(id)}/capabilities`),
   startHerdr: (id: string) => request<{ result: HerdrStartResult }>(`/api/hosts/${encodeURIComponent(id)}/herdr/start`, { method: 'POST' }),

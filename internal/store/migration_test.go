@@ -82,6 +82,16 @@ func TestMigrateLegacyDataAndRestart(t *testing.T) {
 		if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 3 {
 			t.Fatal("migration version not recorded")
 		}
+		if i == 0 {
+			if _, err = s.db.Exec(`INSERT INTO user_launchers(user_id,document,updated_at) VALUES('admin','{"launchers":[]}','2026-01-01T00:00:00Z')`); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			var document string
+			if err = s.db.QueryRow(`SELECT document FROM user_launchers WHERE user_id='admin'`).Scan(&document); err != nil || document != `{"launchers":[]}` {
+				t.Fatalf("launcher document did not survive restart: %q %v", document, err)
+			}
+		}
 		s.Close()
 	}
 }

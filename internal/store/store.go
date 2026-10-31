@@ -286,6 +286,11 @@ CREATE TABLE IF NOT EXISTS user_workbench_writers (
   writer_id TEXT NOT NULL,
   sequence INTEGER NOT NULL CHECK(sequence > 0),
   PRIMARY KEY(session_id, writer_id)
+);
+CREATE TABLE IF NOT EXISTS user_launchers (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  document TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate sqlite schema: %w", err)
