@@ -114,10 +114,7 @@ func (s *Store) SetUserDisabled(ctx context.Context, actor, id string, disabled 
 		return err
 	}
 	if disabled {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, id); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE user_id=?`, id); err != nil {
+		if err := endUserAccessTx(ctx, tx, id); err != nil {
 			return err
 		}
 	}
@@ -162,4 +159,14 @@ func (s *Store) RevokeUserSessions(ctx context.Context, actor, userID, sessionID
 		return err
 	}
 	return tx.Commit()
+}
+
+// endUserAccessTx removes every Web login and push subscription of the user.
+// It ends Web access only; remote Herdr sessions are not touched.
+func endUserAccessTx(ctx context.Context, tx *sql.Tx, userID string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id=?`, userID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM push_subscriptions WHERE user_id=?`, userID)
+	return err
 }

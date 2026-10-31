@@ -22,6 +22,7 @@ var (
 	ErrRegistrationClosed = errors.New("registration is closed")
 	ErrKeyInUse           = errors.New("SSH key is used by hosts")
 	ErrFolderCycle        = errors.New("folder cannot contain itself")
+	ErrSelfReset          = errors.New("cannot reset your own password")
 )
 
 type Store struct {
@@ -29,13 +30,16 @@ type Store struct {
 }
 
 type User struct {
-	ID           string    `json:"id"`
-	Email        string    `json:"email"`
-	DisplayName  string    `json:"display_name"`
-	Role         string    `json:"role"`
-	PasswordHash string    `json:"-"`
-	Disabled     bool      `json:"disabled"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	Role         string `json:"role"`
+	PasswordHash string `json:"-"`
+	Disabled     bool   `json:"disabled"`
+	// MustChangePassword is set by an administrator reset. The holder may only
+	// read /api/me, change the password, or log out until it is cleared.
+	MustChangePassword bool      `json:"must_change_password"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type Session struct {
@@ -296,6 +300,9 @@ CREATE TABLE IF NOT EXISTS user_workbench_writers (
 	if err := ensureColumn(db, "hosts", "folder_id", `ALTER TABLE hosts ADD COLUMN folder_id TEXT REFERENCES host_folders(id) ON DELETE SET NULL`); err != nil {
 		return err
 	}
+	if err := ensureColumn(db, "users", "must_change_password", `ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
 	if err := ensureColumn(db, "hosts", "proxy_jump", `ALTER TABLE hosts ADD COLUMN proxy_jump TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
@@ -392,9 +399,9 @@ func parseTime(value string) time.Time {
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var user User
-	var disabled int
+	var disabled, mustChange int
 	var created string
-	err := row.Scan(&user.ID, &user.Email, &user.PasswordHash, &user.DisplayName, &user.Role, &disabled, &created)
+	err := row.Scan(&user.ID, &user.Email, &user.PasswordHash, &user.DisplayName, &user.Role, &disabled, &mustChange, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -402,6 +409,7 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 		return User{}, err
 	}
 	user.Disabled = disabled != 0
+	user.MustChangePassword = mustChange != 0
 	user.CreatedAt = parseTime(created)
 	return user, nil
 }

@@ -51,7 +51,7 @@ func TestMigrateLegacyDataAndRestart(t *testing.T) {
 			t.Fatalf("migrated/reopened registration settings: %+v %v", settings, err)
 		}
 		user, err := s.UserByID(ctx, "admin")
-		if err != nil || user.PasswordHash != "original-password-hash" {
+		if err != nil || user.PasswordHash != "original-password-hash" || user.MustChangePassword {
 			t.Fatalf("user changed: %+v %v", user, err)
 		}
 		credential, err := s.CredentialByID(ctx, "admin", "credential")
