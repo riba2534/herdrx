@@ -8,7 +8,7 @@ const admin = { id: 'admin', display_name: 'Admin', email: 'admin@example.test',
 const member = { ...admin, id: 'member', display_name: 'Member', role: 'user' as const }
 const auth = { user: admin, sessionID: 'current', registration: 'invite', refresh: vi.fn() }
 vi.mock('../auth', () => ({ useAuth: () => auth }))
-vi.mock('../lib/api', () => ({ api: { adminSettings: vi.fn(), setRegistration: vi.fn(), adminUsers: vi.fn(), setUserDisabled: vi.fn(), adminSessions: vi.fn(), revokeAllSessions: vi.fn(), adminInvites: vi.fn(), createInvite: vi.fn(), adminAudit: vi.fn() }, authenticationGeneration: () => 1, invalidateAuthentication: vi.fn() }))
+vi.mock('../lib/api', () => ({ api: { adminSettings: vi.fn(), setRegistration: vi.fn(), adminUsers: vi.fn(), setUserDisabled: vi.fn(), adminSessions: vi.fn(), resetUserPassword: vi.fn(), revokeAllSessions: vi.fn(), adminInvites: vi.fn(), createInvite: vi.fn(), adminAudit: vi.fn() }, authenticationGeneration: () => 1, invalidateAuthentication: vi.fn() }))
 beforeEach(() => {
   auth.registration = 'invite'
   vi.mocked(api.adminSettings).mockResolvedValue({ settings: { registration: 'invite', revision: 1, updated_at: '' } })
@@ -116,4 +116,29 @@ it('ignores late session data after switching users', async () => {
   finish({ ...page, sessions: [{ id: 'old', user_id: 'admin', user_agent: 'Old browser', remote_ip: '', created_at: '', expires_at: '' }] })
   await waitFor(() => expect(api.adminSessions).toHaveBeenCalledTimes(2))
   expect(screen.queryByText('Old browser')).not.toBeInTheDocument()
+})
+
+it('resets another password after confirmation and shows the temporary password once', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  vi.mocked(api.resetUserPassword).mockResolvedValue({ user_id: 'member', temporary_password: 'temporary-secret-value' })
+  render(<AdminPage/>)
+  await screen.findByText('Member')
+  expect(within(screen.getByRole('heading', { name: /^Admin/ }).closest('article')!).getByRole('button', { name: '重置密码' })).toBeDisabled()
+  fireEvent.click(within(screen.getByText('Member').closest('article')!).getByRole('button', { name: '重置密码' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog).toHaveTextContent('所有设备上的 Web 登录退出')
+  expect(dialog).toHaveTextContent('必须先修改密码')
+  expect(api.resetUserPassword).not.toHaveBeenCalled()
+  fireEvent.click(within(dialog).getByRole('button', { name: '重置密码' }))
+  const shown = await screen.findByRole('region', { name: '临时密码' })
+  expect(shown).toHaveTextContent('temporary-secret-value')
+  expect(shown).toHaveTextContent('只显示这一次')
+  expect(api.resetUserPassword).toHaveBeenCalledWith('member')
+  fireEvent.click(within(shown).getByRole('button', { name: /复制临时密码/ }))
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith('temporary-secret-value'))
+  expect(await within(shown).findByRole('button', { name: /已复制/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '邀请' }))
+  fireEvent.click(screen.getByRole('button', { name: '用户' }))
+  expect(screen.queryByText('temporary-secret-value')).not.toBeInTheDocument()
 })

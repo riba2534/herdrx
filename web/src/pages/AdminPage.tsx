@@ -4,7 +4,7 @@ import { Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandLogo } from '../components/Brand'
 import { useEffect, useState, type FormEvent } from 'react'
-import { ArrowLeft, ClipboardList, Copy, Mail, RefreshCw, Users, X } from 'lucide-react'
+import { ArrowLeft, ClipboardList, Copy, KeyRound, Mail, RefreshCw, Users, X } from 'lucide-react'
 import { useAuth } from '../auth'
 import { Button, EmptyState, Field } from '../components/ui'
 import { AppearanceToggle } from '../components/AppearanceToggle'
@@ -20,7 +20,7 @@ const actionLabel: Record<string, string> = {
   'user.disabled': '禁用账号', 'user.enabled': '启用账号', 'session.revoked': '注销一条登录',
   'sessions.revoked': '注销全部登录', 'invite.created': '创建邀请', 'invite.revoked': '撤销邀请',
   'login.succeeded': '登录成功', 'login.failed': '登录失败', 'logout.completed': '退出登录', 'invite.used': '受邀注册', 'bootstrap.completed': '初始化管理员',
-  'registration.changed': '修改注册设置',
+  'registration.changed': '修改注册设置', 'password.changed': '修改密码', 'password.change_failed': '修改密码失败', 'password.reset': '重置密码',
 }
 
 function Pager({ page, busy, change }: { page: Pagination; busy: boolean; change: (offset: number) => void }) {
@@ -29,6 +29,14 @@ function Pager({ page, busy, change }: { page: Pagination; busy: boolean; change
     <span>第 {Math.floor(page.offset / page.limit) + 1} 页</span>
     <Button className="button-secondary" disabled={busy || !page.has_more} onClick={() => change(page.next_offset)}>下一页</Button>
   </nav>
+}
+
+type OneTimeSecretProps = { label: string; title: string; note: string; value: string; copyLabel: string; hideLabel: string; onHide: () => void; onCopyError: () => void }
+
+/** A secret the server returns once (invite code, temporary password). Key it by value to reset the copied state. */
+function OneTimeSecret({ label, title, note, value, copyLabel, hideLabel, onHide, onCopyError }: OneTimeSecretProps) {
+  const [copied, setCopied] = useState(false)
+  return <section className="admin-code" aria-label={label}><div className="modal-header"><h2>{title}</h2><Button className="icon-button" aria-label={hideLabel} onClick={onHide}><X size={18}/></Button></div><p>{note}</p><pre className="key-block">{value}</pre><Button className="button-secondary" onClick={async () => { try { await navigator.clipboard.writeText(value); setCopied(true) } catch { onCopyError() } }}><Copy size={16}/>{copied ? '已复制' : copyLabel}</Button></section>
 }
 
 export function AdminPage() {
@@ -51,7 +59,7 @@ export function AdminPage() {
   const [pending, setPending] = useState('')
   const [revision, setRevision] = useState(0)
   const [code, setCode] = useState('')
-  const [copied, setCopied] = useState(false)
+  const [temporary, setTemporary] = useState<{ name: string; password: string } | null>(null)
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [filterDraft, setFilterDraft] = useState({ user_id: '', action: '', since: '', until: '' })
   const [settings, setSettings] = useState<InstanceSettings | null>(null)
@@ -106,7 +114,15 @@ export function AdminPage() {
     } catch (reason) { setError(reason instanceof Error ? reason.message : '操作未完成，请重试') }
     finally { setPending('') }
   }
-  const changeTab = (value: Tab) => { setTab(value); setOffset(0); setSelected(null); setCode(''); setError('') }
+  const changeTab = (value: Tab) => { setTab(value); setOffset(0); setSelected(null); setCode(''); setTemporary(null); setError('') }
+  const resetPassword = async (user: AdminUser) => {
+    if (!await confirm(`重置“${user.display_name}”的密码？将生成一个临时密码，并让其所有设备上的 Web 登录退出；对方下次用临时密码登录后必须先修改密码。远程 Herdr 和任务继续运行。`, { title: '重置密码', confirmLabel: '重置密码', danger: true })) return
+    setTemporary(null)
+    void mutate(`reset:${user.id}`, async () => {
+      const result = await api.resetUserPassword(user.id)
+      setTemporary({ name: user.display_name, password: result.temporary_password })
+    })
+  }
   const disable = async (user: AdminUser) => {
     if (!await confirm(user.disabled ? `重新启用“${user.display_name}”？该用户需要重新登录。` : `禁用“${user.display_name}”？将注销其全部 Web 登录（当前列表显示 ${user.active_sessions} 条）并关闭通知。远程 Herdr 和任务继续运行。`, { title: user.disabled ? '启用账号' : '禁用账号', confirmLabel: user.disabled ? '启用账号' : '禁用账号', danger: !user.disabled })) return
     void mutate(user.id, () => api.setUserDisabled(user.id, !user.disabled))
@@ -116,7 +132,7 @@ export function AdminPage() {
     void mutate(session?.id || 'all-sessions', () => session ? api.revokeSession(user.id, session.id) : api.revokeAllSessions(user.id),
       user.id === auth.user?.id && (!session || session.id === auth.sessionID))
   }
-  const createInvite = () => void mutate('create-invite', async () => { const result = await api.createInvite(); setCode(result.code); setCopied(false) })
+  const createInvite = () => void mutate('create-invite', async () => { const result = await api.createInvite(); setCode(result.code) })
   const toggleRegistration = async () => {
     if (!settings || pending || settingsLoading) return
     const registration = settings.registration === 'closed' ? 'invite' : 'closed'
@@ -163,13 +179,14 @@ export function AdminPage() {
         <Button type="submit" className="button-secondary" disabled={loading}>筛选</Button>
       </Form>}
       {tab === 'invites' && <div className="admin-invite-controls"><p>{settings?.registration !== 'invite' ? '当前已关闭注册，先在上方开启注册后再创建邀请。' : '邀请码 7 天有效，成功注册后失效。'}</p><Button className="button-primary" pending={pending === 'create-invite'} disabled={Boolean(pending) || settingsLoading || Boolean(settingsError) || settings?.registration !== 'invite'} onClick={createInvite}>创建邀请</Button></div>}
-      {tab === 'invites' && code && <section className="admin-code" aria-label="新邀请码"><div className="modal-header"><h2>请保存这份邀请码</h2><Button className="icon-button" aria-label="隐藏邀请码" onClick={() => setCode('')}><X size={18}/></Button></div><p>原文只显示这一次，离开此栏目后无法再次查看。</p><pre className="key-block">{code}</pre><Button className="button-secondary" onClick={async () => { try { await navigator.clipboard.writeText(code); setCopied(true) } catch { setError('无法自动复制，请手动选中邀请码复制') } }}><Copy size={16}/>{copied ? '已复制' : '复制邀请码'}</Button></section>}
+      {tab === 'invites' && code && <OneTimeSecret key={code} label="新邀请码" title="请保存这份邀请码" note="原文只显示这一次，离开此栏目后无法再次查看。" value={code} copyLabel="复制邀请码" hideLabel="隐藏邀请码" onHide={() => setCode('')} onCopyError={() => setError('无法自动复制，请手动选中邀请码复制')}/>}
+      {tab === 'users' && temporary && <OneTimeSecret key={temporary.password} label="临时密码" title={`“${temporary.name}”的临时密码`} note="临时密码只显示这一次，关闭或离开此栏目后无法再次查看。请通过可信渠道交给对方，对方登录后需要立即设置新密码。" value={temporary.password} copyLabel="复制临时密码" hideLabel="隐藏临时密码" onHide={() => setTemporary(null)} onCopyError={() => setError('无法自动复制，请手动选中临时密码复制')}/>}
       {loading ? <p role="status">正在读取…</p> : !error && <>
-        {tab === 'users' && (users.length ? <div className="admin-list">{users.map((user) => <article className="admin-row admin-user-row" key={user.id}>
-            <div className="admin-row-main"><h2>{user.display_name} {user.id === auth.user?.id && <small>当前账号</small>}</h2><p>{user.email}</p><details className="admin-user-details"><summary>账号详情</summary><small className="admin-id">{user.id}</small><p>创建于 {date(user.created_at)}</p></details></div>
-            <div className="admin-user-state"><span className="role-badge">{user.role === 'admin' ? '管理员' : '普通用户'}</span><span className={`account-state ${user.disabled ? 'account-disabled' : ''}`}>{user.disabled ? '已禁用' : '可登录'}</span><p>{user.active_sessions} 条有效登录</p></div>
-            <div className="admin-row-actions"><Button className="button-secondary" onClick={() => { setSelected(user); setSessionOffset(0) }}>查看登录</Button><Button className={user.disabled ? 'button-secondary' : 'button-ghost danger-button'} disabled={Boolean(pending) || user.id === auth.user?.id} data-tooltip={user.id === auth.user?.id ? '不能禁用当前管理员' : undefined} pending={pending === user.id} onClick={() => disable(user)}>{user.disabled ? '启用账号' : '禁用账号'}</Button></div>
-          </article>)}</div> : <EmptyState icon={<Users size={32}/>} title="没有用户记录" detail="没有符合当前筛选条件的用户。" />)}
+        {tab === 'users' && (users.length ? <div className="admin-list">{users.map((user) => { const self = user.id === auth.user?.id; return <article className="admin-row admin-user-row" key={user.id}>
+            <div className="admin-row-main"><h2>{user.display_name} {self && <small>当前账号</small>}</h2><p>{user.email}</p><details className="admin-user-details"><summary>账号详情</summary><small className="admin-id">{user.id}</small><p>创建于 {date(user.created_at)}</p></details></div>
+            <div className="admin-user-state"><span className="role-badge">{user.role === 'admin' ? '管理员' : '普通用户'}</span><span className={`account-state ${user.disabled ? 'account-disabled' : ''}`}>{user.disabled ? '已禁用' : '可登录'}</span>{user.must_change_password && <span className="account-state">待修改密码</span>}<p>{user.active_sessions} 条有效登录</p></div>
+            <div className="admin-row-actions"><Button className="button-secondary" onClick={() => { setSelected(user); setSessionOffset(0) }}>查看登录</Button><Button className="button-ghost" disabled={Boolean(pending) || self} data-tooltip={self ? '请在账号页修改自己的密码' : undefined} pending={pending === `reset:${user.id}`} onClick={() => resetPassword(user)}><KeyRound size={16}/>重置密码</Button><Button className={user.disabled ? 'button-secondary' : 'button-ghost danger-button'} disabled={Boolean(pending) || self} data-tooltip={self ? '不能禁用当前管理员' : undefined} pending={pending === user.id} onClick={() => disable(user)}>{user.disabled ? '启用账号' : '禁用账号'}</Button></div>
+          </article> })}</div> : <EmptyState icon={<Users size={32}/>} title="没有用户记录" detail="没有符合当前筛选条件的用户。" />)}
         {tab === 'invites' && (invites.length ? <div className="admin-list">{invites.map((invite) => <article className="admin-row" key={invite.id}><div className="admin-row-main"><h2>{statusLabel[invite.status]}</h2><small className="admin-id">{invite.id}</small><p>创建于 {date(invite.created_at)} · 到期 {date(invite.expires_at)}</p><p>创建人：{invite.created_by}</p>{invite.used_by && <p>使用人：{invite.used_by} · {date(invite.used_at)}</p>}{invite.revoked_by && <p>撤销人：{invite.revoked_by} · {date(invite.revoked_at)}</p>}</div><Button className="button-ghost danger-button" disabled={Boolean(pending) || invite.status !== 'active'} pending={pending === invite.id} onClick={async () => { if (await confirm('撤销这个尚未使用的邀请码？', { title: '撤销邀请', confirmLabel: '撤销邀请' })) void mutate(invite.id, () => api.revokeInvite(invite.id)) }}>撤销邀请</Button></article>)}</div> : <EmptyState icon={<Mail size={32}/>} title="还没有邀请" detail="开启邀请注册后，可在这里创建一次性邀请码。" />)}
         {tab === 'audit' && (events.length ? <div className="admin-list">{events.map((event) => <article className="admin-row" key={event.id}><div className="admin-row-main"><h2>{actionLabel[event.action] || event.action}</h2><p>{date(event.created_at)} · 来源 {event.remote_ip || '—'}</p><p>操作人：{event.user_id || '未登录'} · 目标：{event.target_type} {event.target_id || '—'}</p><details><summary>查看记录详情</summary><pre>{JSON.stringify(event.details, null, 2)}</pre></details></div></article>)}</div> : <EmptyState icon={<ClipboardList size={32}/>} title="没有符合条件的审计记录" detail="调整筛选条件后再试。" />)}
         <Pager page={page} busy={Boolean(pending)} change={setOffset}/>

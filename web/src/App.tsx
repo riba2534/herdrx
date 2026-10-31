@@ -5,6 +5,7 @@ import { useAuth } from './auth'
 import { AuthPage } from './pages/AuthPage'
 import { HostsPage } from './pages/HostsPage'
 import { PairPage } from './pages/PairPage'
+import { AccountPage } from './pages/AccountPage'
 import { Button } from './components/ui'
 import { setAppearanceScope } from './lib/appearance'
 import { api } from './lib/api'
@@ -40,7 +41,7 @@ export default function App() {
   }, [])
   const appearanceScope = auth.user && !auth.bootstrapRequired && !window.location.hash.startsWith('#pair=') && /^\/h\/[^/]+$/.test(path) ? 'workbench' : 'site'
   useLayoutEffect(() => { if (!auth.loading) setAppearanceScope(appearanceScope) }, [auth.loading, appearanceScope])
-  const signedIn = Boolean(auth.user) && !auth.bootstrapRequired && !auth.loading && !auth.error
+  const signedIn = Boolean(auth.user) && !auth.user?.must_change_password && !auth.bootstrapRequired && !auth.loading && !auth.error
   const restoreReady = useRootWorkbenchRestore(signedIn, path)
 
   if (auth.loading) return <main className="loading-screen"><BrandIcon/><LoaderCircle className="spin"/><span>正在打开 herdrx…</span></main>
@@ -48,6 +49,10 @@ export default function App() {
   if (auth.bootstrapRequired) return <AuthPage bootstrap />
   if (!auth.user) return <AuthPage bootstrap={false} />
   const authKey = `${auth.user.id}:${auth.sessionID}`
+  // After an administrator reset every other API answers 403, so the workbench
+  // stays closed on any path until the password is changed.
+  if (auth.user.must_change_password) return <AccountPage key={authKey} forced />
+  if (path === '/account') return <AccountPage key={authKey} />
   if (path === '/keys') return <Suspense fallback={<main className="loading-screen">正在加载密钥…</main>}><KeysPage key={authKey}/></Suspense>
   if (path === '/agents') return <Suspense fallback={<main className="loading-screen">正在加载 Agent 总览…</main>}><AgentsPage key={authKey}/></Suspense>
   if (path === '/admin') {
