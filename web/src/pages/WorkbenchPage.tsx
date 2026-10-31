@@ -6,6 +6,7 @@ import { BrandIcon } from '../components/Brand'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
+import { AgentLauncher } from '../components/LauncherMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
 import { PaneViewToggle } from '../components/PaneViewToggle'
@@ -32,6 +33,8 @@ import { readWorkbenchSession, useWorkbenchSessionPersistence } from '../lib/wor
 import { gitWorkspaceFetchKey, isLinkedWorktree, visibleWorkspaceGroups, workspaceBranchText, workspaceGroupHasChildren, workspaceGroupKey, workspaceRepoKey } from '../lib/workspaceGroups'
 import { useWorkspaceBranches } from '../lib/useWorkspaceBranches'
 import { terminalThemes } from '../lib/themes'
+import { activityDetail, useAgentActivity } from '../lib/agentActivity'
+import { launchInput } from '../lib/launchers'
 import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
 
 
@@ -82,6 +85,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const attachForm = workbenchWindowForm(workbenchClientClass(mobile))
   const [sidebarOpen, setSidebarOpen] = useState(() => applyAttachWindowForm(workbenchClientClass(mobile)).sidebarOpen)
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [launcher, setLauncher] = useState<{ workspaceID: string; x: number; y: number } | null>(null)
   const [auxiliaryKeysOpen, setAuxiliaryKeysOpen] = useState(false)
   const workbenchRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
@@ -169,6 +173,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const previousStatuses = useRef(new Map<string, string>())
   const pushStatusRef = useRef<PushStatusCache['current']>(null)
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
+  const launchingTab = useRef(false)
   // 长按重复的定时器在 render 之外运行，闭包会锁住当时的 state；用 ref 取当下的发送函数。
   const terminalInputRef = useRef<((data: string) => void) | null>(null)
   // 当前 pane 的 Herdr 按键通道，与硬件 Shift+Enter 同一段逻辑（断流不发、先回到实时画面）。
@@ -570,7 +575,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         else if (eventOrKey === 'z') await client.call('pane.zoom', { pane_id: paneID })
         else if (eventOrKey === 'x' && await confirm('关闭当前终端？其中运行的进程也会结束。', { title: '关闭终端', confirmLabel: '关闭终端' })) await client.call('pane.close', { pane_id: paneID })
         else if (['h', 'j', 'k', 'l'].includes(eventOrKey)) focusNeighbor(eventOrKey)
-        else if (eventOrKey === 'c') await createTab()
+        else if (eventOrKey === 'c') openLauncher(workspaceID)
         else if (eventOrKey === 'b') setSidebarOpen((value) => !value)
         else if (eventOrKey === 'w' || eventOrKey === 'g') setSwitcherOpen(true)
         setActionError('')
@@ -593,7 +598,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       else if (action === 'swap-right') await swapNeighbor('l')
       else if (action === 'cycle-pane-next') cyclePane(1)
       else if (action === 'cycle-pane-previous') cyclePane(-1)
-      else if (action === 'new-tab') await createTab()
+      else if (action === 'new-tab') openLauncher(workspaceID)
       else if (action === 'close-tab') {
         const tab = snapshot.tabs.find((item) => item.tab_id === tabID)
         if (tab) await closeTab(tab)
@@ -628,21 +633,50 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     } catch (reason) { setActionError(reason instanceof Error ? reason.message : 'Herdr 操作失败') }
   }
 
-  const createTab = async () => createTabFor(workspaceID)
+  const openLauncher = (targetWorkspaceID: string, anchor?: HTMLElement | null) => {
+    if (!targetWorkspaceID) {
+      setActionError('工作区还在加载，请稍后再启动')
+      return
+    }
+    const rect = (anchor || document.querySelector<HTMLElement>('.tab-add'))?.getBoundingClientRect()
+    setContextMenu(null)
+    setSwitcherOpen(false)
+    setLauncher({ workspaceID: targetWorkspaceID, x: rect ? rect.left : 16, y: rect ? rect.bottom + 4 : 56 })
+  }
 
-  const createTabFor = async (targetWorkspaceID: string) => {
+  const createTabFor = async (targetWorkspaceID: string, launch?: { name: string; command: string }) => {
+    if (launchingTab.current) return
+    launchingTab.current = true
     const existing = new Set((snapshot?.tabs || []).filter((tab) => tab.workspace_id === targetWorkspaceID).map((tab) => tab.tab_id))
     pendingTabSelection.current = { workspaceID: targetWorkspaceID, existing }
+    let result: { tab?: Tab; root_pane?: Pane }
     try {
-      const result = await client.call<{ tab?: Tab; root_pane?: Pane }>('tab.create', { workspace_id: targetWorkspaceID, focus: false })
-      if (result.tab) {
-        setWorkspaceID(result.tab.workspace_id)
-        setTabID(result.tab.tab_id)
-        if (result.root_pane) setPaneID(result.root_pane.pane_id)
-      }
+      result = await client.call<{ tab?: Tab; root_pane?: Pane }>('tab.create', { workspace_id: targetWorkspaceID, focus: false }) || {}
     } catch (error) {
       pendingTabSelection.current = null
+      launchingTab.current = false
       throw error
+    }
+    if (result.tab) {
+      setWorkspaceID(result.tab.workspace_id)
+      setTabID(result.tab.tab_id)
+      if (result.root_pane) setPaneID(result.root_pane.pane_id)
+    }
+    const text = launchInput(launch?.command || '')
+    try {
+      if (!text) return
+      if (result.tab && launch?.name) {
+        try { await client.call('tab.rename', { tab_id: result.tab.tab_id, label: launch.name }) } catch { /* 名称只方便辨认，失败不影响已经建好的标签页 */ }
+      }
+      if (!result.root_pane?.pane_id) throw new Error('已新建标签页，但没有拿到终端。请打开它后自行输入，不要重复启动。')
+      try {
+        await client.call('pane.send_text', { pane_id: result.root_pane.pane_id, text })
+      } catch {
+        // pane.send_text 失败时输入可能已经进了终端。不自动重发。
+        throw new Error('命令可能没有送出。请查看新标签页，不要重复启动，以免执行两次。')
+      }
+    } finally {
+      launchingTab.current = false
     }
   }
 
@@ -793,7 +827,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     if (target.kind === 'tab') {
       const tab = target.tab
       return [
-        { id: 'new-tab', label: '新建标签页', icon: <Plus size={15}/>, onSelect: () => runAction(() => createTabFor(tab.workspace_id)) },
+        { id: 'new-tab', label: '启动程序', icon: <Plus size={15}/>, onSelect: () => openLauncher(tab.workspace_id) },
         { id: 'rename', label: '重命名标签页', icon: <Pencil size={15}/>, onSelect: () => openPrompt({ title: '重命名标签页', label: '名称', value: tab.label, submitLabel: '保存', onSubmit: async (label) => { await client.call('tab.rename', { tab_id: tab.tab_id, label }) } }) },
         { id: 'close', label: '关闭标签页', icon: <X size={15}/>, danger: true, separatorBefore: true, onSelect: () => void closeTab(tab) },
       ]
@@ -903,6 +937,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const zoomed = !mobile && Boolean(layout?.zoomed)
   const visiblePanes = mobile || zoomed ? panes?.filter((pane) => pane.pane_id === paneID) : panes
   useAgentSeen(hostID, visiblePanes?.map((pane) => pane.pane_id), snapshot?.agents)
+  const activityText = useAgentActivity(hostID, snapshot)
+  const activeAge = activeTab ? activityText(activeTab) : null
   // Take over the pane Herdr zooms, also when its zoom moves to another pane;
   // picking a pane afterwards stays local, like every other selection here.
   const zoomTarget = layout?.zoomed ? layout.focused_pane_id : ''
@@ -955,7 +991,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
         <span className={`mobile-menu-wrap${otherPaneBlocked ? ' mobile-menu-blocked' : ''}`}><Menu size={18}/></span>
         <StatusDot status={activePane?.agent_status || 'unknown'}/>
-        <span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
+        <span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{activeAge ? ` · ${activeAge}` : ''}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
       </button>
       <div className={`connection connection-${connection}`} aria-label={connectionLabel(connection)} data-tooltip={connectionLabel(connection)}><span/><span>{connectionLabel(connection)}</span></div>
       {paneID && <PaneViewToggle className="mobile-view-toggle" mode={paneModeFor(paneID)} onChange={(mode) => togglePaneMode(paneID, mode)}/>}
@@ -1005,7 +1041,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
     <main className="workbench-main">
       {!mobile && <header className="tabbar">
-        <div className={`tabs-scroller${tabOverflow.left ? ' tabs-overflow-left' : ''}${tabOverflow.right ? ' tabs-overflow-right' : ''}`}><div className="tabs" ref={tabsRef}>{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => openContextMenu(event, { kind: 'tab', tab })}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div></div>
+        <div className={`tabs-scroller${tabOverflow.left ? ' tabs-overflow-left' : ''}${tabOverflow.right ? ' tabs-overflow-right' : ''}`}><div className="tabs" ref={tabsRef}>{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => openContextMenu(event, { kind: 'tab', tab })}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={activityDetail(tab.agent_status, activityText(tab)) || tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span className="tab-label">{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span>{activityText(tab) && <span className="tab-age" aria-hidden="true">{activityText(tab)}</span>}</button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="启动程序" aria-haspopup="menu" aria-expanded={Boolean(launcher)} data-tooltip="启动 Agent 或程序 · Ctrl+B C" onClick={(event) => openLauncher(workspaceID, event.currentTarget)}><Plus size={14}/></button></div></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {terminalCountLabel(panes?.length || 0)}</span>
         {coarse && <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" data-tooltip="Esc、Ctrl、方向键等辅助键" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => { keysDismissedRef.current = open; return !open })}><Keyboard size={16}/></Button>}
         <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
@@ -1048,7 +1084,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
     {switcherOpen && <Modal title="切换工作区或终端" className="switcher" closeLabel="关闭切换位置" onClose={() => setSwitcherOpen(false)}>
       <SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false); afterSelectLocation(true) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{paneDisplayName(pane)}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup>
-      <SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button aria-pressed={tab.tab_id === tabID} key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{terminalCountLabel(tab.pane_count)}</small></span></button>)}</SwitcherGroup>
+      <SwitcherGroup title="标签页"><button onClick={() => openLauncher(workspaceID)}><Plus size={16}/><span><strong>启动程序</strong></span></button>{tabs.map((tab) => <button aria-pressed={tab.tab_id === tabID} key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{terminalCountLabel(tab.pane_count)}</small></span></button>)}</SwitcherGroup>
       <SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspaceSwitcherDetail(workspace.pane_count, workspaceBranchText(workspace, workspaceBranches))}</small></span></button>)}</SwitcherGroup>
       {agents.length > 0 && <SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agentStatusLabel(agent.agent_status)}</small></span></button>)}</SwitcherGroup>}
       <SwitcherGroup title="主机"><a className="switcher-host-manage" href="/" onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('/') }}><Server size={16}/><span><strong>管理主机</strong></span></a>{hostEntries.map((item) => <a key={item.id} href={`/h/${encodeURIComponent(item.id)}`} className={item.id === hostID ? 'host-tab-active' : ''} aria-current={item.id === hostID ? 'page' : undefined} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); setSwitcherOpen(false); navigate(`/h/${encodeURIComponent(item.id)}`) }}><Server size={16}/><span><strong>{item.name}</strong></span></a>)}</SwitcherGroup>
@@ -1058,6 +1094,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => { setNotificationPermission(await enablePushNotifications()); pushStatusRef.current = null }}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {helpOpen && <Modal title="快捷键" className="keymap-modal" closeLabel="关闭快捷键" onClose={() => setHelpOpen(false)}><div className="keymap-help">{keymapHelpGroups().map((group) => <section key={group.id} className="keymap-group"><h3>{group.title}</h3><ul>{group.entries.map((entry) => <li key={entry.chord} className={entry.implemented ? undefined : 'keymap-unimplemented'}><kbd>{entry.chord}</kbd><span>{entry.label}</span></li>)}</ul></section>)}</div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenuLabel(contextMenu.target.kind)} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
+    {launcher && <AgentLauncher x={launcher.x} y={launcher.y} disabled={connection !== 'ready'} onClose={() => setLauncher(null)} onLaunch={(choice) => { const workspace = launcher.workspaceID; setLauncher(null); runAction(() => createTabFor(workspace, choice.command ? { name: choice.name, command: choice.command } : undefined)) }}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
     {confirmationDialog}
   </div>

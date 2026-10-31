@@ -10,7 +10,7 @@ export type ContextMenuItem = {
   onSelect: () => void
 }
 
-export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: number; label: string; items: ContextMenuItem[]; onClose: () => void }) {
+export function ContextMenu({ x, y, label, items, onClose, className = '' }: { x: number; y: number; label: string; items: ContextMenuItem[]; onClose: () => void; className?: string }) {
   const menuRef = useRef<HTMLDivElement>(null)
   const previousFocus = useRef<HTMLElement | null>(null)
   const [position, setPosition] = useState({ left: x, top: y })
@@ -61,7 +61,7 @@ export function ContextMenu({ x, y, label, items, onClose }: { x: number; y: num
 
   return <div
     ref={menuRef}
-    className="context-menu"
+    className={className ? `context-menu ${className}` : 'context-menu'}
     role="menu"
     aria-label={label}
     style={position}

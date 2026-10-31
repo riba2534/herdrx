@@ -62,6 +62,8 @@ vi.mock('../lib/api', () => ({
     renameHost: vi.fn().mockImplementation(async (id: string, name: string) => ({ host: { id, name, transport: 'local' } })),
     workbenchSession: vi.fn().mockResolvedValue({ session: null }),
     saveWorkbenchSession: vi.fn().mockResolvedValue({ session: { host_id: 'host' } }),
+    launchers: vi.fn().mockResolvedValue({ launchers: [] }),
+    saveLaunchers: vi.fn(async (launchers: unknown) => ({ launchers })),
     panePrompt: vi.fn().mockResolvedValue({ delivered: 'sent' }),
     paneDialog: vi.fn().mockResolvedValue({ dialog: null }),
   },
@@ -1207,5 +1209,29 @@ describe('workbench pane view mode', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '切换工作区或终端' }))
     expect(within(screen.getByRole('dialog', { name: '切换工作区或终端' })).getByRole('button', { name: /切换到终端视图/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('starts Claude in a new tab from the launcher and shows how long the round has been working', async () => {
+    snapshot.tabs[0] = { ...snapshot.tabs[0], agent_status: 'working' }
+    snapshot.agents[0] = { ...snapshot.agents[0], agent_status: 'working', state_change_seq: 4 }
+    sessionStorage.setItem('herdrx.activity.host', JSON.stringify({ 'w1:p1\u0000working\u00004': Date.now() - 180_000 }))
+    call.mockImplementation(async (method: string) => {
+      if (method === 'tab.create') return { tab: { tab_id: 'w1:t9', workspace_id: 'w1', label: '9', number: 9, pane_count: 1, agent_status: 'idle', focused: false }, root_pane: { pane_id: 'w1:p9', workspace_id: 'w1', tab_id: 'w1:t9', terminal_id: 'term9', agent_status: 'idle', focused: true, revision: 1 } }
+      return {}
+    })
+    render(<WorkbenchPage hostID="host"/>)
+    const age = await screen.findByText('3分')
+    expect(age).toHaveClass('tab-age')
+    expect(age.closest('button')).toHaveAttribute('data-tooltip', '这一轮已工作 3分')
+    expect(age).toHaveAttribute('aria-hidden', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '启动程序' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Claude Code' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_text', { pane_id: 'w1:p9', text: 'claude\r' }))
+    expect(call).toHaveBeenCalledWith('tab.create', { workspace_id: 'w1', focus: false })
+    expect(call).toHaveBeenCalledWith('tab.rename', { tab_id: 'w1:t9', label: 'Claude Code' })
+    fireEvent.click(screen.getByRole('button', { name: '启动程序' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '空终端' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('tab.create', { workspace_id: 'w1', focus: false }))
+    expect(call.mock.calls.filter(([method, params]) => method === 'pane.send_text' && (params as { pane_id?: string }).pane_id === 'w1:p9')).toHaveLength(1)
   })
 })

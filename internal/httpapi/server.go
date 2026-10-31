@@ -184,6 +184,7 @@ func (a *API) Handler() http.Handler {
 		router.Group(func(router chi.Router) {
 			router.Use(a.authenticate)
 			a.registerAuthenticatedMeRoutes(router)
+			a.registerLauncherRoutes(router)
 			router.Get("/cli-release", a.cliRelease)
 			router.Route("/hosts", a.hostRoutes)
 			router.Route("/agents", a.agentRoutes)
