@@ -229,6 +229,33 @@ describe('TerminalPane paste interception', () => {
     act(() => send!('new explicit input'))
     expect(input).toHaveBeenLastCalledWith(8, 'new explicit input')
   })
+  it('sends input typed before the first open, but never replays input typed while reconnecting', async () => {
+    const client = new WorkbenchClient('hst_test')
+    const resolvers: Array<(id: number) => void> = []
+    vi.spyOn(client, 'openTerminal').mockImplementation(() => new Promise<number>((resolve) => { resolvers.push(resolve) }))
+    const frames = vi.spyOn(client, 'onTerminal').mockReturnValue(() => {})
+    const input = vi.spyOn(client, 'sendInput').mockImplementation(() => {})
+    let send: ((data: string) => void) | null = null
+    const props = { client, pane: mockPane, active: true, onFocus: () => {}, onControlReady: (handler: ((data: string) => void) | null) => { send = handler }, theme: {}, enhancedContrast: false }
+    const view = render(<TerminalPane {...props} connectionEpoch={1}/>)
+    await waitFor(() => expect(resolvers).toHaveLength(1))
+    // 首次打开前的输入保留原有体验：流打开后发送一次。
+    act(() => send!('typed early'))
+    expect(input).not.toHaveBeenCalled()
+    await act(async () => { resolvers[0](7) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(1))
+    expect(input.mock.calls).toEqual([[7, 'typed early']])
+    // 主机连接重建：断流期间的输入既不排队也不补发，并提示用户。
+    view.rerender(<TerminalPane {...props} connectionEpoch={2}/>)
+    await waitFor(() => expect(resolvers).toHaveLength(2))
+    act(() => send!('typed while reconnecting'))
+    expect(screen.getByRole('alert')).toHaveTextContent('终端未连接，输入未发送')
+    await act(async () => { resolvers[1](8) })
+    await waitFor(() => expect(frames).toHaveBeenCalledTimes(2))
+    expect(input.mock.calls).toEqual([[7, 'typed early']])
+    act(() => send!('typed after reconnect'))
+    expect(input).toHaveBeenLastCalledWith(8, 'typed after reconnect')
+  })
   it('passes typed input through transformInput and sends nothing when it returns an empty string', async () => {
     const client = new WorkbenchClient('hst_test')
     vi.spyOn(client, 'openTerminal').mockResolvedValue(7)

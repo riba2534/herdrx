@@ -343,8 +343,12 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     })
   }
   const searchRef = useRef<SearchAddon | null>(null)
+  // 只在本组件首次打开终端流之前暂存输入；流打开过以后，断流/重连期间的输入一律不暂存、不补发。
+  // 断线前后远端状态不确定（之前的输入是否送达、屏幕是否已变化），重连后自动补发的按键
+  // 可能落在用户没看到的界面上，所以只提示，让用户看清当前画面后再输入。
   const pendingInputRef = useRef<string[]>([])
   const pendingInputSizeRef = useRef(0)
+  const streamOpenedRef = useRef(false)
   const revealCursorRef = useRef<() => void>(() => {})
   revealCursorRef.current = () => {
     const terminal = termRef.current, viewport = viewportRef.current
@@ -367,14 +371,12 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
     if (inputBlockedRef.current) return
     if (historyRef.current.active) returnToLiveRef.current()
     revealCursorRef.current()
-    const queue = () => {
-      if (pendingInputSizeRef.current + data.length <= 32 * 1024) {
+    if (streamRef.current == null) {
+      if (streamOpenedRef.current) setHistoryError('终端未连接，输入未发送，请等待重连后重新输入')
+      else if (pendingInputSizeRef.current + data.length <= 32 * 1024) {
         pendingInputRef.current.push(data)
         pendingInputSizeRef.current += data.length
       }
-    }
-    if (streamRef.current == null) {
-      queue()
       return
     }
     client.sendInput(streamRef.current, data)
@@ -859,6 +861,7 @@ export function TerminalPane({ compact = false, controlsOpen, onControlsOpenChan
         const streamID = await client.openTerminal(pane.pane_id, cols, rows)
         if (cancelled) { client.closeTerminal(streamID); return }
         streamRef.current = streamID
+        streamOpenedRef.current = true
         setStatus('可输入')
         unsubscribe = client.onTerminal(streamID, (frame) => {
           if (historyRef.current.active) { client.acknowledge(streamID, frame.seq); return }
