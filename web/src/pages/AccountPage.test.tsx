@@ -9,9 +9,16 @@ vi.mock('../auth', () => ({ useAuth: () => auth }))
 vi.mock('../lib/navigation', () => ({ navigate: vi.fn() }))
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>()
-  return { ...actual, api: { changePassword: vi.fn() } }
+  return { ...actual, api: { changePassword: vi.fn(), subscribePush: vi.fn() } }
 })
-afterEach(() => { vi.resetAllMocks() })
+afterEach(() => { vi.resetAllMocks(); delete (navigator as { serviceWorker?: unknown }).serviceWorker })
+
+function deviceSubscription() {
+  const json = { endpoint: 'https://push.example.test/this-device', keys: { p256dh: 'test', auth: 'test' } }
+  const subscription = { toJSON: () => json }
+  Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { getRegistration: vi.fn().mockResolvedValue({ pushManager: { getSubscription: vi.fn().mockResolvedValue(subscription) } }) } })
+  return json
+}
 
 function fill(current: string, next: string, confirmation: string) {
   fireEvent.change(screen.getByLabelText(/^(当前密码|临时密码)$/), { target: { value: current } })
@@ -39,7 +46,9 @@ it('shows server errors and reports that other devices were signed out', async (
   const changed = { ...user, must_change_password: false }
   vi.mocked(api.changePassword).mockResolvedValueOnce({ ok: true, user: changed, revoked_sessions: 2 })
   fill('old-password-value', 'new-password-value', 'new-password-value')
-  expect(await screen.findByRole('status')).toHaveTextContent('其他设备已退出登录')
+  expect(await screen.findByRole('status')).toHaveTextContent('其他设备已退出登录并停止通知')
+  expect(screen.getByRole('status')).not.toHaveTextContent('重新开启')
+  expect(api.subscribePush).not.toHaveBeenCalled()
   expect(api.changePassword).toHaveBeenLastCalledWith({ current_password: 'old-password-value', new_password: 'new-password-value' })
   expect(auth.setAuthenticated).toHaveBeenCalledWith(changed)
 })
@@ -55,4 +64,25 @@ it('keeps a forced change on this page until the user continues, and allows logo
   fill('temporary-password', 'new-password-value', 'new-password-value')
   fireEvent.click(await screen.findByRole('button', { name: '进入工作台' }))
   expect(auth.setAuthenticated).toHaveBeenCalledWith(changed)
+})
+
+it('re-registers this device after the change ended every push subscription', async () => {
+  const json = deviceSubscription()
+  vi.mocked(api.subscribePush).mockResolvedValueOnce({ ok: true })
+  vi.mocked(api.changePassword).mockResolvedValueOnce({ ok: true, user: { ...user, must_change_password: false }, revoked_sessions: 1 })
+  render(<AccountPage/>)
+  fill('old-password-value', 'new-password-value', 'new-password-value')
+  expect(await screen.findByRole('status')).toHaveTextContent('停止通知')
+  expect(api.subscribePush).toHaveBeenCalledWith(json)
+  expect(screen.getByRole('status')).not.toHaveTextContent('重新开启')
+})
+
+it('tells the user to re-enable notifications when this device cannot be re-registered', async () => {
+  deviceSubscription()
+  vi.mocked(api.subscribePush).mockRejectedValueOnce(new Error('offline'))
+  vi.mocked(api.changePassword).mockResolvedValueOnce({ ok: true, user: { ...user, must_change_password: false }, revoked_sessions: 1 })
+  render(<AccountPage/>)
+  fill('old-password-value', 'new-password-value', 'new-password-value')
+  expect(await screen.findByRole('status')).toHaveTextContent('如需通知请在本设备重新开启')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 })
