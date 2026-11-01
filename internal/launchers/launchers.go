@@ -248,9 +248,9 @@ const Loader = `builtin setopt no_aliases; builtin eval "$` + ScriptVariable + `
 // Script as $2. The startup files' own stdout and stderr go to /dev/null; only
 // descriptor 3 reaches the SSH channel. zsh leads its own process group: a new
 // session through setsid(1) where it exists, otherwise a job-control group (sh
-// without either falls back to zsh alone). A watchdog kills that group after
-// five seconds and the wrapper exits 124; when zsh finishes first, whatever is
-// left in its group is killed too.
+// without either falls back to zsh alone). A watchdog kills zsh after five
+// seconds and the wrapper then exits 124. Either way, once zsh is gone,
+// whatever is left in its group is killed.
 const sshWrapper = `PATH="${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/usr/local/bin"; export PATH
 command -v zsh >/dev/null 2>&1 || exit 127
 TERM=dumb; export TERM
@@ -263,7 +263,7 @@ else
 fi
 child=$!
 set +m 2>/dev/null
-(sleep 5; kill -s KILL -- -"$child" 2>/dev/null || kill -s KILL "$child" 2>/dev/null) </dev/null >/dev/null 2>&1 &
+(sleep 5 && kill -s KILL "$child" 2>/dev/null) </dev/null >/dev/null 2>&1 &
 watchdog=$!
 wait "$child"
 code=$?

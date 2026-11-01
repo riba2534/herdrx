@@ -119,7 +119,7 @@ func TestScriptsSurviveSingleQuoting(t *testing.T) {
 	if !strings.HasPrefix(launchers.SSHCommand, "sh -c '") || strings.Count(launchers.SSHCommand, "'") != 6 || strings.Contains(launchers.SSHCommand, `\`) {
 		t.Fatalf("SSH command quoting: %q", launchers.SSHCommand)
 	}
-	if !strings.Contains(launchers.SSHCommand, "(sleep "+strconv.Itoa(int(launchers.Timeout/time.Second))+";") {
+	if !strings.Contains(launchers.SSHCommand, "(sleep "+strconv.Itoa(int(launchers.Timeout/time.Second))+" && kill") {
 		t.Fatal("the SSH watchdog must use the discovery timeout")
 	}
 }
@@ -160,14 +160,56 @@ func TestRunFailingStartupIsReadFailed(t *testing.T) {
 	}
 }
 
+// About 500 KiB: more than the limit plus a pipe buffer, so zsh is still
+// writing when the reader stops and must be killed rather than waited for.
 func TestRunOverOutputLimitIsReadFailed(t *testing.T) {
 	launcherstest.RequireZsh(t)
 	launcherstest.Isolate(t, func(string) string {
-		return `for i in {1..4000}; do alias "launcher_with_a_rather_long_name_to_fill_the_output_quickly_$i=claude"; done` + "\n"
+		return `for i in {1..6000}; do alias "launcher_with_a_rather_long_name_to_fill_the_output_quickly_$i=claude"; done` + "\n"
 	})
+	started := time.Now()
 	if _, err := launchers.Run(context.Background()); launchers.ReasonOf(err) != launchers.ReasonReadFailed {
 		t.Fatalf("err = %v", err)
 	}
+	if elapsed := time.Since(started); elapsed > launchers.Timeout/2 {
+		t.Fatalf("oversized output took %s", elapsed)
+	}
+}
+
+func TestProbeRunsWithADumbTerminalAndNoInput(t *testing.T) {
+	launcherstest.RequireZsh(t)
+	home := launcherstest.Isolate(t, func(home string) string {
+		return fmt.Sprintf("alias xcc=claude\necho \"$TERM\" > %[1]s/term\nif read -r line; then echo read > %[1]s/stdin; else echo eof > %[1]s/stdin; fi\n", home)
+	})
+	check := func(t *testing.T) {
+		t.Helper()
+		for name, want := range map[string]string{"term": "dumb", "stdin": "eof"} {
+			data, err := os.ReadFile(filepath.Join(home, name))
+			if err != nil || strings.TrimSpace(string(data)) != want {
+				t.Fatalf("%s = %q %v, want %s", name, data, err, want)
+			}
+		}
+	}
+	t.Setenv("TERM", "xterm-256color")
+	t.Run("local", func(t *testing.T) {
+		if _, err := launchers.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		check(t)
+	})
+	t.Run("ssh", func(t *testing.T) {
+		if _, status := runSSHCommand(t, "sh"); status != 0 {
+			t.Fatalf("status %d", status)
+		}
+		check(t)
+	})
+	// With job control sh no longer points a background job at /dev/null.
+	t.Run("ssh job control", func(t *testing.T) {
+		if _, status := runSSHCommand(t, "sh", "PATH="+toolDir(t, map[string]string{"sh": "bash", "zsh": "zsh", "sleep": "sleep"})); status != 0 {
+			t.Fatalf("status %d", status)
+		}
+		check(t)
+	})
 }
 
 // hangingZshrc starts a background child and a foreground child that would
@@ -216,11 +258,14 @@ func TestRunTimeoutKillsTheProcessGroup(t *testing.T) {
 	assertKilled(t, home)
 }
 
+// leftoverZshrc starts two children that hold descriptor 3 and returns.
+func leftoverZshrc(home string) string {
+	return fmt.Sprintf("alias xcc=claude\nsleep 60 &\necho $! > %[1]s/background.pid\nsh -c 'echo $$ > %[1]s/foreground.pid; exec sleep 60' &\nsleep 0.2\n", home)
+}
+
 func TestRunCleansUpWhatStartupLeftBehind(t *testing.T) {
 	launcherstest.RequireZsh(t)
-	home := launcherstest.Isolate(t, func(home string) string {
-		return fmt.Sprintf("alias xcc=claude\nsleep 60 &\necho $! > %[1]s/background.pid\nsh -c 'echo $$ > %[1]s/foreground.pid; exec sleep 60' &\nsleep 0.2\n", home)
-	})
+	home := launcherstest.Isolate(t, leftoverZshrc)
 	started := time.Now()
 	output, err := launchers.Run(context.Background())
 	if err != nil || len(launchers.Parse(output)) != 1 {
@@ -228,6 +273,20 @@ func TestRunCleansUpWhatStartupLeftBehind(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("a background child held the probe for %s", elapsed)
+	}
+	assertKilled(t, home)
+}
+
+func TestSSHCommandCleansUpWhatStartupLeftBehind(t *testing.T) {
+	launcherstest.RequireZsh(t)
+	home := launcherstest.Isolate(t, leftoverZshrc)
+	started := time.Now()
+	output, status := runSSHCommand(t, "sh")
+	if status != 0 || len(launchers.Parse(output)) != 1 {
+		t.Fatalf("status %d output %q", status, output)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("a background child held the channel for %s", elapsed)
 	}
 	assertKilled(t, home)
 }
@@ -246,6 +305,8 @@ func runSSHCommand(t *testing.T, loginShell string, extraEnv ...string) ([]byte,
 	}
 	command := exec.Command(path, args...)
 	command.Env = append(os.Environ(), extraEnv...)
+	// The SSH channel is stdin there; startup files must never read from it.
+	command.Stdin = strings.NewReader("typed into the channel\n")
 	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	output, err := command.Output()
 	var exit *exec.ExitError
