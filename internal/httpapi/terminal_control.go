@@ -598,18 +598,7 @@ func (s *workbenchSession) geometryScroll(stream *terminalStream, lines, column,
 		if err := l.session.authorized(); err != nil {
 			return err
 		}
-		direction := "down"
-		if lines < 0 {
-			direction = "up"
-			lines = -lines
-		}
-		var commands []any
-		for lines > 0 {
-			step := min(lines, 3)
-			commands = append(commands, map[string]any{"type": "terminal.scroll", "direction": direction, "lines": step, "source": "wheel", "column": column, "row": row})
-			lines -= step
-		}
-		return l.controller.write(s.ctx, commands...)
+		return l.controller.write(s.ctx, herdr.ScrollCommands(lines, column, row)...)
 	}
 	if e.scroll == nil {
 		e.scroll = herdr.NewScrollController(context.Background(), s.endpoint, stream.paneID)

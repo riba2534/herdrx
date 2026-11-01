@@ -141,14 +141,15 @@ while True:
 	before := waitPosition(0)
 	scroll := NewScrollController(ctx, endpoint, created.RootPane.ID)
 	defer scroll.Close()
+	// The fixture reports the mouse, so each line must arrive as its own event.
 	if err := scroll.Send(ctx, -9, 10, 5); err != nil {
 		t.Fatal(err)
 	}
-	after := waitPosition(-3)
+	after := waitPosition(-9)
 	if err := scroll.Send(ctx, 6, 10, 5); err != nil {
 		t.Fatal(err)
 	}
-	final := waitPosition(-1)
+	final := waitPosition(-3)
 	if before.PID != after.PID || before.PID != final.PID || before.Cols != final.Cols || before.Rows != final.Rows {
 		t.Fatalf("scroll changed task or dimensions: %+v -> %+v -> %+v", before, after, final)
 	}
@@ -180,7 +181,7 @@ while True:
 					t.Fatal(err)
 				}
 				sent = append(sent, float64(time.Since(start).Microseconds())/1000)
-				value := waitPosition(i)
+				value := waitPosition(3 * i)
 				received = append(received, float64(value.Received-start.UnixNano())/1e6)
 			}
 			slices.Sort(sent)
@@ -189,7 +190,7 @@ while True:
 			if err := send(-90); err != nil {
 				t.Fatal(err)
 			}
-			waitPosition(-1)
+			waitPosition(-3)
 			controller.Close()
 		}
 	}
@@ -205,10 +206,12 @@ while True:
 		t.Fatal("scroll took over an existing controller")
 	}
 	// The original owner can still send input, proving rejection did not detach it.
+	// Herdr delivers one wheel event per command to a mouse-reporting app, so
+	// lines:3 moves it by one.
 	if err := json.NewEncoder(owner.Stdin()).Encode(map[string]any{"type": "terminal.scroll", "direction": "down", "lines": 3, "source": "wheel"}); err != nil {
 		t.Fatal(err)
 	}
-	retained := waitPosition(0)
+	retained := waitPosition(-2)
 	if retained.PID != before.PID {
 		t.Fatal("controller rejection affected the task")
 	}

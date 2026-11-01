@@ -145,8 +145,22 @@ func TestScrollControllerReusesBurstAndReleasesOnIdle(t *testing.T) {
 	}
 	p := e.processes[0]
 	commands := p.input()
-	if len(commands) != 3 || commands[0]["direction"] != "up" || commands[1]["direction"] != "down" || commands[0]["column"] != float64(119) || commands[0]["row"] != float64(39) {
-		t.Fatalf("incorrect ordered gesture data: %v", commands)
+	// One one-line wheel event per line: a mouse-reporting app (fullscreen
+	// Claude, Codex) gets one event per command and ignores lines.
+	if len(commands) != 9 {
+		t.Fatalf("want one command per line, got %v", commands)
+	}
+	for i, command := range commands {
+		direction := "down"
+		if i < 3 {
+			direction = "up"
+		}
+		if command["direction"] != direction || command["lines"] != float64(1) {
+			t.Fatalf("incorrect ordered gesture data: %v", commands)
+		}
+	}
+	if commands[0]["column"] != float64(119) || commands[0]["row"] != float64(39) || commands[3]["column"] != float64(0) || commands[3]["row"] != float64(0) {
+		t.Fatalf("gesture left its position: %v", commands)
 	}
 	select {
 	case <-p.closed:
@@ -219,7 +233,7 @@ func TestScrollControllerFailedWriteIsNotReplayedAndCloseIsFinal(t *testing.T) {
 	if err := s.Send(context.Background(), -3, 0, 0); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("expected failed write, got %v", err)
 	}
-	if len(e.opens) != 1 || len(p.input()) != 1 {
+	if len(e.opens) != 1 || len(p.input()) != 3 {
 		t.Fatal("failed gesture was replayed")
 	}
 	select {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"time"
 )
@@ -71,16 +72,10 @@ func (s *ScrollController) Send(ctx context.Context, lines, column, row int) err
 	connection := s.connection
 	stop := context.AfterFunc(ctx, connection.cancel)
 	defer stop()
-	direction := "down"
-	if lines < 0 {
-		direction, lines = "up", -lines
-	}
 	var batch bytes.Buffer
 	encoder := json.NewEncoder(&batch)
-	for lines > 0 {
-		step := min(lines, 3)
-		_ = encoder.Encode(map[string]any{"type": "terminal.scroll", "direction": direction, "lines": step, "source": "wheel", "column": min(column, connection.rect.Width-1), "row": min(row, connection.rect.Height-1)})
-		lines -= step
+	for _, command := range ScrollCommands(lines, min(column, connection.rect.Width-1), min(row, connection.rect.Height-1)) {
+		_ = encoder.Encode(command)
 	}
 	n, err := connection.process.Stdin().Write(batch.Bytes())
 	if err == nil && n != batch.Len() {
@@ -112,6 +107,22 @@ func (s *ScrollController) Send(ctx context.Context, lines, column, row int) err
 		}
 	})
 	return nil
+}
+
+// ScrollCommands expands a wheel gesture (negative lines scroll up) into
+// Herdr terminal.scroll commands: one one-line command per line, all at
+// column/row. For an app with mouse reporting on (fullscreen Claude, Codex)
+// Herdr turns each command into a single wheel event and ignores lines, so
+// packing lines would scroll those apps a fraction of the gesture. A shell
+// scrolls Herdr's history by lines: N one-line commands move it as far as one
+// N-line command.
+func ScrollCommands(lines, column, row int) []any {
+	direction := "down"
+	if lines < 0 {
+		direction, lines = "up", -lines
+	}
+	command, _ := json.Marshal(map[string]any{"type": "terminal.scroll", "direction": direction, "lines": 1, "source": "wheel", "column": column, "row": row})
+	return slices.Repeat([]any{json.RawMessage(command)}, lines)
 }
 
 func (s *ScrollController) open(ctx context.Context) (*scrollConnection, error) {
