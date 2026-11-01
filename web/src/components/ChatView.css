@@ -257,9 +257,9 @@ button.chat-work-head:hover { color: var(--console-text); }
 /* ── 输入区 ── */
 .chat-compose-column { min-width: 0; }
 .chat-view[data-variant="console"] .chat-compose { border-top: 0; background: var(--console-surface); }
-/* 运行状态栏与交互卡片：在输入框上方；卡片展开时输入框隐藏，卡片自己留出底边距。 */
+/* 运行状态栏与交互卡片：在输入框上方；卡片展开时输入框不渲染，卡片自己留出底边距。 */
 .chat-console-controls { display: grid; gap: var(--console-space-2); min-width: 0; padding: var(--console-space-2) 10px 0; }
-.chat-compose[data-card="true"] .chat-console-controls { padding-bottom: var(--console-space-2); }
+.chat-console-controls:last-child { padding-bottom: var(--console-space-2); }
 
 /* 手机：正文 16px；Web UI 正文列两侧各留 20px。 */
 @container chat-view (max-width: 700px) {

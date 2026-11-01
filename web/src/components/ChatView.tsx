@@ -15,10 +15,7 @@ import { collectUnreadKeys } from '../lib/chat/unreadCount'
 import { insideScrollableAbove, isUpwardWheelIntent, shouldRepinOnWheel } from '../lib/chat/autoFollow'
 import { ChatTurn } from './chat/ChatTurn'
 import { ChatChips } from './chat/ChatChips'
-import { ConsoleStatusBar } from './console/ConsoleStatusBar'
-import { InteractionPanel } from './console/InteractionPanel'
-import { useConsoleControls } from '../lib/console/useConsoleControls'
-import { useConsoleLive } from '../lib/console/useConsoleLive'
+import { ConsoleControls } from './console/ConsoleControls'
 import { agentStatusLabel, paneDisplayName } from '../lib/labels'
 import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
@@ -81,10 +78,12 @@ export function ChatView({ hostID, pane, client, compact, connected, variant = '
   const arrivals = useRef(new ArrivalTracker()).current
   const unreadSessionRef = useRef<string | undefined>(undefined)
   const consoleVariant = variant === 'console'
-  // 交互卡片展开时顶替输入框；输入框只是隐藏，草稿、图片和语音状态都不丢。
+  // 交互卡片展开时顶替输入框：草稿在草稿存储里、图片在媒体层里都保留，语音输入随之停止。
   const [cardActive, setCardActive] = useState(false)
-  const live = useConsoleLive({ hostID, paneID, client, enabled: consoleVariant && docVisible && pane.agent === 'claude' })
-  const controls = useConsoleControls({ client, paneID, mode: live.mode })
+  // 调用方常传内联函数：经 ref 转一道，控制台那一块不因父组件重渲染而重渲染。
+  const switchRef = useRef(onSwitchToTerminal)
+  switchRef.current = onSwitchToTerminal
+  const openShell = useCallback(() => switchRef.current(), [])
 
   const setFollowing = useCallback((following: boolean) => {
     followingRef.current = following
@@ -350,40 +349,35 @@ export function ChatView({ hostID, pane, client, compact, connected, variant = '
       <span className="voice-assistant-note-text">{voiceReply}</span>
       <Button className="button-secondary" onClick={() => setVoiceReply('')}>关闭</Button>
     </div>}
-    <div className="chat-compose" data-card={cardActive || undefined}>
+    <div className="chat-compose">
       <div className="chat-compose-column">
-        {consoleVariant && <div className="chat-console-controls">
-          <ConsoleStatusBar live={live} working={status === 'working'} onInterrupt={controls.interrupt} onCycleMode={controls.cycleMode}/>
-          <InteractionPanel hostID={hostID} pane={pane} records={state.messages} live={live} onActiveChange={setCardActive} onOpenShell={onSwitchToTerminal}/>
-        </div>}
-        <div className="chat-composer-slot" hidden={cardActive}>
-          <ChatMediaComposer
-            variant="chat"
-            hostID={hostID}
-            paneID={paneID}
-            visible
-            compact={compact}
-            sendDisabled={!connected}
-            placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
-            onDirectInput={() => {}}
-            onLocalInput={() => {}}
-            stageImage={stageImage}
-            readSend={readComposerSend}
-            voice={
-              <VoiceInput
-                hostID={hostID}
-                paneID={paneID}
-                visible
-                compact={compact}
-                transport={voiceTransport}
-                writeDraft={writeComposerDraft}
-                readDraft={readComposerDraft}
-                onAssistantText={onVoiceAssistantText}
-                onStatus={onVoiceStatus}
-              />
-            }
-          />
-        </div>
+        {consoleVariant && <ConsoleControls hostID={hostID} pane={pane} client={client} records={state.messages} onActiveChange={setCardActive} onOpenShell={openShell}/>}
+        <ChatMediaComposer
+          variant="chat"
+          hostID={hostID}
+          paneID={paneID}
+          visible={!cardActive}
+          compact={compact}
+          sendDisabled={!connected}
+          placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
+          onDirectInput={() => {}}
+          onLocalInput={() => {}}
+          stageImage={stageImage}
+          readSend={readComposerSend}
+          voice={
+            <VoiceInput
+              hostID={hostID}
+              paneID={paneID}
+              visible
+              compact={compact}
+              transport={voiceTransport}
+              writeDraft={writeComposerDraft}
+              readDraft={readComposerDraft}
+              onAssistantText={onVoiceAssistantText}
+              onStatus={onVoiceStatus}
+            />
+          }
+        />
       </div>
     </div>
   </section>

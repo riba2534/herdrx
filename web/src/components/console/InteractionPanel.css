@@ -273,7 +273,7 @@
 
 @media (max-width: 767px), (pointer: coarse) {
   .console-card { padding: var(--console-space-3); }
-  .console-card-scroll { max-height: 40dvh; }
+  .console-card-scroll { max-height: 32dvh; }
   .console-option { padding: var(--console-space-3); }
   .console-free-input { font-size: var(--console-font-mobile-body); }
   .console-choice-row .console-button { flex: 1; min-height: var(--console-tap); }

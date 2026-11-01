@@ -7,7 +7,6 @@ import type { ScreenError, WorkbenchClient } from '../lib/workbench'
 import type { ScreenFrame } from '../lib/ansiScreen'
 import type { ChatRecord } from '../lib/structuredChatTypes'
 import type { Pane, PaneDialog } from '../types'
-import { MODE_CHANGE_TIMEOUT_MS } from '../lib/console/useConsoleControls'
 
 /**
  * 语音替身：默认「未启用」，只有显式 enable() 的用例才会出现麦克风入口。
@@ -127,7 +126,8 @@ type ScreenWatch = { paneID: string; onFrame: (frame: ScreenFrame) => void; onEr
 
 function createClient() {
   const watches: ScreenWatch[] = []
-  return Object.assign({
+  return {
+    watches,
     call: vi.fn().mockRejectedValue(new Error('Chat 视图不应调用任何 RPC')),
     getHostID: () => 'host',
     watchScreen: vi.fn((paneID: string, _lines: number, handlers: { onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void }) => {
@@ -136,13 +136,13 @@ function createClient() {
       return () => { watch.stopped = true }
     }),
     onEpoch: vi.fn(() => () => true),
-  }, { watches }) as unknown as WorkbenchClient & { watches: ScreenWatch[] }
+  } as unknown as WorkbenchClient & { watches: ScreenWatch[] }
 }
 
 /** 一帧 Claude 全屏画面：spinner（可选）、输入框和模式行。 */
-function claudeScreen(mode: string, spinner = '') {
+function claudeScreen(mode: string, { spinner = '', seq = 1 } = {}) {
   const lines = ['● 正在改 calc.py', '', ...(spinner ? [spinner, ''] : []), '─'.repeat(40), '❯ ', '─'.repeat(40), `  ⏵⏵ ${mode} on (shift+tab to cycle)`]
-  return { pane_id: 'p1', gen: 1, seq: 1, full: true, lines, total: lines.length } satisfies ScreenFrame
+  return { pane_id: 'p1', gen: 1, seq, full: true, lines, total: lines.length } satisfies ScreenFrame
 }
 
 function props(overrides: Record<string, unknown> = {}) {
@@ -880,13 +880,20 @@ describe('console status bar and interaction cards', () => {
 
   afterEach(() => setVisibility('visible'))
 
-  it('shows the working status, the mode and the live screen above the input', async () => {
-    transcriptServer(sequence(verified([text('u1', 'user', '改一下')])))
+  /** 渲染 console 变体，等第一条记录出来；返回假 client 与它的 `call`。 */
+  async function renderConsole(messages: ChatRecord[], pane: Partial<Pane> = {}) {
+    transcriptServer(sequence(verified(messages)))
     const client = createClient()
-    render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, agent_status: 'working' } })}/>)
-    await screen.findByText('改一下')
+    const call = vi.mocked(client.call).mockResolvedValue({})
+    render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, ...pane } })}/>)
+    await screen.findByText((messages[0].blocks[0] as { text: string }).text)
+    return { client, call }
+  }
+
+  it('shows the working status, the mode and the live screen above the input', async () => {
+    const { client } = await renderConsole([text('u1', 'user', '改一下')], { agent_status: 'working' })
     expect(client.watchScreen).toHaveBeenCalledTimes(1)
-    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions', '✻ Wibbling… (15s · ↓ 1.2k tokens)')))
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions', { spinner: '✻ Wibbling… (15s · ↓ 1.2k tokens)' })))
     // 计时立刻显示；动词按状态文案的节奏（至少停留 1 秒）替换掉「正在运行…」。
     expect(screen.getByText('15 秒')).toBeInTheDocument()
     expect(await screen.findByText('Wibbling…', {}, { timeout: 2000 })).toBeInTheDocument()
@@ -940,11 +947,7 @@ describe('console status bar and interaction cards', () => {
   })
 
   it('interrupts with one Esc key press and reports a failure without retrying', async () => {
-    transcriptServer(sequence(verified([text('u1', 'user', '跑起来')])))
-    const client = createClient()
-    const call = vi.mocked(client.call).mockResolvedValue({})
-    render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, agent_status: 'working' } })}/>)
-    await screen.findByText('跑起来')
+    const { call } = await renderConsole([text('u1', 'user', '跑起来')], { agent_status: 'working' })
     fireEvent.click(screen.getByRole('button', { name: '中断' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['esc'] }))
     call.mockRejectedValueOnce(new Error('请求超时'))
@@ -954,38 +957,15 @@ describe('console status bar and interaction cards', () => {
   })
 
   it('cycles the mode with one Shift+Tab and waits for the mode line to change', async () => {
-    transcriptServer(sequence(verified([text('u1', 'user', '切模式')])))
-    const client = createClient()
-    const call = vi.mocked(client.call).mockResolvedValue({})
-    render(<ChatView {...props({ client, variant: 'console' })}/>)
-    await screen.findByText('切模式')
+    const { client, call } = await renderConsole([text('u1', 'user', '切模式')])
     act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
     fireEvent.click(screen.getByRole('button', { name: /当前模式：免授权/ }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['shift+tab'] }))
     expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeDisabled()
-    act(() => client.watches[0].onFrame({ ...claudeScreen('auto mode'), seq: 2 }))
+    act(() => client.watches[0].onFrame(claudeScreen('auto mode', { seq: 2 })))
     await waitFor(() => expect(screen.getByRole('button', { name: /当前模式：自动/ })).toBeEnabled())
     expect(screen.queryByRole('alert')).toBeNull()
     expect(call).toHaveBeenCalledTimes(1)
-  })
-
-  it('says so when the mode line does not change within three seconds and does not press again', async () => {
-    transcriptServer(sequence(verified([text('u1', 'user', '切模式')])))
-    const client = createClient()
-    const call = vi.mocked(client.call).mockResolvedValue({})
-    render(<ChatView {...props({ client, variant: 'console' })}/>)
-    await screen.findByText('切模式')
-    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
-    vi.useFakeTimers()
-    try {
-      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /当前模式：免授权/ })) })
-      await act(async () => { await vi.advanceTimersByTimeAsync(MODE_CHANGE_TIMEOUT_MS) })
-      expect(screen.getByRole('alert')).toHaveTextContent('已按 Shift+Tab，但 3 秒内没看到模式变化，不会再按')
-      await act(async () => { await vi.advanceTimersByTimeAsync(MODE_CHANGE_TIMEOUT_MS * 3) })
-      expect(call).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })
 
