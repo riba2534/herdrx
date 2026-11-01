@@ -1,0 +1,167 @@
+.console-status {
+  display: grid;
+  gap: var(--console-space-1);
+  min-width: 0;
+  color: var(--console-text);
+}
+
+.console-status-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--console-space-2);
+  min-height: 32px;
+}
+
+/* 左段：图标 + 动词 + 计时 + token。窄屏时动词截断，计时和 token 不换行。 */
+.console-status-run {
+  display: flex;
+  align-items: center;
+  gap: var(--console-space-2);
+  min-width: 0;
+  font-size: 13px;
+  opacity: 1;
+  transition: opacity var(--console-motion-slow) var(--console-ease-out);
+}
+
+.console-status[data-state='fading'] .console-status-run { opacity: 0; }
+
+.console-status-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--console-running);
+}
+
+.console-status[data-state='working'] .console-status-icon { animation: console-breathe calc(var(--console-motion-slow) * 6) var(--console-ease-move) infinite; }
+.console-status-icon.console-status-done { color: var(--console-success); animation: none; }
+
+@keyframes console-breathe {
+  50% { opacity: .45; }
+}
+
+.console-status-text {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: opacity var(--console-motion-fast) var(--console-ease-move);
+}
+
+.console-status-text[data-fading='true'] { opacity: 0; }
+
+.console-status-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  color: var(--console-text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.console-status-thinking { color: var(--console-text-3); }
+
+.console-status-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--console-space-2);
+  flex: none;
+}
+
+/* 模式胶囊：免授权用醒目但不刺眼的暖色底，其余模式用中性底，计划用信息色。 */
+.console-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 var(--console-space-3);
+  border: 1px solid transparent;
+  border-radius: var(--console-radius-pill);
+  background: var(--console-raised);
+  color: var(--console-text-2);
+  font-size: var(--console-font-meta);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color var(--console-motion-fast) var(--console-ease-move), color var(--console-motion-fast) var(--console-ease-move);
+}
+
+.console-mode:hover:not(:disabled) { border-color: var(--console-line); }
+.console-mode:disabled { opacity: .7; }
+.console-mode-dot { width: 6px; height: 6px; border-radius: var(--console-radius-pill); background: currentColor; }
+.console-mode[data-mode='bypass'] { background: var(--console-warning-bg); color: var(--console-warning); }
+.console-mode[data-mode='plan'] { background: var(--console-info-bg); color: var(--console-info); }
+.console-mode[data-mode='acceptEdits'] { color: var(--console-success); }
+
+.console-interrupt { min-height: 28px; padding: 0 var(--console-space-3); font-size: var(--console-font-meta); }
+
+.console-status-error {
+  margin: 0;
+  color: var(--console-danger);
+  font-size: var(--console-font-meta);
+}
+
+/* 实时画面折叠条 */
+.console-live {
+  min-width: 0;
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-card);
+  overflow: hidden;
+}
+
+.console-live-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 var(--console-space-2);
+  border: 0;
+  background: transparent;
+  color: var(--console-text-2);
+  font-size: var(--console-font-meta);
+  text-align: left;
+}
+
+.console-live-toggle:hover { color: var(--console-text); }
+.console-live-chevron { flex: none; transition: transform var(--console-motion-fast) var(--console-ease-move); }
+.console-live[data-open='true'] .console-live-chevron { transform: rotate(90deg); }
+.console-live-title { flex: none; font-weight: 600; }
+
+.console-live-latest {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--console-text-3);
+  font-family: var(--console-font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.console-live-body {
+  margin: 0;
+  max-height: calc(12 * 1.5em + 2 * var(--console-space-2));
+  padding: var(--console-space-2) var(--console-space-3);
+  overflow: auto;
+  border-top: 1px solid var(--console-line);
+  background: var(--console-code-bg);
+  color: var(--console-text);
+  font-family: var(--console-font-mono);
+  font-size: var(--console-font-meta);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-status[data-state='working'] .console-status-icon { animation: none; }
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .console-mode, .console-interrupt { min-height: var(--console-tap); }
+  .console-live-toggle { min-height: var(--console-tap); }
+}
+
+@media (max-width: 480px) {
+  .console-status-tokens, .console-status-thinking { display: none; }
+}
