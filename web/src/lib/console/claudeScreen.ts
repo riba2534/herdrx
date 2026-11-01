@@ -17,23 +17,14 @@ export type ConsoleSpinner = {
   raw: string
 }
 
-export type ClaudeScreen = { spinner: ConsoleSpinner | null; mode: ConsoleMode | null; preview: string[] }
-
-/** Shift+Tab 的循环顺序：免授权 → auto → manual → 接受编辑 → 计划 → 免授权。 */
-export const CONSOLE_MODES: readonly ConsoleMode[] = ['bypass', 'auto', 'manual', 'acceptEdits', 'plan']
-
-export function nextConsoleMode(mode: ConsoleMode): ConsoleMode {
-  return CONSOLE_MODES[(CONSOLE_MODES.indexOf(mode) + 1) % CONSOLE_MODES.length]
-}
+type ClaudeScreen = { spinner: ConsoleSpinner | null; mode: ConsoleMode | null; preview: string[] }
 
 /** 「实时画面」最多显示的行数。 */
-export const PREVIEW_LINES = 12
+const PREVIEW_LINES = 12
 // spinner 行离输入框最多隔这么多行非空内容（中间可能有 todo 列表、提示行）。
 const SPINNER_SEARCH_LINES = 12
 // 模式行在屏幕最后几行非空内容里。
 const MODE_SEARCH_LINES = 6
-// 右对齐的提示（`◈ max · /effort`、计划视图的 `↓`）前面是大段空白，不算正文。
-const RIGHT_ALIGNED_INDENT = 40
 
 // 字形在 · ✻ ✢ ✶ ✳ * 之间轮换；`●` 是消息行（`● Running 1 shell command…`），不算。
 // 动词后必须紧跟省略号：完成行 `✻ Cooked for 18s · done 3:11` 没有省略号，不算进行中。
@@ -118,13 +109,17 @@ export function parseMode(lines: readonly string[]): ConsoleMode | null {
   return null
 }
 
-/** `end` 之前最近的若干行正文：去掉空行、横线和右对齐提示，按共同缩进左移。 */
+/**
+ * `end` 之前最近的若干行正文：去掉空行、横线和右对齐提示，按共同缩进左移。
+ * 右对齐提示（`◈ max · /effort`、计划视图的 `↓`）贴着屏幕右边，前面的空白比内容还长。
+ */
 export function screenPreview(lines: readonly string[], end = lines.length, max = PREVIEW_LINES): string[] {
+  const width = Math.max(0, ...lines.map((line) => line.length))
   const kept: string[] = []
   for (let index = end - 1; index >= 0 && kept.length < max; index--) {
     const line = lines[index]
     const indent = line.length - line.trimStart().length
-    if (!line.trim() || RULE.test(line) || indent >= RIGHT_ALIGNED_INDENT) continue
+    if (!line.trim() || RULE.test(line) || (indent * 2 > line.length && line.length >= width - 2)) continue
     kept.push(line)
   }
   kept.reverse()

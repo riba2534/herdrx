@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatRecord } from '../structuredChatTypes'
 import type { PaneDialog } from '../../types'
-import { findPendingInteraction, latestPlan, matchQuestion, parseQuestions, planActions, questionOptions } from './interaction'
+import { findPendingInteraction, latestPlan, matchQuestion, parseQuestions, planActions, questionOptions, reviewAnswers } from './interaction'
 
 const questions = [
   { header: '测试框架', multiSelect: false, question: '测试框架用 pytest 还是 unittest？', options: [{ label: 'pytest', description: '使用 pytest 作为测试框架' }, { label: 'unittest', description: '使用 unittest 作为测试框架' }] },
@@ -62,16 +62,18 @@ describe('questionOptions', () => {
   it('takes labels and descriptions from the transcript and indexes from the screen', () => {
     const options = questionOptions(dialog('测试框架用 pytest 还是 unittest？', ['pytest', 'unittest', 'Type something.', 'Chat about this']), questions[0])
     expect(options).toEqual([
-      { index: 1, label: 'pytest', description: '使用 pytest 作为测试框架', selected: true, role: 'answer' },
-      { index: 2, label: 'unittest', description: '使用 unittest 作为测试框架', selected: false, role: 'answer' },
-      { index: 3, label: 'Type something.', selected: false, role: 'free' },
-      { index: 4, label: 'Chat about this', selected: false, role: 'chat' },
+      { index: 1, label: 'pytest', description: '使用 pytest 作为测试框架', role: 'answer' },
+      { index: 2, label: 'unittest', description: '使用 unittest 作为测试框架', role: 'answer' },
+      { index: 3, label: 'Type something.', role: 'free' },
+      { index: 4, label: 'Chat about this', role: 'chat' },
     ])
   })
 
   it('recognizes the free-text item after the user typed into it on the computer', () => {
     const options = questionOptions(dialog('输出格式', ['json', 'yaml', ['toml', true], 'Chat about this']), { question: '输出格式', multiSelect: false, options: [{ label: 'json' }, { label: 'yaml' }] })
     expect(options.map((option) => option.role)).toEqual(['answer', 'answer', 'free', 'chat'])
+    // 打的字恰好和某个选项一样时，按位置仍是自由填写。
+    expect(questionOptions(dialog('输出格式', ['json', 'yaml', ['json', true], 'Chat about this']), { question: '输出格式', multiSelect: false, options: [{ label: 'json' }, { label: 'yaml' }] })[2].role).toBe('free')
     // 不知道题目时只认 Type something。
     expect(questionOptions(dialog('?', ['a', 'toml', 'Type something.'])).map((option) => option.role)).toEqual(['answer', 'answer', 'free'])
   })
@@ -97,5 +99,12 @@ describe('planActions', () => {
     expect(planActions(plan('请顺便加上类型注解'))[2]).toMatchObject({ label: '提修改意见', free: true })
     const other: PaneDialog = { ...dialog('x', ['Yes, and auto-accept edits', 'No, keep planning']), kind: 'plan' }
     expect(planActions(other).map((action) => [action.label, action.free])).toEqual([['Yes, and auto-accept edits', false], ['No, keep planning', false]])
+  })
+})
+
+describe('reviewAnswers', () => {
+  it('pairs every question with its answer', () => {
+    const review: PaneDialog = { ...dialog('Ready to submit your answers?', ['Submit answers', 'Cancel']), kind: 'review', lines: ['Review your answers', ' ● 测试框架用 pytest 还是 unittest？', '   → pytest', ' ● 要不要加类型注解？', 'Ready to submit your answers?'] }
+    expect(reviewAnswers(review)).toEqual([{ question: '测试框架用 pytest 还是 unittest？', answer: 'pytest' }, { question: '要不要加类型注解？', answer: '' }])
   })
 })

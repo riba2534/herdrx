@@ -17,8 +17,8 @@ export type ScreenListener = {
 
 type SharedWatch = {
   listeners: Set<ScreenListener>
-  ansi: string[]
-  plain: string[] | null
+  /** 已去掉 ANSI 的当前画面；还没收到第一帧时为 null。 */
+  lines: string[] | null
   stop: () => void
   offEpoch: () => void
 }
@@ -28,9 +28,11 @@ const watches = new WeakMap<WorkbenchClient, Map<string, SharedWatch>>()
 function start(client: WorkbenchClient, paneID: string, entry: SharedWatch) {
   entry.stop = client.watchScreen(paneID, CONSOLE_SCREEN_LINES, {
     onFrame: (frame) => {
-      entry.ansi = applyScreenFrame(entry.ansi, frame)
-      entry.plain = entry.ansi.map(plainScreenLine)
-      for (const listener of entry.listeners) listener.onLines(entry.plain)
+      // 增量帧只转换变化的行：保存纯文本，按同样的 drop / set 规则合并。
+      const plain = { ...frame, lines: frame.lines?.map(plainScreenLine), set: frame.set?.map(([index, line]): [number, string] => [index, plainScreenLine(line)]) }
+      const lines = applyScreenFrame(entry.lines || [], plain)
+      entry.lines = lines
+      for (const listener of entry.listeners) listener.onLines(lines)
     },
     onError: (error) => {
       for (const listener of entry.listeners) listener.onError(error)
@@ -47,24 +49,23 @@ export function watchPaneScreen(client: WorkbenchClient, paneID: string, listene
   }
   let entry = panes.get(paneID)
   if (!entry) {
-    const created: SharedWatch = { listeners: new Set(), ansi: [], plain: null, stop: () => {}, offEpoch: () => {} }
-    entry = created
-    panes.set(paneID, created)
+    const created: SharedWatch = { listeners: new Set(), lines: null, stop: () => {}, offEpoch: () => {} }
     start(client, paneID, created)
     // 每条新连接（server_info）都要重新登记 watch；旧连接上的 watch 已随连接结束。
-    const off = client.onEpoch(() => {
+    created.offEpoch = client.onEpoch(() => {
       created.stop()
       start(client, paneID, created)
     })
-    created.offEpoch = () => { off() }
+    panes.set(paneID, created)
+    entry = created
   }
-  entry.listeners.add(listener)
-  if (entry.plain) listener.onLines(entry.plain)
-  const current = entry
+  const shared = entry
+  shared.listeners.add(listener)
+  if (shared.lines) listener.onLines(shared.lines)
   return () => {
-    if (!current.listeners.delete(listener) || current.listeners.size > 0) return
-    current.stop()
-    current.offEpoch()
-    if (panes.get(paneID) === current) panes.delete(paneID)
+    if (!shared.listeners.delete(listener) || shared.listeners.size > 0) return
+    shared.stop()
+    shared.offEpoch()
+    if (panes.get(paneID) === shared) panes.delete(paneID)
   }
 }

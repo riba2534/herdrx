@@ -1,17 +1,10 @@
 import { FolderLock, ListChecks } from 'lucide-react'
-import { findOption } from '../../lib/console/interaction'
+import { findOption, reviewAnswers } from '../../lib/console/interaction'
 import type { DialogSession } from '../../lib/console/useDialogSession'
 import type { PaneDialog, PaneDialogOption } from '../../types'
-import { CardStatus, KeyBadge, sessionBusy } from './cardParts'
+import { answeringAt, CardStatus, KeyBadge, type CardProps } from './cardParts'
 import { InteractionCardShell } from './InteractionCardShell'
 import { useDigitShortcuts } from './shortcuts'
-
-type ChoiceProps = {
-  dialog: PaneDialog
-  session: DialogSession
-  collapsed: boolean
-  onCollapsedChange: (collapsed: boolean) => void
-}
 
 type Choice = { option: PaneDialogOption; label: string; primary: boolean }
 
@@ -26,15 +19,13 @@ function choices(dialog: PaneDialog, known: Array<{ pattern: RegExp; label: stri
 }
 
 function ChoiceButtons({ items, session, numbered }: { items: Choice[]; session: DialogSession; numbered: boolean }) {
-  const busy = sessionBusy(session)
-  const { phase } = session
   return <div className="console-choice-row">
     {items.map(({ option, label, primary }) => <button
       type="button"
       key={option.index}
       className={`console-button${primary ? ' console-button-primary' : ''}`}
-      disabled={busy}
-      aria-busy={(phase.kind === 'answering' && phase.index === option.index) || undefined}
+      disabled={session.busy}
+      aria-busy={answeringAt(session, option.index) || undefined}
       data-tooltip={option.label}
       onClick={() => void session.answer(option.index)}
     >{label}{numbered && <KeyBadge index={option.index}/>}</button>)}
@@ -42,22 +33,13 @@ function ChoiceButtons({ items, session, numbered }: { items: Choice[]; session:
 }
 
 /** 多题提问最后的确认页：列出每题的回答，提交或取消。 */
-export function ReviewCard({ dialog, session, collapsed, onCollapsedChange }: ChoiceProps) {
+export function ReviewCard({ dialog, session, collapsed, onCollapsedChange }: CardProps) {
   const items = choices(dialog, [
     { pattern: /^submit answers?\b/i, label: '提交答案', primary: true },
     { pattern: /^cancel\b/i, label: '取消', primary: false },
   ])
-  const pairs: Array<{ question: string; answer: string }> = []
-  for (const line of dialog.lines) {
-    const text = line.trim()
-    if (/^[●•]/.test(text)) pairs.push({ question: text.replace(/^[●•]\s*/, ''), answer: '' })
-    else if (text.startsWith('→') && pairs.length) pairs[pairs.length - 1].answer = text.replace(/^→\s*/, '')
-  }
-  useDigitShortcuts(!collapsed && !sessionBusy(session), (digit) => {
-    if (!items.some(({ option }) => option.index === digit)) return false
-    void session.answer(digit)
-    return true
-  })
+  const pairs = reviewAnswers(dialog)
+  useDigitShortcuts(!collapsed && !session.busy, items.map(({ option }) => option.index), (index) => void session.answer(index))
   return <InteractionCardShell
     label="确认你的回答"
     collapsed={collapsed}
@@ -74,7 +56,7 @@ export function ReviewCard({ dialog, session, collapsed, onCollapsedChange }: Ch
 }
 
 /** 首次进入目录时的信任确认。不开数字键：默认的第一项是退出。 */
-export function TrustCard({ dialog, session, collapsed, onCollapsedChange }: ChoiceProps) {
+export function TrustCard({ dialog, session, collapsed, onCollapsedChange }: CardProps) {
   const items = choices(dialog, [
     { pattern: /^yes,? i trust/i, label: '信任此目录并继续', primary: true },
     { pattern: /^no,? exit/i, label: '退出', primary: false },

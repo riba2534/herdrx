@@ -46,47 +46,49 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   const session = useDialogSession({ hostID, paneID, enabled: wanted })
   const { dialog, phase } = session
   const [, setCollapseVersion] = useState(0)
+  // 兜底卡片（DialogCard）自己读屏，对话框消失时也会调用 onClose：只在这个对话框还在时保持收起。
+  const [fallbackFolded, setFallbackFolded] = useState('')
+  if (fallbackFolded && dialog?.fingerprint !== fallbackFolded) setFallbackFolded('')
 
   // 作答后等确认时，画面一有变化就补读一次对话框。
-  const liveKey = `${live.spinner?.raw || ''}\n${live.preview.join('\n')}`
+  const liveKey = `${live.spinner?.verb ?? ''}:${live.spinner?.seconds ?? ''}\n${live.preview.join('\n')}`
   const confirming = phase.kind === 'confirming'
   const refresh = session.refresh
   useEffect(() => {
     if (confirming) refresh()
   }, [confirming, liveKey, refresh])
 
-  const interaction = pending?.callID || dialog?.fingerprint || ''
-  const collapseKey = `${hostID}\n${paneID}\n${interaction}`
-  const collapsed = collapsedCards.has(collapseKey)
+  // 这次交互的键：收起状态与自由填写草稿都按它保存。
+  const interaction = `${hostID}\n${paneID}\n${pending?.callID || dialog?.fingerprint || ''}`
+  const collapsed = collapsedCards.has(interaction)
   const setCollapsed = (value: boolean) => {
-    if (value) collapsedCards.add(collapseKey)
-    else collapsedCards.delete(collapseKey)
+    if (value) collapsedCards.add(interaction)
+    else collapsedCards.delete(interaction)
     setCollapseVersion((version) => version + 1)
   }
-  const draftScope = `${hostID}\n${paneID}\n${pending?.callID || dialog?.fingerprint || ''}`
   const questions = pending?.tool === 'AskUserQuestion' ? pending.questions : []
+  const multiSelect = questions.filter((question) => question.multiSelect)
   const common = { session, collapsed, onCollapsedChange: setCollapsed }
 
   let card: ReactNode = null
-  if (dialog?.kind === 'question') card = <QuestionCard dialog={dialog} questions={questions} draftScope={draftScope} onOpenShell={onOpenShell} {...common}/>
+  if (dialog?.kind === 'question') card = <QuestionCard dialog={dialog} questions={questions} draftScope={interaction} onOpenShell={onOpenShell} {...common}/>
   else if (dialog?.kind === 'review') card = <ReviewCard dialog={dialog} {...common}/>
-  else if (dialog?.kind === 'plan') card = <PlanCard dialog={dialog} plan={pending?.tool === 'ExitPlanMode' ? pending.plan : latestPlan(records)} draftScope={draftScope} {...common}/>
+  else if (dialog?.kind === 'plan') card = <PlanCard dialog={dialog} plan={pending?.tool === 'ExitPlanMode' ? pending.plan : latestPlan(records)} draftScope={interaction} {...common}/>
   else if (dialog?.kind === 'trust') card = <TrustCard dialog={dialog} {...common}/>
   else if (dialog) {
     // 其他对话框（如权限确认）由现有卡片兜底；它自己的「收起」在这里变成 44px 的条。
-    card = collapsed
-      ? <InteractionCardShell label="终端在等你选择" collapsed onCollapsedChange={setCollapsed} barTitle={`终端在等你选择：${dialog.title || '对话框'}`} header={null}/>
-      : <DialogCard key={dialog.fingerprint} hostID={hostID} paneID={paneID} initial={dialog} primary onClose={() => setCollapsed(true)}/>
-  } else if (session.loaded && questions.some((question) => question.multiSelect)) {
+    card = fallbackFolded === dialog.fingerprint
+      ? <InteractionCardShell label="终端在等你选择" collapsed onCollapsedChange={() => setFallbackFolded('')} barTitle={`终端在等你选择：${dialog.title || '对话框'}`} header={null}/>
+      : <DialogCard key={dialog.fingerprint} hostID={hostID} paneID={paneID} initial={dialog} primary onClose={() => setFallbackFolded(dialog.fingerprint)}/>
+  } else if (session.loaded && multiSelect.length > 0) {
     // 多选题的对话框服务端不出卡片（不能一键作答），只能按对话记录说明。
     card = <InteractionCardShell
       label="Claude 在等你回答多选题"
       collapsed={collapsed}
       onCollapsedChange={setCollapsed}
-      barTitle="Claude 在等你回答多选题"
       header={<><span className="console-chip"><MessageSquareWarning size={13} aria-hidden="true"/>多选题</span><span className="console-card-title">Claude 在等你回答</span></>}
     >
-      {questions.filter((question) => question.multiSelect).map((question, index) => <p className="console-card-question" key={index}>{question.question}</p>)}
+      {multiSelect.map((question, index) => <p className="console-card-question" key={index}>{question.question}</p>)}
       <MultiSelectNotice onOpenShell={onOpenShell}/>
     </InteractionCardShell>
   }
@@ -112,7 +114,7 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   }, [active, session.notice])
 
   if (!card && !orphan) return null
-  return <div className="console-interaction" data-pane-id={paneID}>
+  return <div className="console-interaction">
     {card || <p className="console-interaction-notice" role="status">{orphan}</p>}
   </div>
 }

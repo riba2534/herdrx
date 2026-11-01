@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { plainScreenLine } from '../ansiScreen'
-import { CONSOLE_MODES, nextConsoleMode, parseClaudeScreen, parseMode, parseSpinner, screenPreview } from './claudeScreen'
+import { parseClaudeScreen, parseMode, parseSpinner, screenPreview } from './claudeScreen'
 import idle from './__fixtures__/idle.ansi.txt?raw'
 import working1 from './__fixtures__/working-1.ansi.txt?raw'
 import working2 from './__fixtures__/working-2.ansi.txt?raw'
@@ -122,17 +122,13 @@ describe('parseMode', () => {
     expect(parseMode(['? for shortcuts'])).toBeNull()
     expect(parseMode(['⏸ plan mode on', 'a', 'b', 'c', 'd', 'e', 'f'])).toBeNull()
   })
-
-  it('cycles in the Shift+Tab order', () => {
-    expect(CONSOLE_MODES.map(nextConsoleMode)).toEqual(['auto', 'manual', 'acceptEdits', 'plan', 'bypass'])
-  })
 })
 
 describe('screenPreview', () => {
   it('limits the line count and drops rules and right-aligned hints', () => {
-    const lines = ['    a', '', '    b', '──────────', `${' '.repeat(60)}↓`, '      c']
-    expect(screenPreview(lines)).toEqual(['a', 'b', '  c'])
-    expect(screenPreview(lines, lines.length, 2)).toEqual(['b', '  c'])
+    const lines = ['    a', '', '    b', '──────────', `${' '.repeat(60)}↓`, '      c', `${' '.repeat(30)}deep code`]
+    expect(screenPreview(lines)).toEqual(['a', 'b', '  c', `${' '.repeat(26)}deep code`])
+    expect(screenPreview(lines, lines.length - 1, 2)).toEqual(['b', '  c'])
     expect(screenPreview([])).toEqual([])
   })
 })

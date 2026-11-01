@@ -27,6 +27,8 @@ export type DialogSession = {
   /** 这一轮读屏至少完成过一次。 */
   loaded: boolean
   phase: DialogPhase
+  /** 正在按键、确认或提交：卡片上的作答按钮此时不可点。 */
+  busy: boolean
   /** 给用户看的结果说明（失败、超时、对话框已变化）。 */
   notice: string
   /** 按编号作答；`typing` 表示这是自由填写项，确认后进入输入状态。 */
@@ -44,7 +46,7 @@ const answerErrors: Record<string, string> = {
   dialog_gone: '对话框已经关闭，可能已在电脑上回答',
 }
 
-const busy = (phase: DialogPhase) => phase.kind === 'answering' || phase.kind === 'confirming' || phase.kind === 'sending'
+const isBusy = (phase: DialogPhase) => phase.kind === 'answering' || phase.kind === 'confirming' || phase.kind === 'sending'
 
 /**
  * 读屏对话框 + 作答。`enabled` 为 false 且没有进行中的作答时停止读屏并清空对话框。
@@ -61,6 +63,9 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
   const messageRef = useRef<{ text: string; id: string } | null>(null)
   // 已发出的读屏个数：确认只认作答完成之后才发出的读屏。
   const readsRef = useRef(0)
+  // 有读屏在途时又要求补读：等它回来后立刻再读一次，不等下一轮。
+  const inFlightRef = useRef(false)
+  const kickRef = useRef(false)
   const polling = enabled || phase.kind !== 'idle'
   const pollingRef = useRef(polling)
   pollingRef.current = polling
@@ -70,7 +75,9 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     setPhaseState(next)
   }, [])
 
-  const applyRead = useCallback((next: PaneDialog | null, read: number) => {
+  const applyRead = useCallback((read: PaneDialog | null, sequence: number) => {
+    // 画面没变时沿用旧对象，卡片（含计划正文的 Markdown）不随每轮读屏重渲染。
+    const next = read && dialogRef.current && JSON.stringify(read) === JSON.stringify(dialogRef.current) ? dialogRef.current : read
     dialogRef.current = next
     setDialog(next)
     setLoaded(true)
@@ -80,7 +87,7 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
       if (current.kind === 'typing') setPhase(IDLE)
       return
     }
-    if (current.kind !== 'confirming' || read <= current.after) return
+    if (current.kind !== 'confirming' || sequence <= current.after) return
     if (current.expect === 'change') {
       if (!next || next.fingerprint !== current.fingerprint) setPhase(IDLE)
       return
@@ -93,14 +100,31 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
 
   const run = useVisiblePoll(async (signal) => {
     if (!pollingRef.current || document.visibilityState === 'hidden') return
-    const read = ++readsRef.current
+    const sequence = ++readsRef.current
+    inFlightRef.current = true
     try {
       const result = await api.paneDialog(hostID, paneID, { signal })
-      if (!signal.aborted && pollingRef.current) applyRead(result.dialog, read)
+      if (!signal.aborted && pollingRef.current) applyRead(result.dialog, sequence)
     } catch {
       // 读屏暂时失败：保留上一次的卡片，下一轮再试。
+    } finally {
+      inFlightRef.current = false
+      if (kickRef.current && !signal.aborted) {
+        kickRef.current = false
+        window.setTimeout(() => void run())
+      }
     }
   }, INTERACTION_POLL_MS)
+
+  const refresh = useCallback(() => {
+    if (inFlightRef.current) kickRef.current = true
+    else void run()
+  }, [run])
+
+  const confirm = useCallback((base: { fingerprint: string; title: string; index: number }, expect: 'change' | 'select') => {
+    setPhase({ kind: 'confirming', fingerprint: base.fingerprint, title: base.title, index: base.index, since: Date.now(), after: readsRef.current, expect })
+    refresh()
+  }, [refresh, setPhase])
 
   useEffect(() => {
     if (polling) {
@@ -129,7 +153,7 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
 
   const answer = useCallback(async (index: number, options: { typing?: boolean } = {}) => {
     const current = dialogRef.current
-    if (!current || busy(phaseRef.current)) return
+    if (!current || isBusy(phaseRef.current)) return
     const title = current.title || ''
     setNotice('')
     if (options.typing && current.options.some((option) => option.index === index && option.selected)) {
@@ -140,15 +164,14 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     setPhase({ kind: 'answering', index })
     try {
       await api.answerPaneDialog(hostID, paneID, current.fingerprint, index)
-      setPhase({ kind: 'confirming', fingerprint: current.fingerprint, title, index, since: Date.now(), after: readsRef.current, expect: options.typing ? 'select' : 'change' })
-      void run()
+      confirm({ fingerprint: current.fingerprint, title, index }, options.typing ? 'select' : 'change')
     } catch (error) {
       setPhase(IDLE)
       const code = error instanceof APIError ? error.code : ''
       setNotice(answerErrors[code] || (error instanceof APIError ? error.message : '没有收到服务端的回应，请查看终端后再决定'))
-      if (code === 'dialog_changed' || code === 'dialog_gone') void run()
+      if (code === 'dialog_changed' || code === 'dialog_gone') refresh()
     }
-  }, [hostID, paneID, run, setPhase])
+  }, [confirm, hostID, paneID, refresh, setPhase])
 
   const submitText = useCallback(async (text: string) => {
     const current = phaseRef.current
@@ -160,8 +183,7 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     try {
       await api.panePrompt(hostID, paneID, { text, submit: true, client_msg_id: id })
       messageRef.current = null
-      setPhase({ kind: 'confirming', fingerprint: current.fingerprint, title: current.title, index: current.index, since: Date.now(), after: readsRef.current, expect: 'change' })
-      void run()
+      confirm(current, 'change')
       return true
     } catch (error) {
       setPhase(current)
@@ -176,13 +198,11 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
       }
       return false
     }
-  }, [hostID, paneID, run, setPhase])
+  }, [confirm, hostID, paneID, setPhase])
 
   const cancelTyping = useCallback(() => {
     if (phaseRef.current.kind === 'typing') setPhase(IDLE)
   }, [setPhase])
 
-  const refresh = useCallback(() => { void run() }, [run])
-
-  return { dialog, loaded, phase, notice, answer, submitText, cancelTyping, refresh }
+  return { dialog, loaded, phase, busy: isBusy(phase), notice, answer, submitText, cancelTyping, refresh }
 }

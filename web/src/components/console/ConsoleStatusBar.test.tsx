@@ -21,7 +21,7 @@ describe('ConsoleStatusBar', () => {
     expect(screen.getByText('15 秒')).toBeInTheDocument()
     expect(screen.getByText('1.2k tokens')).toBeInTheDocument()
     expect(screen.getByText('思考中')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toHaveAttribute('data-tooltip', '点击切换到「自动」（相当于按一次 Shift+Tab）')
+    expect(screen.getByRole('button', { name: '当前模式：免授权。点击切换到下一个模式' })).toHaveAttribute('data-tooltip', '切换到下一个模式（相当于按一次 Shift+Tab）')
     expect(screen.getByRole('button', { name: '中断' })).toBeEnabled()
   })
 

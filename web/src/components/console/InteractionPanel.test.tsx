@@ -205,7 +205,7 @@ describe('InteractionPanel', () => {
     expect(answer).toHaveBeenCalledTimes(1)
   })
 
-  it('does not count a read that started before the key press as confirmation', async () => {
+  it('does not count a read that started before the key press, and rereads right after it', async () => {
     shown = q1
     mount({ records: ask() })
     await settle()
@@ -217,8 +217,9 @@ describe('InteractionPanel', () => {
     expect(answer).toHaveBeenCalledTimes(1)
     await act(async () => finish({ dialog: q2 }))
     expect(screen.getByRole('status')).toHaveTextContent('已作答，正在确认终端…')
+    // 作答后要的那次读屏在旧读屏回来后立刻补上，不等下一轮。
     shown = q2
-    await settle(INTERACTION_POLL_MS)
+    await settle()
     expect(screen.getByText('第 2/2 题')).toBeInTheDocument()
   })
 
@@ -300,6 +301,13 @@ describe('InteractionPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '收起对话框卡片' }))
     expect(screen.getByRole('button', { name: '展开卡片：终端在等你选择：Do you want to proceed?' })).toBeInTheDocument()
     expect(view.onActiveChange).toHaveBeenLastCalledWith(true)
+    // 对话框消失后同一个对话框再出现，卡片重新展开。
+    shown = null
+    await settle(INTERACTION_POLL_MS)
+    expect(view.onActiveChange).toHaveBeenLastCalledWith(false)
+    shown = permission
+    await settle(INTERACTION_POLL_MS)
+    expect(screen.getByRole('group', { name: 'Do you want to proceed?' })).toBeInTheDocument()
   })
 
   it('guides multi-select questions to the Shell mode', async () => {

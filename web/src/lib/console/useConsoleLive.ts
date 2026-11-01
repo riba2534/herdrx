@@ -21,11 +21,16 @@ function sameLines(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((line, index) => line === right[index])
 }
 
+// spinner 字形每帧都在转，只比较显示出来的内容。
+function sameSpinner(left: ConsoleSpinner | null, right: ConsoleSpinner | null) {
+  return left === right || Boolean(left && right && left.verb === right.verb && left.seconds === right.seconds && left.tokens === right.tokens && left.thinking === right.thinking)
+}
+
 function nextLive(previous: ConsoleLive, lines: readonly string[]): ConsoleLive {
   const screen = parseClaudeScreen(lines)
   const mode = screen.mode ?? previous.mode
-  // 画面别处在变（比如别的正文滚动）但这三样没变时沿用旧对象，状态栏和卡片不重渲染。
-  if (!previous.error && previous.mode === mode && previous.spinner?.raw === screen.spinner?.raw && sameLines(previous.preview, screen.preview)) return previous
+  // 这三样没变时沿用旧对象，状态栏和卡片不重渲染。
+  if (!previous.error && previous.mode === mode && sameSpinner(previous.spinner, screen.spinner) && sameLines(previous.preview, screen.preview)) return previous
   return { spinner: screen.spinner, mode, preview: screen.preview }
 }
 

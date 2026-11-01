@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowDown, Brain, Check, LoaderCircle, Sparkles, Square } from 'lucide-react'
-import { nextConsoleMode, type ConsoleMode, type ConsoleSpinner } from '../../lib/console/claudeScreen'
+import type { ConsoleMode, ConsoleSpinner } from '../../lib/console/claudeScreen'
 import type { ConsoleLive } from '../../lib/console/useConsoleLive'
 import { ConsoleLivePreview } from './ConsoleLivePreview'
 import { WorkingStatusText } from './WorkingStatusText'
@@ -71,8 +71,8 @@ export type ConsoleStatusBarProps = {
 export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: ConsoleStatusBarProps) {
   const active = working || Boolean(live.spinner)
   // 读屏偶尔有一帧没有 spinner（重绘中）：工作中保留上一次读到的内容。
-  const [held, setHeld] = useState<ConsoleSpinner | null>(live.spinner)
-  if (live.spinner && live.spinner !== held) setHeld(live.spinner)
+  const [spinner, setHeld] = useState<ConsoleSpinner | null>(live.spinner)
+  if (live.spinner && live.spinner !== spinner) setHeld(live.spinner)
   // tail：运行刚结束的 linger（不透明）与 fading（淡出）阶段。
   const [previousActive, setPreviousActive] = useState(active)
   const [tail, setTail] = useState<'linger' | 'fading' | null>(null)
@@ -91,17 +91,15 @@ export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: Co
   const cycle = useAction(onCycleMode, '切换模式没有完成，请到 Shell 模式按 Shift+Tab')
   const error = interrupt.error || cycle.error
   const showRun = active || tail !== null
-  const spinner = held
   const mode = live.mode
-  const next = mode ? nextConsoleMode(mode) : null
 
   return <div className="console-status" data-state={active ? 'working' : tail || 'idle'}>
     {(live.preview.length > 0 || live.error) && <ConsoleLivePreview preview={live.preview} error={live.error}/>}
     <div className="console-status-row">
-      <div className="console-status-run" role="status" aria-live="polite" aria-hidden={!showRun || undefined}>
+      <div className="console-status-run" aria-hidden={!showRun || undefined}>
         {showRun && (active
           ? <>
-            <span className="console-status-icon" data-thinking={spinner?.thinking || undefined} aria-hidden="true">{spinner?.thinking ? <Brain size={14}/> : <Sparkles size={14}/>}</span>
+            <span className="console-status-icon" aria-hidden="true">{spinner?.thinking ? <Brain size={14}/> : <Sparkles size={14}/>}</span>
             <WorkingStatusText text={spinner ? `${spinner.verb}…` : '正在运行…'}/>
             {spinner?.seconds !== undefined && <span className="console-status-meta">{formatConsoleElapsed(spinner.seconds)}</span>}
             {spinner?.tokens !== undefined && <span className="console-status-meta console-status-tokens"><ArrowDown size={12} aria-hidden="true"/>{formatConsoleTokens(spinner.tokens)} tokens</span>}
@@ -120,8 +118,8 @@ export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: Co
           data-mode={mode}
           disabled={cycle.pending}
           aria-busy={cycle.pending || undefined}
-          aria-label={`当前模式：${CONSOLE_MODE_LABELS[mode]}。点击切换到「${CONSOLE_MODE_LABELS[next!]}」`}
-          data-tooltip={`点击切换到「${CONSOLE_MODE_LABELS[next!]}」（相当于按一次 Shift+Tab）`}
+          aria-label={`当前模式：${CONSOLE_MODE_LABELS[mode]}。点击切换到下一个模式`}
+          data-tooltip="切换到下一个模式（相当于按一次 Shift+Tab）"
           onClick={() => void cycle.trigger()}
         >
           {cycle.pending ? <LoaderCircle className="console-spin" size={13} aria-hidden="true"/> : <span className="console-mode-dot" aria-hidden="true"/>}

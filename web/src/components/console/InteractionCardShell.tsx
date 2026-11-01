@@ -6,12 +6,12 @@ import { Minus, Plus } from 'lucide-react'
  * 顶替输入框的交互卡片外壳：只管卡片框、收起成 44px 的条和展开。题目、作答和状态由各卡片自己管。
  * 长内容在中间区域内滚动；`pinned` 放在滚动区之外（自由填写、批准动作），长列表也不会把它挤出视野。
  */
-export function InteractionCardShell({ label, collapsed, onCollapsedChange, barTitle, barMeta, header, children, pinned, footer }: {
-  /** 卡片的无障碍名称。 */
+export function InteractionCardShell({ label, collapsed, onCollapsedChange, barTitle = label, barMeta, header, children, pinned, footer }: {
+  /** 卡片的无障碍名称，也是收起后条上的默认标题。 */
   label: string
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
-  barTitle: string
+  barTitle?: string
   barMeta?: string
   header: ReactNode
   children?: ReactNode

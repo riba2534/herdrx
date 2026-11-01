@@ -33,7 +33,7 @@
 }
 
 .console-status[data-state='working'] .console-status-icon { animation: console-breathe calc(var(--console-motion-slow) * 6) var(--console-ease-move) infinite; }
-.console-status-icon.console-status-done { color: var(--console-success); animation: none; }
+.console-status-done { color: var(--console-success); }
 
 @keyframes console-breathe {
   50% { opacity: .45; }

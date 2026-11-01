@@ -51,18 +51,23 @@ function planFor(records: readonly ChatRecord[], callID: string, fallback: ChatT
 }
 
 export function findPendingInteraction(records: readonly ChatRecord[]): PendingInteraction | null {
-  let last: { block: ChatToolCallBlock; position: number } | null = null
-  records.forEach((item, position) => {
-    for (const block of item.blocks) if (block.type === 'tool-call' && INTERACTION_TOOLS.has(block.name)) last = { block, position }
-  })
-  if (!last) return null
-  const { block, position } = last as { block: ChatToolCallBlock; position: number }
+  let call: ChatToolCallBlock | null = null
+  let position = -1
+  for (let index = 0; index < records.length; index++) {
+    for (const block of records[index].blocks) {
+      if (block.type === 'tool-call' && INTERACTION_TOOLS.has(block.name)) {
+        call = block
+        position = index
+      }
+    }
+  }
+  if (!call) return null
   for (let index = position; index < records.length; index++) {
     // 没有 call_id 时只能认它后面的结果。
-    if (records[index].blocks.some((other) => other.type === 'tool-result' && other.call_id === block.call_id && (block.call_id || index > position))) return null
+    if (records[index].blocks.some((other) => other.type === 'tool-result' && other.call_id === call.call_id && (call.call_id || index > position))) return null
   }
-  if (block.name === 'ExitPlanMode') return { tool: 'ExitPlanMode', callID: block.call_id, plan: planFor(records, block.call_id, block) }
-  return { tool: 'AskUserQuestion', callID: block.call_id, questions: parseQuestions(block.input) }
+  if (call.name === 'ExitPlanMode') return { tool: 'ExitPlanMode', callID: call.call_id, plan: planFor(records, call.call_id, call) }
+  return { tool: 'AskUserQuestion', callID: call.call_id, questions: parseQuestions(call.input) }
 }
 
 /** 记录里最近一份计划正文（对话框是计划确认、但对应的工具调用已有结果或还没读到时用）。 */
@@ -97,25 +102,36 @@ export function matchQuestion(dialog: PaneDialog, questions: readonly AskQuestio
 }
 
 export type OptionRole = 'answer' | 'free' | 'chat'
-export type OptionView = { index: number; label: string; description?: string; selected: boolean; role: OptionRole }
+export type OptionView = { index: number; label: string; description?: string; role: OptionRole }
 
 const FREE_TEXT = /^type something/i
 const CHAT = /^chat about this/i
 
 /**
- * 题目的选项：编号、选中状态取自屏幕；标签和说明能对上对话记录时取对话记录的原文。
- * `Type something.` 是自由填写；用户在电脑上打过字时这一项会原地变成那段文字，
- * 所以知道题目时，紧跟在题目选项之后、又对不上任何选项的那一项也按自由填写处理。
+ * 题目的选项：编号取自屏幕。知道题目时按位置对应——Claude 按原顺序列出题目选项，其后是
+ * 自由填写（`Type something.`，用户在电脑上打过字时会原地变成那段文字）和 `Chat about this`——
+ * 标签和说明取对话记录的原文；不知道题目时只认得出这两个固定项。
  */
 export function questionOptions(dialog: PaneDialog, question?: AskQuestion): OptionView[] {
   return dialog.options.map((option, position) => {
-    const known = question?.options.find((item) => sameLabel(option.label, item.label))
+    const known = question?.options[position]
     let role: OptionRole = 'answer'
     if (CHAT.test(option.label)) role = 'chat'
     else if (!known && (FREE_TEXT.test(option.label) || position === question?.options.length)) role = 'free'
     const description = known ? known.description : option.description
-    return { index: option.index, label: known?.label || option.label, ...(description ? { description } : {}), selected: option.selected, role }
+    return { index: option.index, label: known?.label || option.label, ...(description ? { description } : {}), role }
   })
+}
+
+/** 多题确认页上每题的回答：`● 问题` 下面跟 `→ 回答`。 */
+export function reviewAnswers(dialog: PaneDialog) {
+  const pairs: Array<{ question: string; answer: string }> = []
+  for (const line of dialog.lines) {
+    const value = line.trim()
+    if (/^[●•]/.test(value)) pairs.push({ question: value.replace(/^[●•]\s*/, ''), answer: '' })
+    else if (value.startsWith('→') && pairs.length) pairs[pairs.length - 1].answer = value.replace(/^→\s*/, '')
+  }
+  return pairs
 }
 
 export function findOption(dialog: PaneDialog, pattern: RegExp): PaneDialogOption | undefined {
@@ -124,19 +140,20 @@ export function findOption(dialog: PaneDialog, pattern: RegExp): PaneDialogOptio
 
 export type PlanAction = { index: number; label: string; screenLabel: string; tone: 'primary' | 'secondary'; free: boolean }
 
+const FEEDBACK = { pattern: /^tell claude what to change/i, label: '提修改意见', tone: 'secondary' as const, free: true }
 const PLAN_ACTIONS: Array<{ pattern: RegExp; label: string; tone: 'primary' | 'secondary'; free?: boolean }> = [
   { pattern: /^yes,? and switch to bypass/i, label: '批准并保持免授权', tone: 'primary' },
   { pattern: /^yes,? manually approve edits/i, label: '批准，改动逐个确认', tone: 'secondary' },
-  { pattern: /^tell claude what to change/i, label: '提修改意见', tone: 'secondary', free: true },
+  FEEDBACK,
 ]
 
 /** 计划确认的动作；认不出的选项保留屏幕原文。电脑上打过字后「提修改意见」那项（光标所在的最后一项）会变成那段文字。 */
 export function planActions(dialog: PaneDialog): PlanAction[] {
-  const hasFree = dialog.options.some((option) => PLAN_ACTIONS[2].pattern.test(option.label.trim()))
+  const hasFree = dialog.options.some((option) => FEEDBACK.pattern.test(option.label.trim()))
   return dialog.options.map((option, position) => {
     const known = PLAN_ACTIONS.find((action) => action.pattern.test(option.label.trim()))
     if (known) return { index: option.index, label: known.label, screenLabel: option.label, tone: known.tone, free: Boolean(known.free) }
     const typed = !hasFree && option.selected && position === dialog.options.length - 1 && !/^yes\b/i.test(option.label.trim())
-    return { index: option.index, label: typed ? PLAN_ACTIONS[2].label : option.label, screenLabel: option.label, tone: 'secondary', free: typed }
+    return { index: option.index, label: typed ? FEEDBACK.label : option.label, screenLabel: option.label, tone: 'secondary', free: typed }
   })
 }
