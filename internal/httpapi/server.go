@@ -63,6 +63,10 @@ type API struct {
 	voice              *voicegateway.Gateway
 	geometry           geometryRegistry
 	screenReads        screenReads
+	// launcherLists caches each host's discovered launchers (launchers.go);
+	// sessionStarts deduplicates session starts by request_id (sessions.go).
+	launcherLists launcherCache
+	sessionStarts sessionStarts
 }
 
 func New(cfg config.Config, dataStore *store.Store, vault *secure.Vault, assets fs.FS, logger *slog.Logger) (*API, error) {
