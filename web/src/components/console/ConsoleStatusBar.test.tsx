@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConsoleLive } from '../../lib/console/useConsoleLive'
 import { CONSOLE_MODE_LABELS, ConsoleStatusBar, formatConsoleElapsed, formatConsoleTokens, STATUS_FADE_MS, STATUS_LINGER_MS } from './ConsoleStatusBar'
-import { WORKING_STATUS_FADE_MS, WORKING_STATUS_MIN_INTERVAL_MS } from './WorkingStatusText'
+import { WORKING_STATUS_FADE_MS } from './WorkingStatusText'
 
 const spinner = (verb: string, seconds = 15) => ({ verb, seconds, tokens: 1200, thinking: true, raw: `✻ ${verb}… (${seconds}s · ↓ 1.2k tokens · thinking)` })
 const live = (patch: Partial<ConsoleLive> = {}): ConsoleLive => ({ spinner: spinner('Wibbling'), mode: 'bypass', preview: ['● Update(calc.py)', '  ⎿  Added 1 line'], ...patch })
@@ -88,13 +88,14 @@ describe('ConsoleStatusBar', () => {
   })
 
   it('keeps each verb for at least a second and fades between them', () => {
-    vi.useFakeTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] })
     const view = render(<ConsoleStatusBar live={live()} working onInterrupt={noop} onCycleMode={noop}/>)
     view.rerender(<ConsoleStatusBar live={live({ spinner: spinner('Herding', 16) })} working onInterrupt={noop} onCycleMode={noop}/>)
     // 计时立刻更新，动词等满 1 秒。
     expect(screen.getByText('16 秒')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(999) })
     expect(screen.getByText('Wibbling…')).not.toHaveAttribute('data-fading')
-    act(() => { vi.advanceTimersByTime(WORKING_STATUS_MIN_INTERVAL_MS) })
+    act(() => { vi.advanceTimersByTime(1) })
     expect(screen.getByText('Wibbling…')).toHaveAttribute('data-fading', 'true')
     act(() => { vi.advanceTimersByTime(WORKING_STATUS_FADE_MS) })
     expect(screen.getByText('Herding…')).not.toHaveAttribute('data-fading')

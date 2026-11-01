@@ -221,6 +221,7 @@ describe('InteractionPanel', () => {
     shown = q2
     await settle()
     expect(screen.getByText('第 2/2 题')).toBeInTheDocument()
+    expect(screen.queryByText('已作答，正在确认终端…')).toBeNull()
   })
 
   it('rereads at once when the live screen changes while confirming', async () => {

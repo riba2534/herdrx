@@ -77,6 +77,12 @@ describe('parseClaudeScreen on recorded screens', () => {
     expect(screen.preview).toHaveLength(count)
     expect(screen.preview.at(-1)?.trim()).toBe(last)
   })
+
+  it('does not take a dialog option under a rule for the input box', () => {
+    // 光标停在横线下方的 `4. Chat about this` 上时，那一行不是输入框。
+    const lines = plain(questionMulti).map((line) => line.replace('❯ 1. pytest', '  1. pytest').replace('  4. Chat about this', '❯ 4. Chat about this'))
+    expect(parseClaudeScreen(lines).preview.at(-1)?.trim()).toBe('Enter to select · Tab/Arrow keys to navigate · Esc to cancel')
+  })
 })
 
 describe('parseSpinner', () => {

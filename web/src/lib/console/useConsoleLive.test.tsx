@@ -65,6 +65,10 @@ describe('useConsoleLive', () => {
     const index = working1.split('\n').findIndex((line) => line.includes('Wibbling'))
     act(() => watches[0].onFrame({ pane_id: 'p1', gen: 1, seq: 2, total: working1.split('\n').length, set: [[index, '✻ Wibbling… (16s · ↓ 1.3k tokens)']] }))
     expect(result.current.spinner).toMatchObject({ seconds: 16, tokens: 1300, thinking: false })
+    // 只换了 spinner 字形：状态对象不变，使用方不重渲染。
+    const before = result.current
+    act(() => watches[0].onFrame({ pane_id: 'p1', gen: 1, seq: 3, total: working1.split('\n').length, set: [[index, '\x1b[0m\x1b[38;5;2m✢\x1b[0m Wibbling… (16s · ↓ 1.3k tokens)']] }))
+    expect(result.current).toBe(before)
   })
 
   it('keeps the last mode while a dialog hides the mode line', () => {
