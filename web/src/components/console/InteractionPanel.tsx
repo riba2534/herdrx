@@ -20,7 +20,7 @@ export type InteractionPanelProps = {
   records: readonly ChatRecord[]
   /** useConsoleLive 的读屏状态；作答后画面一变就立即重读对话框，不等下一轮。 */
   live: ConsoleLive
-  /** 有卡片时为 true：ChatView 收起输入框，由卡片顶替。 */
+  /** 有展开的卡片时为 true：ChatView 收起输入框，由卡片顶替；卡片收成 44px 的条时为 false，输入框回来。 */
   onActiveChange: (active: boolean) => void
   /** 多选题、认不出的情况引导去 Shell 模式；不传时只显示文字说明。 */
   onOpenShell?: () => void
@@ -51,8 +51,8 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   if (fallbackFolded && dialog?.fingerprint !== fallbackFolded) setFallbackFolded('')
 
   // 作答后等确认时，画面一有变化就补读一次对话框。
-  const liveKey = `${live.spinner?.verb ?? ''}:${live.spinner?.seconds ?? ''}\n${live.preview.join('\n')}`
   const confirming = phase.kind === 'confirming'
+  const liveKey = confirming ? `${live.spinner?.verb ?? ''}:${live.spinner?.seconds ?? ''}\n${live.preview.join('\n')}` : ''
   const refresh = session.refresh
   useEffect(() => {
     if (confirming) refresh()
@@ -69,17 +69,20 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   const questions = pending?.tool === 'AskUserQuestion' ? pending.questions : []
   const multiSelect = questions.filter((question) => question.multiSelect)
   const common = { session, collapsed, onCollapsedChange: setCollapsed }
+  // 认不出的对话框交给 DialogCard，它的收起状态单独记。
+  const fallback = dialog && !dialog.kind ? dialog : null
+  const folded = fallback ? fallbackFolded === fallback.fingerprint : collapsed
 
   let card: ReactNode = null
   if (dialog?.kind === 'question') card = <QuestionCard dialog={dialog} questions={questions} draftScope={interaction} onOpenShell={onOpenShell} {...common}/>
   else if (dialog?.kind === 'review') card = <ReviewCard dialog={dialog} {...common}/>
   else if (dialog?.kind === 'plan') card = <PlanCard dialog={dialog} plan={pending?.tool === 'ExitPlanMode' ? pending.plan : latestPlan(records)} draftScope={interaction} {...common}/>
   else if (dialog?.kind === 'trust') card = <TrustCard dialog={dialog} {...common}/>
-  else if (dialog) {
+  else if (fallback) {
     // 其他对话框（如权限确认）由现有卡片兜底；它自己的「收起」在这里变成 44px 的条。
-    card = fallbackFolded === dialog.fingerprint
-      ? <InteractionCardShell label="终端在等你选择" collapsed onCollapsedChange={() => setFallbackFolded('')} barTitle={`终端在等你选择：${dialog.title || '对话框'}`} header={null}/>
-      : <DialogCard key={dialog.fingerprint} hostID={hostID} paneID={paneID} initial={dialog} primary onClose={() => setFallbackFolded(dialog.fingerprint)}/>
+    card = folded
+      ? <InteractionCardShell label="终端在等你选择" collapsed onCollapsedChange={() => setFallbackFolded('')} barTitle={`终端在等你选择：${fallback.title || '对话框'}`} header={null}/>
+      : <DialogCard key={fallback.fingerprint} hostID={hostID} paneID={paneID} initial={fallback} primary onClose={() => setFallbackFolded(fallback.fingerprint)}/>
   } else if (session.loaded && multiSelect.length > 0) {
     // 多选题的对话框服务端不出卡片（不能一键作答），只能按对话记录说明。
     card = <InteractionCardShell
@@ -93,7 +96,8 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
     </InteractionCardShell>
   }
 
-  const active = card !== null
+  const shown = card !== null
+  const active = shown && !folded
   const notifyRef = useRef(onActiveChange)
   notifyRef.current = onActiveChange
   useEffect(() => {
@@ -104,14 +108,14 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   // 卡片已经消失（比如对话框已在电脑上回答）时，结果说明在原处单独显示一会儿。
   const [orphan, setOrphan] = useState('')
   useEffect(() => {
-    if (active || !session.notice) {
+    if (shown || !session.notice) {
       setOrphan('')
       return
     }
     setOrphan(session.notice)
     const timer = window.setTimeout(() => setOrphan(''), 6000)
     return () => window.clearTimeout(timer)
-  }, [active, session.notice])
+  }, [shown, session.notice])
 
   if (!card && !orphan) return null
   return <div className="console-interaction">

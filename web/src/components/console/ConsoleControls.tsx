@@ -1,0 +1,29 @@
+import { memo } from 'react'
+import { useConsoleControls } from '../../lib/console/useConsoleControls'
+import { useConsoleLive } from '../../lib/console/useConsoleLive'
+import type { ChatRecord } from '../../lib/structuredChatTypes'
+import type { WorkbenchClient } from '../../lib/workbench'
+import type { Pane } from '../../types'
+import { ConsoleStatusBar } from './ConsoleStatusBar'
+import { InteractionPanel } from './InteractionPanel'
+
+/**
+ * 对话控制台输入框上方的一组：运行状态栏与交互卡片。读屏状态只在这里流动，画面每变一次
+ * 只重渲染这一小块，不带着整条对话流和输入框一起重渲染。只对 Claude pane 读屏。
+ */
+export const ConsoleControls = memo(function ConsoleControls({ hostID, pane, client, records, onActiveChange, onOpenShell }: {
+  hostID: string
+  pane: Pane
+  client: WorkbenchClient
+  records: readonly ChatRecord[]
+  /** 交互卡片展开（顶替输入框）时为 true。 */
+  onActiveChange: (active: boolean) => void
+  onOpenShell: () => void
+}) {
+  const live = useConsoleLive({ hostID, paneID: pane.pane_id, client, enabled: pane.agent === 'claude' })
+  const controls = useConsoleControls({ client, paneID: pane.pane_id, mode: live.mode })
+  return <div className="chat-console-controls">
+    <ConsoleStatusBar live={live} working={pane.agent_status === 'working'} onInterrupt={controls.interrupt} onCycleMode={controls.cycleMode}/>
+    <InteractionPanel hostID={hostID} pane={pane} records={records} live={live} onActiveChange={onActiveChange} onOpenShell={onOpenShell}/>
+  </div>
+})

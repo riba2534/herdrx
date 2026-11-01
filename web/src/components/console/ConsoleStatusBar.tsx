@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowDown, Brain, Check, LoaderCircle, Sparkles, Square } from 'lucide-react'
 import type { ConsoleMode, ConsoleSpinner } from '../../lib/console/claudeScreen'
+import { errorText } from '../../lib/console/errorText'
 import type { ConsoleLive } from '../../lib/console/useConsoleLive'
 import { ConsoleLivePreview } from './ConsoleLivePreview'
 import { WorkingStatusText } from './WorkingStatusText'
@@ -33,8 +34,6 @@ export function formatConsoleTokens(tokens: number) {
   return `${short(tokens / 1_000_000)}M`
 }
 
-const failure = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
-
 /** 按钮动作：进行中禁用、失败时给出说明；不自动重试。 */
 function useAction(run: () => Promise<void>, fallback: string) {
   const [pending, setPending] = useState(false)
@@ -48,7 +47,7 @@ function useAction(run: () => Promise<void>, fallback: string) {
     if (pending) return
     setPending(true)
     setError('')
-    try { await run() } catch (cause) { setError(failure(cause, fallback)) } finally { setPending(false) }
+    try { await run() } catch (cause) { setError(errorText(cause, fallback)) } finally { setPending(false) }
   }
   return { pending, error, trigger }
 }

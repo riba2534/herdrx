@@ -301,7 +301,8 @@ describe('InteractionPanel', () => {
     expect(view.onActiveChange).toHaveBeenLastCalledWith(true)
     fireEvent.click(screen.getByRole('button', { name: '收起对话框卡片' }))
     expect(screen.getByRole('button', { name: '展开卡片：终端在等你选择：Do you want to proceed?' })).toBeInTheDocument()
-    expect(view.onActiveChange).toHaveBeenLastCalledWith(true)
+    // 收成条后输入框回来。
+    expect(view.onActiveChange).toHaveBeenLastCalledWith(false)
     // 对话框消失后同一个对话框再出现，卡片重新展开。
     shown = null
     await settle(INTERACTION_POLL_MS)
@@ -328,7 +329,8 @@ describe('InteractionPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
     const bar = screen.getByRole('button', { name: '展开卡片：Claude 在等你回答：测试框架' })
     expect(bar).toHaveTextContent('第 1/2 题')
-    expect(view.onActiveChange).toHaveBeenLastCalledWith(true)
+    // 收成条后输入框回来。
+    expect(view.onActiveChange).toHaveBeenLastCalledWith(false)
     // 收起时数字键不作答。
     fireEvent.keyDown(window, { key: '1' })
     await settle()
@@ -341,8 +343,11 @@ describe('InteractionPanel', () => {
     await settle()
     expect(screen.getByRole('group', { name: /Claude 在问/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
+    expect(again.onActiveChange).toHaveBeenLastCalledWith(false)
     fireEvent.click(screen.getByRole('button', { name: /^展开卡片/ }))
+    await settle()
     expect(screen.getByRole('group', { name: /Claude 在问/ })).toBeInTheDocument()
+    expect(again.onActiveChange).toHaveBeenLastCalledWith(true)
   })
 
   it('polls only while the page is visible and stops once the transcript has the answer', async () => {

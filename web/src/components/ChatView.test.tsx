@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatView } from './ChatView'
 import { clearComposerDrafts, readComposerDraft } from '../lib/composerDrafts'
 import { api, invalidateAuthentication } from '../lib/api'
-import type { WorkbenchClient } from '../lib/workbench'
+import type { ScreenError, WorkbenchClient } from '../lib/workbench'
+import type { ScreenFrame } from '../lib/ansiScreen'
 import type { ChatRecord } from '../lib/structuredChatTypes'
-import type { Pane } from '../types'
+import type { Pane, PaneDialog } from '../types'
 
 /**
  * 语音替身：默认「未启用」，只有显式 enable() 的用例才会出现麦克风入口。
@@ -121,8 +122,27 @@ function sequence(...pages: unknown[]) {
   }
 }
 
+type ScreenWatch = { paneID: string; onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void; stopped: boolean }
+
 function createClient() {
-  return { call: vi.fn().mockRejectedValue(new Error('Chat 视图不应调用任何 RPC')), getHostID: () => 'host' } as unknown as WorkbenchClient
+  const watches: ScreenWatch[] = []
+  return {
+    watches,
+    call: vi.fn().mockRejectedValue(new Error('Chat 视图不应调用任何 RPC')),
+    getHostID: () => 'host',
+    watchScreen: vi.fn((paneID: string, _lines: number, handlers: { onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void }) => {
+      const watch = { paneID, ...handlers, stopped: false }
+      watches.push(watch)
+      return () => { watch.stopped = true }
+    }),
+    onEpoch: vi.fn(() => () => true),
+  } as unknown as WorkbenchClient & { watches: ScreenWatch[] }
+}
+
+/** 一帧 Claude 全屏画面：spinner（可选）、输入框和模式行。 */
+function claudeScreen(mode: string, { spinner = '', seq = 1 } = {}) {
+  const lines = ['● 正在改 calc.py', '', ...(spinner ? [spinner, ''] : []), '─'.repeat(40), '❯ ', '─'.repeat(40), `  ⏵⏵ ${mode} on (shift+tab to cycle)`]
+  return { pane_id: 'p1', gen: 1, seq, full: true, lines, total: lines.length } satisfies ScreenFrame
 }
 
 function props(overrides: Record<string, unknown> = {}) {
@@ -834,12 +854,118 @@ describe('console variant', () => {
     expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)
   })
 
-  it('defaults to the pane variant for existing callers', async () => {
+  it('defaults to the pane variant for existing callers, without the console status bar or cards', async () => {
     transcriptServer(sequence(candidatesPage))
-    render(<ChatView {...props()}/>)
+    const client = createClient()
+    const dialog = vi.spyOn(api, 'paneDialog')
+    render(<ChatView {...props({ client, pane: { ...basePane, agent_status: 'blocked' } })}/>)
     await screen.findByText('选择此终端的会话记录')
     expect(screen.getByRole('region', { name: '对话视图' })).toHaveAttribute('data-variant', 'pane')
     expect(screen.getByRole('button', { name: '显示终端' })).toBeVisible()
+    expect(client.watchScreen).not.toHaveBeenCalled()
+    expect(dialog).not.toHaveBeenCalled()
+    expect(document.querySelector('.console-status')).toBeNull()
+  })
+})
+
+describe('console status bar and interaction cards', () => {
+  const ask: ChatRecord = { id: 'ask', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'call-ask', name: 'AskUserQuestion', input: { questions: [{ header: '测试框架', multiSelect: false, question: '测试框架用 pytest 还是 unittest？', options: [{ label: 'pytest', description: '使用 pytest' }, { label: 'unittest', description: '使用 unittest' }] }] } }] }
+  const question: PaneDialog = { fingerprint: 'fp-q', kind: 'question', title: '测试框架用 pytest 还是 unittest？', lines: [], options: ['pytest', 'unittest', 'Type something.', 'Chat about this'].map((label, index) => ({ index: index + 1, label, selected: index === 0 })) }
+  const verified = (messages: ChatRecord[]) => boundPage(messages, { binding: 'verified', session: 'cand-1' })
+
+  function setVisibility(state: DocumentVisibilityState) {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  afterEach(() => setVisibility('visible'))
+
+  /** 渲染 console 变体，等第一条记录出来；返回假 client 与它的 `call`。 */
+  async function renderConsole(messages: ChatRecord[], pane: Partial<Pane> = {}) {
+    transcriptServer(sequence(verified(messages)))
+    const client = createClient()
+    const call = vi.mocked(client.call).mockResolvedValue({})
+    render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, ...pane } })}/>)
+    await screen.findByText((messages[0].blocks[0] as { text: string }).text)
+    return { client, call }
+  }
+
+  it('shows the working status, the mode and the live screen above the input', async () => {
+    const { client } = await renderConsole([text('u1', 'user', '改一下')], { agent_status: 'working' })
+    expect(client.watchScreen).toHaveBeenCalledTimes(1)
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions', { spinner: '✻ Wibbling… (15s · ↓ 1.2k tokens)' })))
+    // 计时立刻显示；动词按状态文案的节奏（至少停留 1 秒）替换掉「正在运行…」。
+    expect(screen.getByText('15 秒')).toBeInTheDocument()
+    expect(await screen.findByText('Wibbling…', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /实时画面/ })).toHaveTextContent('● 正在改 calc.py')
+    // 状态栏在输入框上方，输入框照常可用。
+    const compose = document.querySelector('.chat-compose')!
+    expect(compose.querySelector('.console-status')).not.toBeNull()
+    expect(screen.getByRole('textbox', { name: '对话输入内容' })).toBeVisible()
+  })
+
+  it('reads the screen only for a visible Claude pane', async () => {
+    transcriptServer(sequence(verified([text('u1', 'user', '问')])))
+    const client = createClient()
+    const view = render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, agent: 'codex' } })}/>)
+    await screen.findByText('问')
+    expect(client.watchScreen).not.toHaveBeenCalled()
+    view.rerender(<ChatView {...props({ client, variant: 'console' })}/>)
+    expect(client.watchScreen).toHaveBeenCalledTimes(1)
+    act(() => setVisibility('hidden'))
+    expect(client.watches[0].stopped).toBe(true)
+  })
+
+  it('replaces the input with a question card and brings it back with the draft when the card folds', async () => {
+    transcriptServer(sequence(verified([text('u1', 'user', '问我一个问题'), ask])))
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: question })
+    render(<ChatView {...props({ variant: 'console' })}/>)
+    await screen.findByText('问我一个问题')
+    fireEvent.change(screen.getByRole('textbox', { name: '对话输入内容' }), { target: { value: '没发出去的草稿' } })
+    const card = await screen.findByRole('group', { name: 'Claude 在问：测试框架用 pytest 还是 unittest？' })
+    expect(card).toHaveTextContent('使用 unittest')
+    expect(screen.queryByRole('textbox', { name: '对话输入内容' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
+    expect(screen.getByRole('button', { name: /^展开卡片/ })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '对话输入内容' })).toHaveValue('没发出去的草稿')
+    fireEvent.click(screen.getByRole('button', { name: /^展开卡片/ }))
+    expect(screen.queryByRole('textbox', { name: '对话输入内容' })).toBeNull()
+    expect(readComposerDraft('host', 'p1')).toBe('没发出去的草稿')
+  })
+
+  it('opens the pane in Shell mode from a multi-select question', async () => {
+    const multi: ChatRecord = { ...ask, blocks: [{ type: 'tool-call', call_id: 'call-multi', name: 'AskUserQuestion', input: { questions: [{ question: '选哪些？', multiSelect: true, options: [{ label: 'a' }, { label: 'b' }] }] } }] }
+    transcriptServer(sequence(verified([multi])))
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: null })
+    const onSwitchToTerminal = vi.fn()
+    render(<ChatView {...props({ variant: 'console', onSwitchToTerminal })}/>)
+    const card = await screen.findByRole('group', { name: 'Claude 在等你回答多选题' })
+    expect(card).toHaveTextContent('这道题可以多选')
+    fireEvent.click(within(card).getByRole('button', { name: '在 Shell 中打开' }))
+    expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('interrupts with one Esc key press and reports a failure without retrying', async () => {
+    const { call } = await renderConsole([text('u1', 'user', '跑起来')], { agent_status: 'working' })
+    fireEvent.click(screen.getByRole('button', { name: '中断' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['esc'] }))
+    call.mockRejectedValueOnce(new Error('请求超时'))
+    fireEvent.click(screen.getByRole('button', { name: '中断' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没有确认 Esc 已送达（请求超时），不会自动重发')
+    expect(call).toHaveBeenCalledTimes(2)
+  })
+
+  it('cycles the mode with one Shift+Tab and waits for the mode line to change', async () => {
+    const { client, call } = await renderConsole([text('u1', 'user', '切模式')])
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
+    fireEvent.click(screen.getByRole('button', { name: /当前模式：免授权/ }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['shift+tab'] }))
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeDisabled()
+    act(() => client.watches[0].onFrame(claudeScreen('auto mode', { seq: 2 })))
+    await waitFor(() => expect(screen.getByRole('button', { name: /当前模式：自动/ })).toBeEnabled())
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(call).toHaveBeenCalledTimes(1)
   })
 })
 
