@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -51,6 +52,11 @@ func ParseCommand(raw string) (CommandSpec, error) {
 	if raw == TranscriptCommand {
 		return CommandSpec{Internal: "transcript"}, nil
 	}
+	// Same exact-match rule: the daemon runs the fixed launcher script and
+	// returns names and flags only.
+	if raw == LaunchersCommand {
+		return CommandSpec{Internal: "launchers"}, nil
+	}
 	if len(fields) == 2 && fields[0] == "herdrx-terminal-geometry" {
 		pid, err := strconv.Atoi(fields[1])
 		if err != nil || pid <= 1 || pid > 1<<30 || strconv.Itoa(pid) != fields[1] {
@@ -92,9 +98,9 @@ func ParseCommand(raw string) (CommandSpec, error) {
 	return CommandSpec{Args: fields}, nil
 }
 
-func parseCommand(raw string) (commandSpec, error) {
-	return ParseCommand(raw)
-}
+// parseCommand is the SSH server's parser; tests replace it to reach the
+// dispatcher with specs ParseCommand never returns.
+var parseCommand = ParseCommand
 
 func ConfigPathOutput() string {
 	return configPathOutput()
@@ -116,7 +122,7 @@ func AllowedSocket(path string) bool {
 	return allowedSocket(path)
 }
 
-func ExecutableCommand(spec CommandSpec, herdrBin string) *exec.Cmd {
+func ExecutableCommand(spec CommandSpec, herdrBin string) (*exec.Cmd, error) {
 	return executableCommand(spec, herdrBin)
 }
 
@@ -174,10 +180,18 @@ func Unpair(configPath string) error {
 	return Save(configPath, config)
 }
 
-func executableCommand(spec commandSpec, herdrBin string) *exec.Cmd {
+// errNotExecutable rejects a spec that names no program. Internal commands run
+// in-process; one that reaches here has no case in its dispatcher, and running
+// its first argument as a program would be wrong, so the request fails.
+var errNotExecutable = errors.New("command is not allowed")
+
+func executableCommand(spec commandSpec, herdrBin string) (*exec.Cmd, error) {
+	if spec.Internal != "" || len(spec.Args) == 0 {
+		return nil, errNotExecutable
+	}
 	binName := spec.Args[0]
 	if binName == "herdr" && herdrBin != "" {
 		binName = herdrBin
 	}
-	return exec.Command(binName, spec.Args[1:]...)
+	return exec.Command(binName, spec.Args[1:]...), nil
 }

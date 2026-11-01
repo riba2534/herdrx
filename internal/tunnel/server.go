@@ -141,6 +141,10 @@ func (s *TwoPhaseState) LockLifecycle() func() {
 
 var protocolID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
 
+// parseAgentCommand is the exec allowlist; tests replace it to reach the
+// dispatcher with specs ParseCommand never returns.
+var parseAgentCommand = agent.ParseCommand
+
 func (s *TwoPhaseState) PrepareWithStarter(enrollmentID, reqID, ctrlID, formalNode, formalSSHPub string, startFormal func() (string, error)) (string, string, string, time.Time, error) {
 	defer s.LockLifecycle()()
 	fail := func(err error) (string, string, string, time.Time, error) { return "", "", "", time.Time{}, err }
@@ -955,7 +959,7 @@ func (s *PermanentTailcatServer) handleSession(ctx context.Context, newChan ssh.
 		}
 
 		// 处于 active 阶段：白名单校验，真实调用受控端命令与 HerdrBin 绝对路径，彻底移除 fake 模拟！
-		spec, err := agent.ParseCommand(cmd)
+		spec, err := parseAgentCommand(cmd)
 		if err != nil {
 			_ = req.Reply(false, nil)
 			_, _ = io.WriteString(ch.Stderr(), err.Error()+"\n")
@@ -989,9 +993,16 @@ func (s *PermanentTailcatServer) handleSession(ctx context.Context, newChan ssh.
 				_, _ = io.WriteString(ch.Stderr(), "transcript reader failed\n")
 				status = 1
 			}
+		case "launchers":
+			status = agent.ServeLaunchers(ctx, ch)
 		default:
 			// 真实执行配置中指定的 HerdrBin 绝对路径！
-			base := agent.ExecutableCommand(spec, s.herdrBin)
+			base, bErr := agent.ExecutableCommand(spec, s.herdrBin)
+			if bErr != nil {
+				_, _ = io.WriteString(ch.Stderr(), bErr.Error()+"\n")
+				status = 126
+				break
+			}
 			command := exec.CommandContext(ctx, base.Path, base.Args[1:]...)
 			command.WaitDelay = 2 * time.Second
 			command.Stdin = ch
