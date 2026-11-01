@@ -272,7 +272,6 @@
 }
 
 @media (max-width: 767px), (pointer: coarse) {
-  .console-interaction { padding-bottom: env(safe-area-inset-bottom, 0px); }
   .console-card { padding: var(--console-space-3); }
   .console-card-scroll { max-height: 40dvh; }
   .console-option { padding: var(--console-space-3); }

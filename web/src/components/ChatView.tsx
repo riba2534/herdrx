@@ -15,6 +15,10 @@ import { collectUnreadKeys } from '../lib/chat/unreadCount'
 import { insideScrollableAbove, isUpwardWheelIntent, shouldRepinOnWheel } from '../lib/chat/autoFollow'
 import { ChatTurn } from './chat/ChatTurn'
 import { ChatChips } from './chat/ChatChips'
+import { ConsoleStatusBar } from './console/ConsoleStatusBar'
+import { InteractionPanel } from './console/InteractionPanel'
+import { useConsoleControls } from '../lib/console/useConsoleControls'
+import { useConsoleLive } from '../lib/console/useConsoleLive'
 import { agentStatusLabel, paneDisplayName } from '../lib/labels'
 import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
@@ -53,12 +57,15 @@ export type ChatViewProps = {
  * 对话流按轮次排：用户提问 → 工作组（思考、工具调用、中间文字）→ 最终回复；Agent 正在工作时
  * 最后一段动作保持展开并计时。新到达的助手正文按词淡入，历史记录不播。
  *
+ * console 变体在输入区上方加运行状态栏（读屏得到的 spinner、模式、实时画面），Claude 提问、
+ * 计划批准等交互用卡片顶替输入框；卡片收成条时输入框回来，草稿一直保留。
+ *
  * 输入区是 `ChatMediaComposer`（契约 §8.4）：拖拽 / 粘贴 / 选择图片只落占位并走
  * `inject=false` 的 stage-only 上传，正文与图片引用在发送时合成**一次**提交（仅图片也能发）；
  * 语音输入只把**用户自己**的最终转写追加进草稿，没有自动发送，语音模型的回答只在这里
  * 单独展示，绝不写草稿或终端。
  */
-export function ChatView({ hostID, pane, compact, connected, variant = 'pane', onSwitchToTerminal, onFocus }: ChatViewProps) {
+export function ChatView({ hostID, pane, client, compact, connected, variant = 'pane', onSwitchToTerminal, onFocus }: ChatViewProps) {
   const paneID = pane.pane_id
   const session = useMemo(() => new StructuredChatSession({ hostID, paneID }), [hostID, paneID])
   const snapshot: StructuredChatSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
@@ -73,6 +80,11 @@ export function ChatView({ hostID, pane, compact, connected, variant = 'pane', o
   const touchYRef = useRef<number | null>(null)
   const arrivals = useRef(new ArrivalTracker()).current
   const unreadSessionRef = useRef<string | undefined>(undefined)
+  const consoleVariant = variant === 'console'
+  // 交互卡片展开时顶替输入框；输入框只是隐藏，草稿、图片和语音状态都不丢。
+  const [cardActive, setCardActive] = useState(false)
+  const live = useConsoleLive({ hostID, paneID, client, enabled: consoleVariant && docVisible && pane.agent === 'claude' })
+  const controls = useConsoleControls({ client, paneID, mode: live.mode })
 
   const setFollowing = useCallback((following: boolean) => {
     followingRef.current = following
@@ -236,7 +248,6 @@ export function ChatView({ hostID, pane, compact, connected, variant = 'pane', o
   const name = paneDisplayName(pane)
   const bound = state.session !== undefined
   const verified = state.binding === 'verified'
-  const consoleVariant = variant === 'console'
   // 读取源只来自用户在本 pane 的显式选择，绝不从窗口标题、进程名或候选文件名推断。
   const dshSelected = state.source === 'dsh'
   // 只有"没识别出程序"或"识别出的程序不支持"时才提供 DSH 入口；已知的 claude / codex 不给。
@@ -339,34 +350,40 @@ export function ChatView({ hostID, pane, compact, connected, variant = 'pane', o
       <span className="voice-assistant-note-text">{voiceReply}</span>
       <Button className="button-secondary" onClick={() => setVoiceReply('')}>关闭</Button>
     </div>}
-    <div className="chat-compose">
+    <div className="chat-compose" data-card={cardActive || undefined}>
       <div className="chat-compose-column">
-        <ChatMediaComposer
-          variant="chat"
-          hostID={hostID}
-          paneID={paneID}
-          visible
-          compact={compact}
-          sendDisabled={!connected}
-          placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
-          onDirectInput={() => {}}
-          onLocalInput={() => {}}
-          stageImage={stageImage}
-          readSend={readComposerSend}
-          voice={
-            <VoiceInput
-              hostID={hostID}
-              paneID={paneID}
-              visible
-              compact={compact}
-              transport={voiceTransport}
-              writeDraft={writeComposerDraft}
-              readDraft={readComposerDraft}
-              onAssistantText={onVoiceAssistantText}
-              onStatus={onVoiceStatus}
-            />
-          }
-        />
+        {consoleVariant && <div className="chat-console-controls">
+          <ConsoleStatusBar live={live} working={status === 'working'} onInterrupt={controls.interrupt} onCycleMode={controls.cycleMode}/>
+          <InteractionPanel hostID={hostID} pane={pane} records={state.messages} live={live} onActiveChange={setCardActive} onOpenShell={onSwitchToTerminal}/>
+        </div>}
+        <div className="chat-composer-slot" hidden={cardActive}>
+          <ChatMediaComposer
+            variant="chat"
+            hostID={hostID}
+            paneID={paneID}
+            visible
+            compact={compact}
+            sendDisabled={!connected}
+            placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
+            onDirectInput={() => {}}
+            onLocalInput={() => {}}
+            stageImage={stageImage}
+            readSend={readComposerSend}
+            voice={
+              <VoiceInput
+                hostID={hostID}
+                paneID={paneID}
+                visible
+                compact={compact}
+                transport={voiceTransport}
+                writeDraft={writeComposerDraft}
+                readDraft={readComposerDraft}
+                onAssistantText={onVoiceAssistantText}
+                onStatus={onVoiceStatus}
+              />
+            }
+          />
+        </div>
       </div>
     </div>
   </section>
