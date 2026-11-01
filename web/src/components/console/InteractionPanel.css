@@ -1,0 +1,281 @@
+/* 交互卡片：顶替输入框，宽度跟随输入区；手机上贴在底部安全区之上。 */
+.console-interaction {
+  display: grid;
+  min-width: 0;
+  color: var(--console-text);
+}
+
+.console-interaction-notice {
+  margin: 0;
+  padding: var(--console-space-2) var(--console-space-3);
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+  background: var(--console-card);
+  color: var(--console-text-2);
+  font-size: 13px;
+}
+
+.console-card {
+  display: grid;
+  gap: var(--console-space-3);
+  min-width: 0;
+  padding: var(--console-space-4);
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+  background: var(--console-card);
+}
+
+.console-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--console-space-2);
+  min-height: 28px;
+}
+
+.console-card-head-main {
+  display: flex;
+  align-items: center;
+  gap: var(--console-space-2);
+  min-width: 0;
+}
+
+.console-card-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.console-card-page {
+  flex: none;
+  color: var(--console-text-3);
+  font-size: var(--console-font-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.console-card-scroll {
+  display: grid;
+  align-content: start;
+  gap: var(--console-space-3);
+  min-height: 0;
+  max-height: min(360px, 45dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.console-card-pinned { display: grid; gap: var(--console-space-2); min-width: 0; }
+
+.console-card-question {
+  margin: 0;
+  font-size: var(--console-font-body);
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.console-card-note {
+  display: grid;
+  justify-items: start;
+  gap: var(--console-space-2);
+  margin: 0;
+  color: var(--console-text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.console-card-note p { margin: 0; }
+
+.console-card-path {
+  margin: 0;
+  padding: var(--console-space-2) var(--console-space-3);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-code-bg);
+  font-family: var(--console-font-mono);
+  font-size: var(--console-font-code);
+  overflow-wrap: anywhere;
+}
+
+.console-card-lines { display: grid; gap: 2px; color: var(--console-text-2); font-size: 13px; }
+.console-card-lines p { margin: 0; overflow-wrap: anywhere; }
+
+.console-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--console-text-2);
+  font-size: var(--console-font-meta);
+}
+
+.console-card-status-notice { color: var(--console-warning); }
+
+/* 选项列表：一个圆角框里用 1px 细线分隔，整行可点。 */
+.console-options {
+  display: grid;
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+  overflow: hidden;
+}
+
+.console-options > [role='listitem'] + [role='listitem'] { border-top: 1px solid var(--console-line); }
+
+.console-option {
+  display: flex;
+  align-items: center;
+  gap: var(--console-space-3);
+  width: 100%;
+  min-height: var(--console-tap);
+  padding: var(--console-space-3) var(--console-space-4);
+  border: 0;
+  background: transparent;
+  color: var(--console-text);
+  text-align: left;
+  transition: background-color var(--console-motion-fast) var(--console-ease-move);
+}
+
+.console-option:hover:not(:disabled) { background: var(--console-raised); }
+.console-option:disabled { opacity: .55; }
+.console-option[aria-busy='true'] { opacity: 1; background: var(--console-raised); }
+.console-option > svg { flex: none; color: var(--console-text-2); }
+
+.console-option-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+
+.console-option-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.console-option-description { color: var(--console-text-2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 自由填写入口固定在滚动区下方。 */
+.console-option-free {
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+}
+
+.console-option-free .console-option-label { color: var(--console-text-2); font-weight: 400; }
+
+.console-free-entry {
+  display: grid;
+  gap: var(--console-space-2);
+  padding: var(--console-space-3);
+  border: 1px solid var(--console-info);
+  border-radius: var(--console-radius-md);
+}
+
+.console-free-input {
+  width: 100%;
+  min-height: 24px;
+  max-height: calc(6 * 1.5em);
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--console-text);
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  overflow-y: auto;
+}
+
+.console-free-input::placeholder { color: var(--console-placeholder); }
+.console-free-input:focus-visible { outline: none; }
+
+.console-free-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--console-space-2);
+}
+
+/* 计划：正文卡内滚动，动作一行一个。 */
+.console-plan {
+  padding: var(--console-space-3) var(--console-space-4);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-surface);
+}
+
+.console-plan .chat-markdown { color: var(--console-text); font-size: 14px; }
+
+.console-actions-list {
+  display: grid;
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+  overflow: hidden;
+}
+
+.console-actions-list > [role='listitem'] + [role='listitem'] { border-top: 1px solid var(--console-line); }
+.console-actions-list .console-free-entry { border: 0; border-radius: 0; box-shadow: inset 0 0 0 1px var(--console-info); }
+.console-action-primary > svg { color: var(--console-running); }
+.console-action-primary .console-option-label { font-weight: 600; }
+
+.console-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--console-space-2);
+}
+
+.console-choice-row .console-button { min-height: 36px; }
+.console-choice-row .console-key { min-width: 20px; height: 20px; margin-left: var(--console-space-1); background: transparent; color: inherit; opacity: .7; }
+
+.console-review { display: grid; gap: var(--console-space-2); margin: 0; }
+.console-review > div { display: grid; gap: 2px; padding: var(--console-space-2) var(--console-space-3); border-radius: var(--console-radius-sm); background: var(--console-surface); }
+.console-review dt { color: var(--console-text-2); font-size: 13px; }
+.console-review dd { margin: 0; font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+
+/* 收起后的 44px 条。 */
+.console-card-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--console-space-3);
+  width: 100%;
+  height: var(--console-tap);
+  padding: 0 var(--console-space-2) 0 var(--console-space-4);
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-md);
+  background: var(--console-card);
+  color: var(--console-text);
+  text-align: left;
+}
+
+.console-card-bar:hover { background: var(--console-raised); }
+
+.console-card-bar-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.console-card-bar-meta { flex: none; color: var(--console-text-3); font-size: var(--console-font-meta); }
+
+.console-card-bar-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  color: var(--console-text-2);
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .console-interaction { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .console-card { padding: var(--console-space-3); }
+  .console-card-scroll { max-height: 40dvh; }
+  .console-option { padding: var(--console-space-3); }
+  .console-free-input { font-size: var(--console-font-mobile-body); }
+  .console-choice-row .console-button { flex: 1; min-height: var(--console-tap); }
+}
