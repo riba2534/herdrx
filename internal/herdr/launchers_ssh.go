@@ -18,12 +18,11 @@ const launcherRemoteSlack = 3 * time.Second
 // the daemon's one whitelisted name. Neither carries user input, and the reply
 // holds launcher lines only. Nothing here ever reads, logs or returns stderr.
 func (e *SSHEndpoint) Launchers(ctx context.Context) (launchers.Result, error) {
+	tailcat := e.host.Transport == "tailcat"
 	command := launchers.SSHCommand
-	switch e.host.Transport {
-	case "tailcat":
+	if tailcat {
 		command = launchers.AgentCommand
-	case "", "ssh":
-	default:
+	} else if e.host.Transport != "" && e.host.Transport != "ssh" {
 		return launchers.Unsupported(launchers.ReasonUnsupportedAgent), nil
 	}
 	runCtx, cancel := context.WithTimeout(ctx, launchers.Timeout+launcherRemoteSlack)
@@ -44,7 +43,7 @@ func (e *SSHEndpoint) Launchers(ctx context.Context) (launchers.Result, error) {
 		return launchers.Unsupported(launchers.ReasonReadFailed), nil
 	}
 	if err := session.Start(command); err != nil {
-		if e.host.Transport == "tailcat" && !timedOut() {
+		if tailcat && !timedOut() {
 			// A daemon from before discovery refuses the unknown name. Not
 			// cached: once the CLI is updated the next request works.
 			return launchers.Unsupported(launchers.ReasonUnsupportedAgent), nil
@@ -64,11 +63,7 @@ func (e *SSHEndpoint) Launchers(ctx context.Context) (launchers.Result, error) {
 	case len(data) > launchers.MaxOutput || readErr != nil:
 		return launchers.Unsupported(launchers.ReasonReadFailed), nil
 	case waitErr != nil:
-		status := remoteExitStatus(waitErr)
-		if e.host.Transport == "tailcat" && status == 126 {
-			return launchers.Unsupported(launchers.ReasonUnsupportedAgent), nil
-		}
-		return launchers.Unsupported(launchers.ReasonForExit(status)), nil
+		return launchers.Unsupported(launchers.ReasonForExit(remoteExitStatus(waitErr))), nil
 	}
 	return launchers.Found(launchers.Parse(data)), nil
 }

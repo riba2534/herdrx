@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -113,25 +114,11 @@ func Parse(output []byte) []Launcher {
 			continue
 		}
 		fields := strings.Split(rest, "\t")
-		if len(fields) != 4 || !ValidName(fields[0]) || seen[fields[0]] {
-			continue
-		}
-		var flags [3]bool
-		valid := true
-		for index, field := range fields[1:] {
-			switch field {
-			case "0":
-			case "1":
-				flags[index] = true
-			default:
-				valid = false
-			}
-		}
-		if !valid {
+		if len(fields) != 4 || !ValidName(fields[0]) || seen[fields[0]] || slices.ContainsFunc(fields[1:], func(flag string) bool { return flag != "0" && flag != "1" }) {
 			continue
 		}
 		seen[fields[0]] = true
-		list = append(list, Launcher{Name: fields[0], Bypass: flags[0], Fullscreen: flags[1], Teammate: flags[2]})
+		list = append(list, Launcher{Name: fields[0], Bypass: fields[1] == "1", Fullscreen: fields[2] == "1", Teammate: fields[3] == "1"})
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	if len(list) > MaxLaunchers {
@@ -289,9 +276,3 @@ exit "$code"
 // SSHCommand is the exec command for a basic SSH host. The login shell there
 // may be bash, zsh, dash or fish; each receives four single-quoted words.
 var SSHCommand = "sh -c '" + sshWrapper + "' herdrx-launchers '" + Loader + "' '" + Script + "'"
-
-func init() {
-	if strings.ContainsAny(Script+Loader+sshWrapper, `'\`) {
-		panic("launcher scripts must not contain single quotes or backslashes")
-	}
-}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/riba2534/herdrx/internal/launchers"
@@ -78,6 +79,16 @@ func Isolate(t testing.TB, rc func(home string) string) string {
 	t.Setenv("HOME", home)
 	t.Setenv("ZDOTDIR", home)
 	return home
+}
+
+// AssertNoSecrets fails when text carries anything from an alias body.
+func AssertNoSecrets(t testing.TB, text string) {
+	t.Helper()
+	for _, secret := range Secrets {
+		if strings.Contains(text, secret) {
+			t.Fatalf("output leaked %q: %q", secret, text)
+		}
+	}
 }
 
 // AssertNoMarkers fails when an alias body ran during discovery.

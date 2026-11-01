@@ -80,8 +80,7 @@ type sessionStartKey struct{ user, host, id string }
 type sessionStartEntry struct {
 	at    time.Time
 	done  chan struct{}
-	reply *sessionReply // 进行中或已忘记时为 nil
-	ended bool
+	reply *sessionReply // 进行中时为 nil；忘记的记录直接删掉
 }
 
 // sessionStarts 是内存里的幂等表，按用户分开、容量有界；只在增删查时持锁。
@@ -104,7 +103,7 @@ func (s *sessionStarts) begin(key sessionStartKey, now time.Time) (*sessionStart
 		s.users[key.user] = entries
 	}
 	for other, entry := range entries {
-		if entry.ended && now.Sub(entry.at) > sessionStartTTL {
+		if entry.reply != nil && now.Sub(entry.at) > sessionStartTTL {
 			delete(entries, other)
 		}
 	}
@@ -112,17 +111,17 @@ func (s *sessionStarts) begin(key sessionStartKey, now time.Time) (*sessionStart
 		return entry, false, nil
 	}
 	if len(entries) >= sessionStartUserCapacity {
-		var oldest *sessionStartKey
+		var oldestKey sessionStartKey
+		var oldest *sessionStartEntry
 		for other, entry := range entries {
-			if entry.ended && (oldest == nil || entry.at.Before(entries[*oldest].at)) {
-				other := other
-				oldest = &other
+			if entry.reply != nil && (oldest == nil || entry.at.Before(oldest.at)) {
+				oldestKey, oldest = other, entry
 			}
 		}
 		if oldest == nil {
 			return nil, false, errSessionStartBusy
 		}
-		delete(entries, *oldest)
+		delete(entries, oldestKey)
 	}
 	entry := &sessionStartEntry{at: now, done: make(chan struct{})}
 	entries[key] = entry
@@ -132,7 +131,7 @@ func (s *sessionStarts) begin(key sessionStartKey, now time.Time) (*sessionStart
 // finish 记下 reply；reply 为 nil 表示确定什么都没创建，删掉记录让同一个 id 可以再试。
 func (s *sessionStarts) finish(key sessionStartKey, entry *sessionStartEntry, reply *sessionReply) {
 	s.mu.Lock()
-	entry.reply, entry.ended = reply, true
+	entry.reply = reply
 	if entries := s.users[key.user]; reply == nil && entries[key] == entry {
 		delete(entries, key)
 		if len(entries) == 0 {
@@ -217,11 +216,11 @@ func (a *API) startSession(writer http.ResponseWriter, request *http.Request) {
 	}
 	defer release()
 	reply, record := a.runSessionStart(ctx, request, host, input)
-	if record {
-		a.sessionStarts.finish(key, entry, reply)
-	} else {
-		a.sessionStarts.finish(key, entry, nil)
+	stored := reply
+	if !record {
+		stored = nil
 	}
+	a.sessionStarts.finish(key, entry, stored)
 	writeJSON(writer, reply.status, reply.body)
 }
 
@@ -278,18 +277,19 @@ func (a *API) runSessionStart(ctx context.Context, request *http.Request, host s
 	waitForShell(ctx, endpoint, result.PaneID)
 	result.SessionID = uuid.NewV4().String()
 	line := input.Launcher + " --session-id " + result.SessionID
-	details := map[string]any{"pane_id": result.PaneID, "launcher": input.Launcher, "cwd": input.CWD}
-	if _, err := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": result.PaneID, "text": line, "keys": []string{"Enter"}}); err != nil {
-		details["result"] = "input_failed"
-		a.audit(request.WithContext(ctx), "session.start", "host", host.ID, details)
+	_, sendErr := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": result.PaneID, "text": line, "keys": []string{"Enter"}})
+	outcome := "started"
+	if sendErr != nil {
+		outcome = "input_failed"
+	}
+	a.audit(request.WithContext(ctx), "session.start", "host", host.ID, map[string]any{"pane_id": result.PaneID, "launcher": input.Launcher, "cwd": input.CWD, "result": outcome})
+	if sendErr != nil {
 		return &sessionReply{status: http.StatusBadGateway, body: map[string]any{
 			"code":    "start_failed",
 			"error":   "新终端已建好，但启动命令没有确认送达，不会自动重试。终端保持打开，请到这个终端里查看后手动启动",
 			"details": map[string]string{"workspace_id": result.WorkspaceID, "tab_id": result.TabID, "pane_id": result.PaneID},
 		}}, true
 	}
-	details["result"] = "started"
-	a.audit(request.WithContext(ctx), "session.start", "host", host.ID, details)
 	return &sessionReply{status: http.StatusOK, body: result}, true
 }
 

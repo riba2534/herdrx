@@ -52,43 +52,33 @@ func Run(ctx context.Context) ([]byte, error) {
 	reads := make(chan readResult, 1)
 	go func() {
 		data, err := io.ReadAll(io.LimitReader(reader, MaxOutput+1))
+		if len(data) > MaxOutput {
+			// Stop a writer that would otherwise block on the full pipe.
+			killGroup()
+		}
 		reads <- readResult{data, err}
 	}()
 	exits := make(chan error, 1)
 	go func() { exits <- command.Wait() }()
 
-	var read *readResult
 	var waitErr error
-	for running := true; running; {
-		select {
-		case waitErr = <-exits:
-			running = false
-		case result := <-reads:
-			read = &result
-			if len(result.data) > MaxOutput {
-				killGroup()
-				<-exits
-				return nil, &Error{Reason: ReasonReadFailed}
-			}
-		case <-ctx.Done():
-			killGroup()
-			<-exits
-			return nil, &Error{Reason: ReasonTimeout}
-		}
+	select {
+	case waitErr = <-exits:
+	case <-ctx.Done():
+		killGroup()
+		<-exits
+		return nil, &Error{Reason: ReasonTimeout}
 	}
 	killGroup()
-	if read == nil {
-		select {
-		case result := <-reads:
-			read = &result
-		case <-time.After(drainGrace):
-			// Something outside the group still holds the pipe. zsh is gone
-			// and the reader drained what it wrote long before this grace.
-			_ = reader.Close()
-			result := <-reads
-			result.err = nil
-			read = &result
-		}
+	var read readResult
+	select {
+	case read = <-reads:
+	case <-time.After(drainGrace):
+		// Something outside the group still holds the pipe. zsh is gone and
+		// the reader drained what it wrote long before this grace.
+		_ = reader.Close()
+		read = <-reads
+		read.err = nil
 	}
 	if waitErr != nil || read.err != nil || len(read.data) > MaxOutput {
 		return nil, &Error{Reason: ReasonReadFailed}

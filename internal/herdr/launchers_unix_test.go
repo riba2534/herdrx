@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"os/exec"
 	"path/filepath"
@@ -145,12 +144,6 @@ func TestLaunchersOverEachTransportReturnNamesAndFlagsOnly(t *testing.T) {
 			result, err := endpoint.Launchers(context.Background())
 			if err != nil || !reflect.DeepEqual(result, launchers.Found(launcherstest.Expected)) {
 				t.Fatalf("result %+v err %v", result, err)
-			}
-			encoded := fmt.Sprintf("%+v", result)
-			for _, secret := range launcherstest.Secrets {
-				if strings.Contains(encoded, secret) {
-					t.Fatalf("result leaked %q", secret)
-				}
 			}
 			launcherstest.AssertNoMarkers(t, home)
 		})

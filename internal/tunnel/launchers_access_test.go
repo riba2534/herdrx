@@ -58,11 +58,7 @@ func TestPermanentLaunchersCommandIsWhitelisted(t *testing.T) {
 	if err != nil || status != 0 || stdout != string(launchers.Format(launcherstest.Expected)) {
 		t.Fatalf("stdout=%q stderr=%q status=%d err=%v", stdout, stderr, status, err)
 	}
-	for _, secret := range launcherstest.Secrets {
-		if strings.Contains(stdout+stderr, secret) {
-			t.Fatalf("daemon output leaked %q", secret)
-		}
-	}
+	launcherstest.AssertNoSecrets(t, stderr)
 	launcherstest.AssertNoMarkers(t, home)
 
 	t.Setenv("PATH", t.TempDir())

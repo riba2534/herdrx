@@ -76,11 +76,7 @@ func TestSSHServerServesLaunchers(t *testing.T) {
 	if result.err != nil || result.status != 0 || result.stdout != string(launchers.Format(launcherstest.Expected)) {
 		t.Fatalf("result = %+v", result)
 	}
-	for _, secret := range launcherstest.Secrets {
-		if strings.Contains(result.stdout+result.stderr, secret) {
-			t.Fatalf("daemon output leaked %q", secret)
-		}
-	}
+	launcherstest.AssertNoSecrets(t, result.stderr)
 	launcherstest.AssertNoMarkers(t, home)
 
 	t.Setenv("PATH", t.TempDir())

@@ -113,26 +113,14 @@ func TestExitStatusesMapBackToReasons(t *testing.T) {
 	}
 }
 
+// Six quotes are the three single-quoted words around the wrapper, loader and
+// script: none of them may contain a quote or a backslash (fish unescapes it).
 func TestScriptsSurviveSingleQuoting(t *testing.T) {
-	for _, text := range []string{launchers.Script, launchers.Loader} {
-		if strings.ContainsAny(text, `'\`) {
-			t.Fatalf("script text needs escaping: %q", text)
-		}
-	}
-	if !strings.HasPrefix(launchers.SSHCommand, "sh -c '") || strings.Count(launchers.SSHCommand, "'") != 6 {
+	if !strings.HasPrefix(launchers.SSHCommand, "sh -c '") || strings.Count(launchers.SSHCommand, "'") != 6 || strings.Contains(launchers.SSHCommand, `\`) {
 		t.Fatalf("SSH command quoting: %q", launchers.SSHCommand)
 	}
 	if !strings.Contains(launchers.SSHCommand, "(sleep "+strconv.Itoa(int(launchers.Timeout/time.Second))+";") {
 		t.Fatal("the SSH watchdog must use the discovery timeout")
-	}
-}
-
-func assertNoSecrets(t *testing.T, output []byte) {
-	t.Helper()
-	for _, secret := range launcherstest.Secrets {
-		if strings.Contains(string(output), secret) {
-			t.Fatalf("discovery output leaked %q: %q", secret, output)
-		}
 	}
 }
 
@@ -143,11 +131,7 @@ func TestRunReadsAliasesWithoutLeakingBodies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertNoSecrets(t, output)
-	if got := launchers.Parse(output); !reflect.DeepEqual(got, launcherstest.Expected) {
-		t.Fatalf("launchers = %+v\nwant %+v", got, launcherstest.Expected)
-	}
-	// Only script lines reach descriptor 3; startup-file noise stays behind.
+	// Exactly the launcher lines reach descriptor 3: no body, no startup-file noise.
 	if string(output) != string(launchers.Format(launcherstest.Expected)) {
 		t.Fatalf("output has more than launcher lines: %q", output)
 	}
@@ -283,7 +267,6 @@ func TestSSHCommandUnderEachLoginShell(t *testing.T) {
 			if status != 0 {
 				t.Fatalf("status %d output %q", status, output)
 			}
-			assertNoSecrets(t, output)
 			if string(output) != string(launchers.Format(launcherstest.Expected)) {
 				t.Fatalf("output = %q", output)
 			}
