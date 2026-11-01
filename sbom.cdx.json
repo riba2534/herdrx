@@ -26,7 +26,7 @@
       },
       {
         "name": "herdrx:web/pnpm-lock.yaml:sha256",
-        "value": "4dd8d5468241e2b6a24dff21f8e5fc857b33889cdf7a32808d298563b459de25"
+        "value": "6edf4e9de7726f1f5d4a957c8734c46874358e0ec38a4566a7074213d931790f"
       },
       {
         "name": "herdrx:npm:platform-packages-excluded",
@@ -3421,6 +3421,24 @@
     },
     {
       "type": "library",
+      "name": "diff",
+      "version": "9.0.0",
+      "bom-ref": "pkg:npm/diff@9.0.0",
+      "purl": "pkg:npm/diff@9.0.0",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "dom-accessibility-api",
       "version": "0.5.16",
       "bom-ref": "pkg:npm/dom-accessibility-api@0.5.16",
@@ -3673,6 +3691,24 @@
     },
     {
       "type": "library",
+      "name": "get-east-asian-width",
+      "version": "1.7.0",
+      "bom-ref": "pkg:npm/get-east-asian-width@1.7.0",
+      "purl": "pkg:npm/get-east-asian-width@1.7.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "get-nonce",
       "version": "1.0.1",
       "bom-ref": "pkg:npm/get-nonce@1.0.1",
@@ -3716,6 +3752,24 @@
       "licenses": [
         {
           "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "highlight.js",
+      "version": "11.11.2",
+      "bom-ref": "pkg:npm/highlight.js@11.11.2",
+      "purl": "pkg:npm/highlight.js@11.11.2",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
         }
       ],
       "properties": [
@@ -4037,6 +4091,24 @@
       "version": "3.1.0",
       "bom-ref": "pkg:npm/longest-streak@3.1.0",
       "purl": "pkg:npm/longest-streak@3.1.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "lowlight",
+      "version": "3.3.0",
+      "bom-ref": "pkg:npm/lowlight@3.3.0",
+      "purl": "pkg:npm/lowlight@3.3.0",
       "licenses": [
         {
           "expression": "MIT"
@@ -4393,10 +4465,46 @@
     },
     {
       "type": "library",
+      "name": "mdast-util-to-markdown-cjk-friendly",
+      "version": "1.0.1",
+      "bom-ref": "pkg:npm/mdast-util-to-markdown-cjk-friendly@1.0.1",
+      "purl": "pkg:npm/mdast-util-to-markdown-cjk-friendly@1.0.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "mdast-util-to-markdown",
       "version": "2.1.2",
       "bom-ref": "pkg:npm/mdast-util-to-markdown@2.1.2",
       "purl": "pkg:npm/mdast-util-to-markdown@2.1.2",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "mdast-util-to-markdown",
+      "version": "2.2.1",
+      "bom-ref": "pkg:npm/mdast-util-to-markdown@2.2.1",
+      "purl": "pkg:npm/mdast-util-to-markdown@2.2.1",
       "licenses": [
         {
           "expression": "MIT"
@@ -4433,6 +4541,42 @@
       "version": "2.0.3",
       "bom-ref": "pkg:npm/micromark-core-commonmark@2.0.3",
       "purl": "pkg:npm/micromark-core-commonmark@2.0.3",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "micromark-extension-cjk-friendly-util",
+      "version": "3.0.1",
+      "bom-ref": "pkg:npm/micromark-extension-cjk-friendly-util@3.0.1",
+      "purl": "pkg:npm/micromark-extension-cjk-friendly-util@3.0.1",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "micromark-extension-cjk-friendly",
+      "version": "2.0.2",
+      "bom-ref": "pkg:npm/micromark-extension-cjk-friendly@2.0.2",
+      "purl": "pkg:npm/micromark-extension-cjk-friendly@2.0.2",
       "licenses": [
         {
           "expression": "MIT"
@@ -5405,6 +5549,24 @@
       "version": "3.0.0",
       "bom-ref": "pkg:npm/redent@3.0.0",
       "purl": "pkg:npm/redent@3.0.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "herdrx:inventory",
+          "value": "Installed frontend packages, including build/test tools; platform-specific optional binaries excluded (see THIRD_PARTY_NOTICES.md)"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "remark-cjk-friendly",
+      "version": "2.3.3",
+      "bom-ref": "pkg:npm/remark-cjk-friendly@2.3.3",
+      "purl": "pkg:npm/remark-cjk-friendly@2.3.3",
       "licenses": [
         {
           "expression": "MIT"

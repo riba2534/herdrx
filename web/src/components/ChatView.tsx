@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { ChevronRight, ChevronUp, Clock3, MessageSquare, RefreshCw, SquareTerminal, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type WheelEvent } from 'react'
+import { Clock3, MessageSquare, RefreshCw, SquareTerminal, TriangleAlert } from 'lucide-react'
 import { ChatMediaComposer } from './media/ChatMediaComposer'
 import { VoiceInput } from './media/VoiceInput'
 import { Button, StatusDot } from './ui'
@@ -7,9 +7,14 @@ import { api } from '../lib/api'
 import { readComposerDraft, readComposerSend, writeComposerDraft } from '../lib/composerDrafts'
 import { voiceTransport } from '../lib/voiceClient'
 import type { VoiceInputState } from '../lib/chatMediaTypes'
-import { chatFoldSummary, collectToolCalls, foldChatTurn, formatChatTime, groupChatTurns, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
+import { formatChatTime, paneAgentRejectsReadSource, shortSessionID, StructuredChatSession, type StructuredChatSnapshot } from '../lib/structuredChat'
 import type { ChatReason, ChatSource } from '../lib/structuredChatTypes'
-import { ChatMessage } from './chat/ChatMessage'
+import { buildChatTurns, type TurnActivity } from '../lib/chat/workRuns'
+import { ArrivalTracker } from '../lib/chat/arrivals'
+import { collectUnreadKeys } from '../lib/chat/unreadCount'
+import { insideScrollableAbove, isUpwardWheelIntent, shouldRepinOnWheel } from '../lib/chat/autoFollow'
+import { ChatTurn } from './chat/ChatTurn'
+import { ChatChips } from './chat/ChatChips'
 import { agentStatusLabel, paneDisplayName } from '../lib/labels'
 import type { WorkbenchClient } from '../lib/workbench'
 import type { Pane } from '../types'
@@ -21,6 +26,12 @@ export type ChatViewProps = {
   client: WorkbenchClient
   compact: boolean
   connected: boolean
+  /**
+   * `pane`（默认）：Shell 模式里覆盖在 pane 上的对话视图，宽度跟随 pane。
+   * `console`：Web UI 模式的对话控制台，正文列居中、限宽。
+   */
+  variant?: 'pane' | 'console'
+  /** pane 变体里是「切回终端视图」；console 变体里是「在 Shell 中打开这个 pane」。 */
   onSwitchToTerminal: () => void
   /**
    * 终端视图的整页拖放入口（`inject=true`，会把路径打进终端）。对话视图**不再使用**它：
@@ -32,32 +43,36 @@ export type ChatViewProps = {
 }
 
 /**
- * Chat 视图：同一 pane 内的覆盖层。
+ * Chat 视图。
  *
  * 数据源是 Agent 自己写下的会话日志（经 owner 认证的 HTTP 端点增量读取），**完全不读
  * `pane.read` 终端文本**——屏幕文本没有 role，冒充不了逐轮问答。发送经 `api.panePrompt`
  * 读屏防护后单次输入到当前终端，不新建、不恢复任何 Agent 会话。Herdr 集成上报了该 pane 的会话时直接打开它，否则用户必须先显式选择"此终端的会话记录"，
  * 页面才会显示记录；没有权威数据时只显示可执行的降级说明，绝不编造助手回答。
  *
+ * 对话流按轮次排：用户提问 → 工作组（思考、工具调用、中间文字）→ 最终回复；Agent 正在工作时
+ * 最后一段动作保持展开并计时。新到达的助手正文按词淡入，历史记录不播。
+ *
  * 输入区是 `ChatMediaComposer`（契约 §8.4）：拖拽 / 粘贴 / 选择图片只落占位并走
  * `inject=false` 的 stage-only 上传，正文与图片引用在发送时合成**一次**提交（仅图片也能发）；
  * 语音输入只把**用户自己**的最终转写追加进草稿，没有自动发送，语音模型的回答只在这里
  * 单独展示，绝不写草稿或终端。
  */
-export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal, onFocus }: ChatViewProps) {
+export function ChatView({ hostID, pane, compact, connected, variant = 'pane', onSwitchToTerminal, onFocus }: ChatViewProps) {
   const paneID = pane.pane_id
   const session = useMemo(() => new StructuredChatSession({ hostID, paneID }), [hostID, paneID])
   const snapshot: StructuredChatSnapshot = useSyncExternalStore(session.subscribe, session.getSnapshot)
   const [docVisible, setDocVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden')
   const [atLatest, setAtLatest] = useState(true)
+  const [unread, setUnread] = useState<ReadonlySet<string>>(() => new Set())
   const [voiceReply, setVoiceReply] = useState('')
-  // 用户展开过的轮次（按 turn key）；轮询合并新记录时保持展开状态。
-  const [expandedTurns, setExpandedTurns] = useState<ReadonlySet<string>>(() => new Set())
   const voiceFinalRef = useRef(false)
   const logRef = useRef<HTMLDivElement>(null)
   const followingRef = useRef(true)
   const logSizeRef = useRef({ height: 0, viewport: 0, top: 0 })
   const touchYRef = useRef<number | null>(null)
+  const arrivals = useRef(new ArrivalTracker()).current
+  const unreadSessionRef = useRef<string | undefined>(undefined)
 
   const setFollowing = useCallback((following: boolean) => {
     followingRef.current = following
@@ -102,6 +117,20 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
     updateLatestIndicator(gap)
   }, [setFollowing, syncLatest, updateLatestIndicator])
 
+  // 停止跟随只看用户意图：垂直为主的上滚才算，落在还能上滚的内层滚动区（长输出、diff）里不算；
+  // 已经贴底时继续往下滚恢复跟随（这时不会再有 scroll 事件）。
+  const onLogWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    const log = logRef.current
+    if (!log) return
+    if (isUpwardWheelIntent(event)) {
+      if (followingRef.current && !insideScrollableAbove(event.target, log)) setFollowing(false)
+      return
+    }
+    if (followingRef.current) return
+    const distanceFromBottom = Math.max(0, log.scrollHeight - log.clientHeight - log.scrollTop)
+    if (shouldRepinOnWheel({ deltaX: event.deltaX, deltaY: event.deltaY, distanceFromBottom })) jumpToLatest()
+  }, [jumpToLatest, setFollowing])
+
   /**
    * 图片 stage-only 上传：`inject=false` 只把图片落到远端并返回路径，**绝不**向终端打字。
    * 路径只在用户点发送时由媒体层合成进同一次发送。
@@ -130,9 +159,13 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
   }, [])
 
   const { state, error, candidates } = snapshot
-  const turns = useMemo(() => groupChatTurns(state.messages), [state.messages])
-  const tools = useMemo(() => collectToolCalls(state.messages), [state.messages])
-  const folds = useMemo(() => turns.map(foldChatTurn), [turns])
+  const status = pane.agent_status || 'unknown'
+  // 最新一轮还在进行时不折叠：此时最后一段动作还在跑，最后一条正文也还不是最终回答。
+  // 记录还没读回来时不先画一个「正在工作」的空组。
+  const activity: TurnActivity = (status === 'working' || status === 'blocked') && state.status !== 'loading' ? status : null
+  const turns = useMemo(() => buildChatTurns(state.messages, activity), [state.messages, activity])
+  // 先记下哪些助手记录是加载之后新到的（只有它们播淡入），再渲染；同一份输入重复观察不改变结果。
+  arrivals.observe(state.session, state.status, state.messages, performance.now())
 
   // pane 变成已识别的 claude / codex 之后，服务端会拒绝 `source=dsh`（snapshot 每次现取）。
   // 这里在开始取数**之前**先放弃显式读取源：作废在途请求并清空选择 / 游标 / 候选，不继续发
@@ -160,6 +193,19 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
 
   useLayoutEffect(() => { jumpToLatest() }, [session, state.session, jumpToLatest])
 
+  // 离开底部期间追加到尾部的回复计入「N 条新消息」；回到底部或换会话即清零。
+  useLayoutEffect(() => {
+    if (unreadSessionRef.current !== state.session) {
+      unreadSessionRef.current = state.session
+      setUnread(new Set())
+      return
+    }
+    const keys = collectUnreadKeys({ messages: state.messages, appended: arrivals.appendedIn(state.messages), nearBottom: followingRef.current })
+    if (keys.length) setUnread((current) => new Set([...current, ...keys]))
+  }, [arrivals, state.session, state.messages])
+
+  useEffect(() => { if (atLatest) setUnread((current) => (current.size ? new Set() : current)) }, [atLatest])
+
   // Include pane-status and local UI commits, not only transcript polling.
   useLayoutEffect(() => { syncLatest() })
 
@@ -168,13 +214,16 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
     if (!log || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(syncLatest)
     observer.observe(log)
-    const children = new Set<Element>()
+    const observed = new Set<Element>()
+    // 正文列包着全部轮次，它的尺寸变化（新记录、展开 / 收起一组）就足以保持贴底；
+    // 只在记录区的直接子节点增减时重新登记，不跟着正文里的每一次 DOM 变化跑。
     const observeChildren = () => {
-      for (const child of children) {
-        if (child.parentElement !== log) { observer.unobserve(child); children.delete(child) }
+      const current = new Set<Element>(log.children)
+      for (const child of observed) {
+        if (!current.has(child)) { observer.unobserve(child); observed.delete(child) }
       }
-      for (const child of log.children) {
-        if (!children.has(child)) { observer.observe(child); children.add(child) }
+      for (const child of current) {
+        if (!observed.has(child)) { observer.observe(child); observed.add(child) }
       }
       syncLatest()
     }
@@ -185,16 +234,9 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
   }, [syncLatest])
 
   const name = paneDisplayName(pane)
-  const status = pane.agent_status || 'unknown'
   const bound = state.session !== undefined
   const verified = state.binding === 'verified'
-  // 最新一轮还在进行时不折叠：此时最后一条正文还不是最终回答。
-  const lastTurnLive = status === 'working' || status === 'blocked'
-  const toggleTurn = (key: string) => setExpandedTurns((previous) => {
-    const next = new Set(previous)
-    if (!next.delete(key)) next.add(key)
-    return next
-  })
+  const consoleVariant = variant === 'console'
   // 读取源只来自用户在本 pane 的显式选择，绝不从窗口标题、进程名或候选文件名推断。
   const dshSelected = state.source === 'dsh'
   // 只有"没识别出程序"或"识别出的程序不支持"时才提供 DSH 入口；已知的 claude / codex 不给。
@@ -203,8 +245,11 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
   const dshOffer = (
     <Button className="button-secondary chat-dsh-source" aria-label="读取 DSH 会话记录" data-tooltip="按 DSH 的会话目录（默认 ~/.dsh/sessions）读取记录；只用于读取，不改变终端里运行的程序，也不改变输入目标" onClick={() => session.setReadSource('dsh')}>读取 DSH 会话记录</Button>
   )
+  const terminalLabel = consoleVariant ? '在 Shell 中打开' : '显示终端'
+  const terminalHint = consoleVariant ? '切到 Shell 模式查看这个终端（任务不中断）' : '切换回终端视图（终端不中断）'
+  const fallbackLabel = consoleVariant ? '在 Shell 中打开' : '切回终端'
 
-  return <section className="chat-view" role="region" aria-label="对话视图" onPointerDown={onFocus}>
+  return <section className="chat-view" data-variant={variant} role="region" aria-label="对话视图" onPointerDown={onFocus}>
     <header className="chat-head">
       <span className="chat-head-title">
         <StatusDot status={status}/><strong>{name}</strong><small>{agentStatusLabel(status)}</small>
@@ -216,18 +261,18 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
         {bound && <Button className="tool-button chat-reselect" aria-label="重新选择会话记录" data-tooltip="回到候选列表，重新选择读取哪一个会话记录" onClick={() => session.reselect()}>重选</Button>}
         {dshSelected && <Button className="tool-button chat-source-reset" aria-label="恢复默认读取源" data-tooltip="停止按 DSH 读取，改回按当前 Agent 写下的记录读取（会清空当前选择）" onClick={() => session.clearReadSource()}>默认源</Button>}
         <Button className="tool-button" aria-label="刷新会话记录" data-tooltip="立即重新读取会话记录" onClick={() => session.refresh()}><RefreshCw size={14}/></Button>
-        <Button className="tool-button" aria-label="显示终端" data-tooltip="切换回终端视图（终端不中断）" onClick={onSwitchToTerminal}><SquareTerminal size={14}/></Button>
+        <Button className="tool-button" aria-label={terminalLabel} data-tooltip={terminalHint} onClick={onSwitchToTerminal}><SquareTerminal size={14}/></Button>
       </span>
     </header>
-    <p className="chat-notice" role="note">
+    {(!consoleVariant || !bound) && <p className="chat-notice" role="note">
       <MessageSquare size={13} aria-hidden="true"/>
       <span>这里的回答来自 Agent 写下的会话记录；输入会发送到<strong>当前终端</strong>（不会新建或恢复会话）。{dshSelected ? '当前按你选择的 DSH 读取源读取，只用于查看，不改变终端里运行的程序。' : ''}{verified ? '会话由 Herdr 上报自动匹配，只用于读取。' : bound ? '所选会话只用于读取，输入不会写入它。' : '请选择此终端的会话记录后再查看逐轮对话。'}</span>
-    </p>
+    </p>}
 
     <div className="chat-log-wrap">
       <div className="chat-log" ref={logRef} tabIndex={0} role="log" aria-label="对话记录" onScroll={onLogScroll}
         onPointerDownCapture={(event) => { if (event.target === event.currentTarget || event.button === 1) setFollowing(false) }}
-        onWheelCapture={(event) => { if (event.deltaY < 0) setFollowing(false) }}
+        onWheelCapture={onLogWheel}
         onTouchStart={(event) => { touchYRef.current = event.touches[0]?.clientY ?? null }}
         onTouchMove={(event) => {
           const y = event.touches[0]?.clientY
@@ -236,65 +281,56 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
         }}
         onKeyDown={(event) => { if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) setFollowing(false) }}
       >
-        {state.status === 'loading' && !bound && !candidates.length && <div className="chat-state" role="status"><Clock3 size={22} aria-hidden="true"/><strong>正在读取会话记录</strong><span>从该终端所在主机读取 Agent 自己写下的会话记录。</span></div>}
-        {state.status === 'unavailable' && <div className="chat-state chat-state-error" role="alert" aria-label="结构化记录不可用">
-          <TriangleAlert size={22} aria-hidden="true"/><strong>暂不支持结构化会话记录</strong>
-          <span>{reasonText(state.reason, pane.agent, state.source)}</span>
-          <span className="chat-state-actions">
-            {canOfferDsh && dshOffer}
-            <Button className="button-secondary" onClick={onSwitchToTerminal}>切回终端</Button>
-          </span>
-        </div>}
-        {error && <div className="chat-state chat-state-error" role="alert" aria-label="读取会话记录失败">
-          <TriangleAlert size={22} aria-hidden="true"/><strong>读取会话记录失败</strong><span>{error}</span>
-          <span className="chat-state-actions"><Button className="button-secondary" onClick={() => session.refresh()}>重试</Button><Button className="button-secondary" onClick={onSwitchToTerminal}>切回终端</Button></span>
-        </div>}
-        {!error && state.reason === 'session_unavailable' && <div className="chat-state" role="alert">
-          <TriangleAlert size={22} aria-hidden="true"/><strong>该会话记录已失效</strong><span>{reasonText('session_unavailable', pane.agent)}</span>
-        </div>}
-        {!error && !bound && state.status !== 'unavailable' && state.status !== 'loading' && <>
-          <section className="chat-candidates" aria-label="会话记录候选">
-            <h3>{dshSelected ? '选择 DSH 会话记录' : '选择此终端的会话记录'}</h3>
-            <p className="chat-candidates-hint">{dshSelected
-              ? '列表只包含 DSH 会话目录（默认 ~/.dsh/sessions）下、header 里 cwd 与该终端一致的会话文件。'
-              : '列表只包含该终端目录下由这个 Agent 写下的会话文件，不含其它会话内容。'}</p>
-            {candidates.length
-              ? <ul className="chat-candidate-list">
-                {candidates.map((candidate) => <li key={candidate.id}>
-                  <button type="button" className="chat-candidate" onClick={() => session.select(candidate.id)}>
-                    <span className="chat-candidate-agent">{candidate.agent}</span>
-                    <code className="chat-candidate-id">{shortSessionID(candidate.session_id)}</code>
-                    <small className="chat-candidate-time">{formatChatTime(candidate.updated_at) || '时间未知'}</small>
-                  </button>
-                </li>)}
-              </ul>
-              : <p className="chat-candidates-empty">{reasonText(state.reason || 'no_session_candidates', pane.agent, state.source)}</p>}
-            {/* 没有候选也可能只是"这个程序我们没识别出来"：给一个显式入口，但不自动读取任何东西。 */}
-            {canOfferDsh && <div className="chat-state-actions">{dshOffer}</div>}
-          </section>
-        </>}
-        {!error && bound && <>
-          {state.previousCursor && <div className="chat-earlier"><Button className="button-secondary chat-load-earlier" onClick={() => session.loadEarlier()}>加载更早的记录</Button></div>}
-          {state.skipped > 0 && <p className="chat-skipped" role="note">有 {state.skipped} 条记录格式无法识别，可能未完整显示。</p>}
-          {state.truncated > 0 && <p className="chat-truncated" role="note">这一行记录过大，部分内容未显示，可在终端查看。</p>}
-          {/* 受限读取超限：说清楚"读不下"，而不是让下面的空态冒充"这个会话没有记录"。 */}
-          {state.reason === 'read_limit_exceeded' && <p className="chat-limit" role="alert">{reasonText('read_limit_exceeded', pane.agent, state.source)}</p>}
-          {pane.agent && status === 'working' && <p className="chat-waiting" role="status">Agent 正在工作（{agentStatusLabel(status)}），本轮写盘后会自动出现在下方。</p>}
-          {turns.map((turn, index) => {
-            const fold = lastTurnLive && index === turns.length - 1 ? null : folds[index]
-            const open = !fold || expandedTurns.has(turn.key)
-            return <article className="chat-turn" key={turn.key}>
-              {turn.user && <div className="chat-turn-user"><ChatMessage record={turn.user} tools={tools}/></div>}
-              {fold && <button type="button" className="chat-fold" aria-expanded={open} onClick={() => toggleTurn(turn.key)}>
-                <ChevronRight size={12} aria-hidden="true"/>{chatFoldSummary(fold)}
-              </button>}
-              {(open ? turn.responses : fold.visible).map((record) => <ChatMessage key={record.id} record={record} tools={tools}/>)}
-            </article>
-          })}
-          {state.status === 'empty' && !state.previousCursor && state.reason !== 'read_limit_exceeded' && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
-        </>}
+        <div className="chat-column">
+          {state.status === 'loading' && !bound && !candidates.length && <div className="chat-state" role="status"><Clock3 size={22} aria-hidden="true"/><strong>正在读取会话记录</strong><span>从该终端所在主机读取 Agent 自己写下的会话记录。</span></div>}
+          {state.status === 'unavailable' && <div className="chat-state chat-state-error" role="alert" aria-label="结构化记录不可用">
+            <TriangleAlert size={22} aria-hidden="true"/><strong>暂不支持结构化会话记录</strong>
+            <span>{reasonText(state.reason, pane.agent, state.source)}</span>
+            <span className="chat-state-actions">
+              {canOfferDsh && dshOffer}
+              <Button className="button-secondary" onClick={onSwitchToTerminal}>{fallbackLabel}</Button>
+            </span>
+          </div>}
+          {error && <div className="chat-state chat-state-error" role="alert" aria-label="读取会话记录失败">
+            <TriangleAlert size={22} aria-hidden="true"/><strong>读取会话记录失败</strong><span>{error}</span>
+            <span className="chat-state-actions"><Button className="button-secondary" onClick={() => session.refresh()}>重试</Button><Button className="button-secondary" onClick={onSwitchToTerminal}>{fallbackLabel}</Button></span>
+          </div>}
+          {!error && state.reason === 'session_unavailable' && <div className="chat-state" role="alert">
+            <TriangleAlert size={22} aria-hidden="true"/><strong>该会话记录已失效</strong><span>{reasonText('session_unavailable', pane.agent)}</span>
+          </div>}
+          {!error && !bound && state.status !== 'unavailable' && state.status !== 'loading' && <>
+            <section className="chat-candidates" aria-label="会话记录候选">
+              <h3>{dshSelected ? '选择 DSH 会话记录' : '选择此终端的会话记录'}</h3>
+              <p className="chat-candidates-hint">{dshSelected
+                ? '列表只包含 DSH 会话目录（默认 ~/.dsh/sessions）下、header 里 cwd 与该终端一致的会话文件。'
+                : '列表只包含该终端目录下由这个 Agent 写下的会话文件，不含其它会话内容。'}</p>
+              {candidates.length
+                ? <ul className="chat-candidate-list">
+                  {candidates.map((candidate) => <li key={candidate.id}>
+                    <button type="button" className="chat-candidate" onClick={() => session.select(candidate.id)}>
+                      <span className="chat-candidate-agent">{candidate.agent}</span>
+                      <code className="chat-candidate-id">{shortSessionID(candidate.session_id)}</code>
+                      <small className="chat-candidate-time">{formatChatTime(candidate.updated_at) || '时间未知'}</small>
+                    </button>
+                  </li>)}
+                </ul>
+                : <p className="chat-candidates-empty">{reasonText(state.reason || 'no_session_candidates', pane.agent, state.source)}</p>}
+              {/* 没有候选也可能只是"这个程序我们没识别出来"：给一个显式入口，但不自动读取任何东西。 */}
+              {canOfferDsh && <div className="chat-state-actions">{dshOffer}</div>}
+            </section>
+          </>}
+          {!error && bound && <>
+            {state.previousCursor && <div className="chat-earlier"><Button className="button-secondary chat-load-earlier" onClick={() => session.loadEarlier()}>加载更早的记录</Button></div>}
+            {state.skipped > 0 && <p className="chat-skipped" role="note">有 {state.skipped} 条记录格式无法识别，可能未完整显示。</p>}
+            {state.truncated > 0 && <p className="chat-truncated" role="note">这一行记录过大，部分内容未显示，可在终端查看。</p>}
+            {/* 受限读取超限：说清楚"读不下"，而不是让下面的空态冒充"这个会话没有记录"。 */}
+            {state.reason === 'read_limit_exceeded' && <p className="chat-limit" role="alert">{reasonText('read_limit_exceeded', pane.agent, state.source)}</p>}
+            {turns.map((turn) => <ChatTurn key={turn.key} turn={turn} fade={arrivals.arrivedAt}/>)}
+            {state.status === 'empty' && !state.previousCursor && state.reason !== 'read_limit_exceeded' && !activity && <div className="chat-state" role="status"><MessageSquare size={22} aria-hidden="true"/><strong>这个会话还没有记录</strong><span>Agent 写盘后会自动出现；也可以直接在下方输入。</span></div>}
+          </>}
+        </div>
       </div>
-      {!atLatest && bound && <button type="button" className="chat-jump" onClick={jumpToLatest}><ChevronUp size={12} aria-hidden="true"/>跳到最新</button>}
+      <ChatChips visible={!atLatest && bound} unread={unread.size} onJump={jumpToLatest}/>
     </div>
 
     {!connected && <p className="chat-disconnected" role="alert">主机未连接，已暂停读取会话记录，也不能发送；重新连接后会自动继续。</p>}
@@ -304,32 +340,34 @@ export function ChatView({ hostID, pane, compact, connected, onSwitchToTerminal,
       <Button className="button-secondary" onClick={() => setVoiceReply('')}>关闭</Button>
     </div>}
     <div className="chat-compose">
-      <ChatMediaComposer
-        variant="chat"
-        hostID={hostID}
-        paneID={paneID}
-        visible
-        compact={compact}
-        sendDisabled={!connected}
-        placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
-        onDirectInput={() => {}}
-        onLocalInput={() => {}}
-        stageImage={stageImage}
-        readSend={readComposerSend}
-        voice={
-          <VoiceInput
-            hostID={hostID}
-            paneID={paneID}
-            visible
-            compact={compact}
-            transport={voiceTransport}
-            writeDraft={writeComposerDraft}
-            readDraft={readComposerDraft}
-            onAssistantText={onVoiceAssistantText}
-            onStatus={onVoiceStatus}
-          />
-        }
-      />
+      <div className="chat-compose-column">
+        <ChatMediaComposer
+          variant="chat"
+          hostID={hostID}
+          paneID={paneID}
+          visible
+          compact={compact}
+          sendDisabled={!connected}
+          placeholder={!connected ? '主机未连接，暂不能发送' : '输入消息，Enter 发送到当前终端'}
+          onDirectInput={() => {}}
+          onLocalInput={() => {}}
+          stageImage={stageImage}
+          readSend={readComposerSend}
+          voice={
+            <VoiceInput
+              hostID={hostID}
+              paneID={paneID}
+              visible
+              compact={compact}
+              transport={voiceTransport}
+              writeDraft={writeComposerDraft}
+              readDraft={readComposerDraft}
+              onAssistantText={onVoiceAssistantText}
+              onStatus={onVoiceStatus}
+            />
+          }
+        />
+      </div>
     </div>
   </section>
 }

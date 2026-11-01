@@ -89,6 +89,8 @@ async function fixture(browser, options, { mode = 'ok', sendDelayMs = 300, fixtu
   transcriptLog.length = 0
   sentTexts.length = 0
   const context = await browser.newContext(options)
+  // 默认模式是 Web UI；本脚本验收的是 Shell 模式里 pane 上的对话视图。
+  await context.addInitScript(() => localStorage.setItem('herdrx.workbench-mode.v1', 'shell'))
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base })
   const page = await context.newPage()
   page.setDefaultTimeout(10_000)
@@ -268,20 +270,22 @@ try {
         await expect(chat.locator('.chat-turn')).toHaveCount(1)
         await expect(chat.locator('.chat-message-user .chat-bubble')).toHaveText('把 header 高度改成 44')
         await expect(chat.getByText('已改成 44 并补了测试。')).toBeVisible()
-        // 已结束的一轮把工具过程折叠成一行；展开后显示真实工具名和 call id。
-        await chat.getByRole('button', { name: /^工具 1 · 用时/ }).click()
-        const toolCall = chat.locator('.chat-tool-call').first()
-        await expect(toolCall.locator('summary')).toContainText('Edit')
-        await expect(toolCall.locator('summary')).toContainText('call-1')
-        await expect(toolCall.locator('.chat-tool-pre')).toBeHidden()
-        await toolCall.locator('summary').click()
-        await expect(toolCall.locator('.chat-tool-pre')).toContainText('height: 44px')
-        const toolResult = chat.locator('.chat-tool-result').first()
-        await expect(toolResult.locator('summary')).toContainText('Edit')
-        await toolResult.locator('summary').click()
-        await expect(toolResult.locator('.chat-tool-pre')).toContainText('updated')
-        // 助手正文按 Markdown 渲染，代码块可复制。
-        await expect(chat.locator('.chat-assistant-text code').first()).toContainText('make web-build')
+        // 已结束的一轮把中间过程（文字 + 工具）收成一行「已工作 3 秒 · 编辑 1 个文件」，最终回复留在外面。
+        const fold = chat.getByRole('button', { name: '已工作 3 秒 · 编辑 1 个文件' })
+        await expect(fold).toHaveAttribute('aria-expanded', 'false')
+        await expect(chat.locator('.chat-code')).toHaveCount(0)
+        await fold.click()
+        // 展开后工具行是「编辑 + 文件 chip + 增删行数」，点开就地看 diff。
+        const edit = chat.locator('.chat-action[data-tool="Edit"]')
+        await expect(edit.locator('.chat-file-chip')).toHaveText('styles.css')
+        await expect(edit.locator('.chat-diff-stat')).toHaveText('+1-1')
+        await expect(edit.locator('.chat-diff')).toHaveCount(0)
+        await edit.getByRole('button', { name: /编辑 styles.css/ }).click()
+        await expect(edit.locator('.chat-diff-row[data-type="add"]')).toContainText('height: 44px')
+        await expect(edit.locator('.chat-diff-row[data-type="del"]')).toContainText('height: 40px')
+        // 中间文字按 Markdown 渲染，代码块带语言标签、可复制。
+        await expect(chat.locator('.chat-work-prose .chat-code-lang')).toHaveText('sh')
+        await expect(chat.locator('.chat-work-prose .chat-code-pre')).toContainText('make web-build')
         await chat.locator('.chat-code .chat-copy').first().click()
         await expect.poll(() => desk.page.evaluate(() => navigator.clipboard.readText())).toContain('make web-build')
         await expect(chat.getByRole('button', { name: '重新选择会话记录' })).toBeVisible()
@@ -323,7 +327,7 @@ try {
           const chat = page.getByRole('region', { name: '对话视图' })
           await chat.getByRole('button', { name: /aaaa1111/ }).click()
           const log = chat.getByRole('log')
-          const jump = chat.getByRole('button', { name: '跳到最新' })
+          const jump = chat.getByRole('button', { name: '跳到底部' })
           const gap = () => log.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)
           await expect.poll(gap).toBeLessThan(2)
           assert.equal(await log.evaluate((node) => getComputedStyle(node).overflowAnchor), 'none', 'native anchoring competes with tail following')

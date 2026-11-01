@@ -134,6 +134,8 @@ async function fixture(browser, options, { mode = 'ok', voiceOn = true, sendDela
   voiceLog.sessions = 0
 
   const context = await browser.newContext(options)
+  // 默认模式是 Web UI；本脚本验收的是 Shell 模式里 pane 上的对话视图。
+  await context.addInitScript(() => localStorage.setItem('herdrx.workbench-mode.v1', 'shell'))
   await context.grantPermissions(['microphone', 'clipboard-read', 'clipboard-write'], { origin: base }).catch(() => {})
   const page = await context.newPage()
   page.setDefaultTimeout(10_000)

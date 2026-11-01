@@ -5,12 +5,10 @@ import {
   codeLanguage,
   copyChatText,
   elisionNotice,
-  recordCopyText,
   recordText,
   safeLinkHref,
   stripInvisible,
   toolInputText,
-  toolOutputText,
   truncateText,
 } from './structuredChatMarkdown'
 import type { ChatRecord } from './structuredChatTypes'
@@ -72,19 +70,6 @@ describe('record text helpers', () => {
   it('joins only the text blocks for the visible body', () => {
     expect(recordText(record)).toBe('第一段\n\n第二段')
   })
-
-  it('copies body plus tool summaries with real identifiers', () => {
-    const text = recordCopyText(record)
-    expect(text).toContain('第一段')
-    expect(text).toContain('[工具调用] Bash (c1)')
-    expect(text).toContain('ls -la')
-    expect(text).toContain('[工具结果] (c1)')
-  })
-
-  it('marks tool errors in the copied text', () => {
-    const text = recordCopyText({ id: 'b', role: 'tool', blocks: [{ type: 'tool-result', call_id: 'c2', output: 'boom', is_error: true }] })
-    expect(text).toContain('[工具结果·错误] (c2)')
-  })
 })
 
 describe('tool previews', () => {
@@ -99,7 +84,7 @@ describe('tool previews', () => {
   it('bounds both input and output previews', () => {
     const long = 'x'.repeat(20)
     expect(toolInputText({ long: 'y'.repeat(50) }, 10)).toContain('已省略')
-    expect(toolOutputText(long, 5)).toContain('已省略 15 个字符')
+    expect(truncateText(long, 5)).toContain('已省略 15 个字符')
     expect(truncateText('short', 10)).toBe('short')
   })
 })
