@@ -101,6 +101,21 @@ describe('ConsoleStatusBar', () => {
     expect(screen.getByText('Herding…')).not.toHaveAttribute('data-fading')
   })
 
+  it('shows the live screen only while working', () => {
+    vi.useFakeTimers()
+    const view = render(<ConsoleStatusBar live={live({ spinner: null })} working={false} onInterrupt={noop} onCycleMode={noop}/>)
+    expect(screen.queryByRole('button', { name: /实时画面/ })).toBeNull()
+    expect(view.container.querySelector('.console-status')).toHaveAttribute('data-state', 'idle')
+    view.rerender(<ConsoleStatusBar live={live()} working onInterrupt={noop} onCycleMode={noop}/>)
+    expect(screen.getByRole('button', { name: /实时画面/ })).toBeInTheDocument()
+    // 一结束就收起，不等淡出。
+    view.rerender(<ConsoleStatusBar live={live({ spinner: null })} working={false} onInterrupt={noop} onCycleMode={noop}/>)
+    expect(screen.queryByRole('button', { name: /实时画面/ })).toBeNull()
+    act(() => { vi.advanceTimersByTime(STATUS_LINGER_MS) })
+    act(() => { vi.advanceTimersByTime(STATUS_FADE_MS) })
+    expect(view.container.querySelector('.console-status')).toHaveAttribute('data-state', 'idle')
+  })
+
   it('folds the live screen into one line and expands it on this device only', () => {
     const view = render(<ConsoleStatusBar live={live()} working onInterrupt={noop} onCycleMode={noop}/>)
     const toggle = screen.getByRole('button', { name: /实时画面/ })

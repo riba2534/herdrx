@@ -65,7 +65,8 @@ export type ConsoleStatusBarProps = {
 /**
  * 运行状态栏：工作中显示 spinner 动词、计时和 token（文案至少停留 1 秒再淡出淡入），
  * 结束后保持 1 秒再淡出；右侧是模式胶囊（点击循环到下一个模式）和「中断」。
- * 上方是「实时画面」折叠条。数字全部来自读屏，不在本地计时。
+ * 工作中上方还有「实时画面」折叠条。数字全部来自读屏，不在本地计时。空闲时根节点 `data-state="idle"`，
+ * 只剩模式胶囊，调用方可以把它停到输入区的工具行里。
  */
 export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: ConsoleStatusBarProps) {
   const active = working || Boolean(live.spinner)
@@ -93,7 +94,7 @@ export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: Co
   const mode = live.mode
 
   return <div className="console-status" data-state={active ? 'working' : tail || 'idle'}>
-    {(live.preview.length > 0 || live.error) && <ConsoleLivePreview preview={live.preview} error={live.error}/>}
+    {active && (live.preview.length > 0 || live.error) && <ConsoleLivePreview preview={live.preview} error={live.error}/>}
     <div className="console-status-row">
       <div className="console-status-run" aria-hidden={!showRun || undefined}>
         {showRun && (active

@@ -260,6 +260,12 @@ button.chat-work-head:hover { color: var(--console-text); }
 /* 运行状态栏与交互卡片：在输入框上方；卡片展开时输入框不渲染，卡片自己留出底边距。 */
 .chat-console-controls { display: grid; gap: var(--console-space-2); min-width: 0; padding: var(--console-space-2) 10px 0; }
 .chat-console-controls:last-child { padding-bottom: var(--console-space-2); }
+/* 空闲时状态栏只剩模式胶囊：停到下面输入区工具行（「图片」那一行）的右端，不单独占一行。 */
+.chat-console-controls[data-dock] { position: relative; }
+.chat-console-controls[data-dock] > .console-status[data-state="idle"] { position: absolute; top: calc(100% + 6px); right: 8px; z-index: 1; min-height: 44px; align-content: center; }
+.chat-console-controls[data-dock]:has(> .console-status[data-state="idle"]):not(:has(> .console-interaction)) { padding-top: 0; }
+.chat-console-controls[data-dock]:has(> .console-status[data-state="idle"] .console-mode) + .chat-media-composer .chat-media-toolbar { flex-wrap: nowrap; padding-right: 112px; }
+.chat-console-controls[data-dock]:has(> .console-status[data-state="idle"] .console-mode) + .chat-media-composer .chat-media-pick { flex: 0 0 auto; }
 
 /* 手机：正文 16px；Web UI 正文列两侧各留 20px。 */
 @container chat-view (max-width: 700px) {

@@ -29,6 +29,8 @@ const MODE_SEARCH_LINES = 6
 // 字形在 · ✻ ✢ ✶ ✳ * 之间轮换；`●` 是消息行（`● Running 1 shell command…`），不算。
 // 动词后必须紧跟省略号：完成行 `✻ Cooked for 18s · done 3:11` 没有省略号，不算进行中。
 const SPINNER = /^([·✻✢✶✳✽✺*])\s+([^\s(…][^(…]{0,47}?)(?:…|\.\.\.)\s*(?:\((.*)\))?$/u
+// 一轮结束后的完成行：`✻ Cooked for 18s · done 3:11`、`✻ Worked for 1m 3s`。
+const FINISHED = /^[·✻✢✶✳✽✺*]\s+\S+ for (?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/u
 const DURATION = /^(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?$/
 const TOKENS = /^(?:[↓↑]\s*)?(\d+(?:[.,]\d+)?)\s*([kKmM])?\s*tokens?$/
 const MODE = /(?:⏵⏵|⏵|⏸)\s*(bypass permissions|auto mode|manual mode|accept edits|plan mode)\s+on\b/i
@@ -110,7 +112,7 @@ export function parseMode(lines: readonly string[]): ConsoleMode | null {
 }
 
 /**
- * `end` 之前最近的若干行正文：去掉空行、横线和右对齐提示，按共同缩进左移。
+ * `end` 之前最近的若干行正文：去掉空行、横线、右对齐提示、spinner 与完成行，按共同缩进左移。
  * 右对齐提示（`◈ max · /effort`、计划视图的 `↓`）贴着屏幕右边，前面的空白比内容还长。
  */
 export function screenPreview(lines: readonly string[], end = lines.length, max = PREVIEW_LINES): string[] {
@@ -120,6 +122,7 @@ export function screenPreview(lines: readonly string[], end = lines.length, max 
     const line = lines[index]
     const indent = line.length - line.trimStart().length
     if (!line.trim() || RULE.test(line) || (indent * 2 > line.length && line.length >= width - 2)) continue
+    if (FINISHED.test(line.trim()) || parseSpinner(line)) continue
     kept.push(line)
   }
   kept.reverse()
