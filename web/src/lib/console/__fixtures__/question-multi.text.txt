@@ -1,0 +1,40 @@
+     assert not hasattr(calc, 'add')"
+
+     验证 plus 可用且 add 已不存在。
+
+  Thought for 1s
+
+● Update(calc.py)
+  ⎿  Added 1 line, removed 1 line
+      1 -def add(a, b):
+      1 +def plus(a, b):
+      2      return a + b
+
+  Ran 1 shell command
+
+● 完成。
+
+  - calc.py:1 已从 def add(a, b) 改为 def plus(a, b)。
+  - 验证通过：calc.plus(2, 3) == 5，且 calc 模块中已不存在 add（VERIFY OK）。
+
+✻ Cooked for 18s · done 3:11
+
+❯ 请调用 AskUserQuestion 工具问我两个问题：1）测试框架用 pytest 还是
+  unittest；2）要不要加类型注解（要/不要）。回答之前不要做其他事。
+
+  Thought for 1s
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+←  ☐ 测试框架  ☐ 类型注解  ✔ Submit  →
+
+测试框架用 pytest 还是 unittest？
+
+❯ 1. pytest
+     使用 pytest 作为测试框架
+  2. unittest
+     使用 unittest 作为测试框架
+  3. Type something.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+────────────────────────────────────────────────────────────────────────────────────────────────── rename-add-to-plus ─

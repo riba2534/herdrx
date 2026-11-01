@@ -1,0 +1,109 @@
+/* Web UI 模式控制台的共用控件：只读 --console-* token（见 console-theme.css）。 */
+
+.console-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--console-space-1);
+  min-height: 32px;
+  padding: 0 var(--console-space-3);
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-sm);
+  background: transparent;
+  color: var(--console-text);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color var(--console-motion-fast) var(--console-ease-move), border-color var(--console-motion-fast) var(--console-ease-move);
+}
+
+.console-button:hover:not(:disabled) { background: var(--console-raised); }
+.console-button-primary { border-color: var(--console-text); background: var(--console-text); color: var(--console-surface); }
+.console-button-primary:hover:not(:disabled) { background: var(--console-text-2); border-color: var(--console-text-2); }
+.console-button:disabled { opacity: .5; }
+.console-button[aria-busy='true'] { opacity: 1; }
+
+.console-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--console-line);
+  border-radius: var(--console-radius-sm);
+  background: transparent;
+  color: var(--console-text-2);
+}
+
+.console-icon-button:hover { background: var(--console-raised); color: var(--console-text); }
+
+.console-link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--console-space-1);
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--console-text-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.console-link-button:hover:not(:disabled) { color: var(--console-text); }
+
+.console-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--console-space-1);
+  flex: none;
+  max-width: 100%;
+  padding: 2px var(--console-space-2);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-raised);
+  color: var(--console-text-2);
+  font-size: var(--console-font-meta);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.console-chip-info { background: var(--console-info-bg); color: var(--console-info); }
+.console-chip-warning { background: var(--console-warning-bg); color: var(--console-warning); }
+
+.console-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--console-space-1);
+  border-radius: var(--console-radius-sm);
+  background: var(--console-raised);
+  color: var(--console-text-2);
+  font-size: var(--console-font-meta);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.console-spin { animation: console-spin calc(var(--console-motion-slow) * 4) linear infinite; }
+
+@keyframes console-spin { to { transform: rotate(360deg); } }
+
+:is(.console-button, .console-icon-button, .console-link-button, .console-option, .console-card-bar, .console-mode, .console-live-toggle):focus-visible {
+  outline: 2px solid var(--console-info);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-spin { animation: none; }
+}
+
+@media (max-width: 767px), (pointer: coarse) {
+  .console-button { min-height: var(--console-tap); padding: 0 var(--console-space-4); font-size: 14px; }
+  .console-icon-button { width: var(--console-tap); height: var(--console-tap); }
+  .console-link-button { min-height: var(--console-tap); font-size: 14px; }
+}

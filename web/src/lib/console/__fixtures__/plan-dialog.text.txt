@@ -1,0 +1,40 @@
+
+  Thought for 1s
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Ready to code?
+
+   Here is Claude's plan:
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   将 calc.py 中的 add 函数改名为 plus
+
+   Context
+
+   用户要求把 calc.py 中的 add 函数改名为 plus。当前仓库（/tmp/herdrx-spike/proj）中仅有 calc.py
+   一个源文件，内容为：
+
+   def add(a, b):
+       return a + b
+
+   已确认仓库内无其他文件（无测试、无导入）引用 add，因此这是单点改名，无连带修改。
+
+   改动
+
+   修改 /tmp/herdrx-spike/proj/calc.py:1：
+
+   def plus(a, b):
+       return a + b
+
+   仅改函数定义名，函数体与参数不变。
+
+   验证                                                                                                              ↓
+  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+   ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback
+
+   ctrl+g to edit in Vim · ~/.claude/plans/calc-py-add-jolly-hamming.md

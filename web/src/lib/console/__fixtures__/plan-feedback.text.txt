@@ -1,0 +1,40 @@
+
+  ⎿  /plan to preview
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+
+  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Ready to code?
+
+   Here is Claude's plan:
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   给 calc.py 添加 sub 函数
+
+   Context
+
+   calc.py 目前只有 plus 函数（此前由 add 改名而来）。用户要求新增 sub
+   函数。结合此前收集的偏好：新代码要加类型注解；测试框架用 pytest。输出格式 toml 与纯函数新增无关，本步骤不涉及。
+
+   改动
+
+   1. /tmp/herdrx-spike/proj/calc.py 末尾新增：
+
+   def sub(a: int, b: int) -> int:
+       return a - b
+
+   plus 保持不变。
+
+   2. 新增 /tmp/herdrx-spike/proj/test_calc.py（pytest 风格）：
+
+   from calc import plus, sub
+
+                                                                                                                     ↓
+  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+     1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session
+     2. Yes, manually approve edits
+   ❯ 3. Tell Claude what to change
+        shift+tab to approve with this feedback
+
+   ctrl+g to edit in Vim · ~/.claude/plans/calc-py-add-jolly-hamming.md
+────────────────────────────────────────────────────────────────────────────────────────────────── rename-add-to-plus ─
