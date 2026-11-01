@@ -53,8 +53,10 @@ describe('parseClaudeScreen on recorded screens', () => {
       expect(screen.spinner).toBeNull()
       expect(screen.mode).toBe('bypass')
     }
+    // 上一轮的完成行不进画面。
     const done = parseClaudeScreen(ansi(idle))
-    expect(done.preview.at(-1)).toBe('✻ Cooked for 18s · done 3:11')
+    expect(done.preview.at(-1)).toBe('  - 验证通过：calc.plus(2, 3) == 5，且 calc 模块中已不存在 add（VERIFY OK）。')
+    expect(done.preview.join('\n')).not.toContain('Cooked')
     expect(done.preview.join('\n')).not.toContain('/effort')
     expect(parseClaudeScreen(ansi(working5)).preview.at(-1)).toBe('  -')
   })
@@ -131,6 +133,11 @@ describe('parseMode', () => {
 })
 
 describe('screenPreview', () => {
+  it('drops finished lines and spinner lines', () => {
+    expect(screenPreview(['a', '✻ Cooked for 18s · done 3:11', '✶ Worked for 1m 3s', '· Herding… (2s)', 'b'])).toEqual(['a', 'b'])
+    expect(screenPreview(['✻ Cooked dinner for 2 people'])).toEqual(['✻ Cooked dinner for 2 people'])
+  })
+
   it('limits the line count and drops rules and right-aligned hints', () => {
     const lines = ['    a', '', '    b', '──────────', `${' '.repeat(60)}↓`, '      c', `${' '.repeat(30)}deep code`]
     expect(screenPreview(lines)).toEqual(['a', 'b', '  c', `${' '.repeat(26)}deep code`])
