@@ -167,11 +167,29 @@ describe('InteractionCard', () => {
     expect(container.querySelector('.chat-ask-options')).toBeNull()
   })
 
-  it('lists the options read-only while waiting', () => {
-    const { container } = render(<InteractionCard entry={tool('AskUserQuestion', { questions: [{ question: '选哪个？', options: [{ label: 'json', description: '通用' }, { label: 'yaml' }] }] })}/>)
-    expect(screen.getByText('等待回答')).toBeVisible()
-    expect(Array.from(container.querySelectorAll('.chat-ask-options li'), (item) => item.textContent)).toEqual(['json通用', 'yaml'])
-    expect(container.querySelector('button')).toBeNull()
+  it('collapses a waiting question into one line and opens the options read-only', () => {
+    const entry = tool('AskUserQuestion', { questions: [{ question: '选哪个？', options: [{ label: 'json', description: '通用' }, { label: 'yaml' }] }, { question: '要注解吗？', options: [{ label: '要' }] }] })
+    const { container } = render(<InteractionCard entry={entry}/>)
+    // 作答入口在输入框位置的交互卡片里：流里只占一行，不重复展开题目和选项。
+    const head = screen.getByRole('button', { name: '等待你回答 · 2 个问题' })
+    expect(head).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('选哪个？')).toBeNull()
+    expect(container.querySelector('.chat-ask-options')).toBeNull()
+    fireEvent.click(head)
+    expect(screen.getByText('选哪个？')).toBeVisible()
+    expect(Array.from(container.querySelectorAll('.chat-ask-options'), (list) => list.textContent)).toEqual(['json通用yaml', '要'])
+    expect(container.querySelectorAll('button')).toHaveLength(1)
+  })
+
+  it('collapses a plan awaiting approval and opens the plan read-only', () => {
+    const { container } = render(<InteractionCard entry={tool('ExitPlanMode', { plan: '# 改名计划\n\n- 改 calc.py' })}/>)
+    const head = screen.getByRole('button', { name: '计划等待批准' })
+    expect(container.querySelector('h1')).toBeNull()
+    expect(screen.queryByText('已批准')).toBeNull()
+    fireEvent.click(head)
+    expect(head).toHaveAttribute('aria-expanded', 'true')
+    expect(container.querySelector('h1')).toHaveTextContent('改名计划')
+    expect(container.querySelectorAll('button')).toHaveLength(1)
   })
 
   it('folds the plan body and reports approval', () => {
