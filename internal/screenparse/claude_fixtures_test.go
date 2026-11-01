@@ -146,9 +146,34 @@ func TestClaudeDialogFreeTextFollowsTheCursor(t *testing.T) {
 	if offFeedback.Kind != KindPlan || offFeedback.FreeText || offFeedback.Selected() != 1 {
 		t.Fatalf("cursor off the plan feedback: %+v", offFeedback)
 	}
-	planCursor := ParseDialog(fixture(t, "plan-dialog"))
-	if feedback := ParseDialog(fixture(t, "plan-feedback")); feedback.Fingerprint == "" || feedback.Fingerprint != planCursor.Fingerprint {
-		t.Fatal("moving the cursor in the plan dialog changed the fingerprint")
+	if planCursor := moved("plan-feedback", "❯ 3. Tell Claude", "  1. Yes, and switch"); planCursor.Selected() != 0 || planCursor.Fingerprint != ParseDialog(fixture(t, "plan-feedback")).Fingerprint {
+		t.Fatalf("moving the cursor in the plan dialog changed the fingerprint: %+v", planCursor)
+	}
+}
+
+// 计划正文在问句上方的横线之外：指纹必须覆盖它，否则两份计划的问句与选项相同，过时的卡片会
+// 批准另一份计划。滚动指示 ↓ 出没不改变指纹。
+func TestPlanFingerprintCoversThePlanBody(t *testing.T) {
+	replace := func(text, old, new string) string {
+		t.Helper()
+		if strings.Count(text, old) != 1 {
+			t.Fatalf("%q is not on the screen exactly once", old)
+		}
+		return strings.Replace(text, old, new, 1)
+	}
+	feedback := Plain(fixture(t, "plan-feedback"))
+	base := ParseDialog(feedback)
+	other := ParseDialog(replace(feedback, "plus 保持不变。", "plus 改名为 add。"))
+	if other == nil || other.Kind != KindPlan || other.Title != base.Title || !reflect.DeepEqual(other.Options, base.Options) || other.Fingerprint == base.Fingerprint {
+		t.Fatalf("a different plan body kept the fingerprint: %+v", other)
+	}
+	if ParseDialog(fixture(t, "plan-dialog")).Fingerprint == base.Fingerprint {
+		t.Fatal("two different plans share a fingerprint")
+	}
+	for name, text := range map[string]string{"plan-feedback": feedback, "plan-dialog": Plain(fixture(t, "plan-dialog"))} {
+		if without := ParseDialog(replace(text, "↓", "")); without == nil || without.Fingerprint != ParseDialog(text).Fingerprint {
+			t.Fatalf("%s: the scroll indicator changed the fingerprint", name)
+		}
 	}
 }
 

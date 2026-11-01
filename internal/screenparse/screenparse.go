@@ -188,11 +188,14 @@ func ParseDialog(ansi string) *Dialog {
 		if len(region) == 0 {
 			return nil
 		}
-		plan := planFooter.MatchString(lines.plain[footer])
-		if hasNumberedCursor(region) {
-			return parseNumbered(region, false).classify(plan)
+		if !hasNumberedCursor(region) {
+			return parseUnnumbered(region).classify(false)
 		}
-		return parseUnnumbered(region).classify(plan)
+		dialog := parseNumbered(region, false).classify(planFooter.MatchString(lines.plain[footer]))
+		if dialog != nil && dialog.Kind == KindPlan {
+			dialog.pinPlan(region)
+		}
+		return dialog
 	}
 	region := lines.aboveStatus()
 	if !hasNumberedCursor(region) {
@@ -625,6 +628,30 @@ func (d *Dialog) classify(plan bool) *Dialog {
 		d.FreeText = cursor >= 0 && freeTextPattern.MatchString(d.Options[cursor].Label)
 	}
 	return d
+}
+
+// pinPlan 让计划批准框的指纹也覆盖可见的计划正文：问句上方的横线把正文隔在说明之外，两份
+// 不同的计划会得到同样的问句与选项，过时的卡片就会批准新计划。正文取问句上方横线与它上面
+// 那条边线之间的行，去掉随滚动位置出没的 ↑/↓ 指示；光标移动不改变正文。没有横线隔开时
+// 正文已经在说明里。
+func (d *Dialog) pinPlan(lines []string) {
+	end := len(lines) - 1
+	for end >= 0 && !isEdge(lines[end]) {
+		end--
+	}
+	if end < 0 {
+		return
+	}
+	start := end - 1
+	for start >= 0 && !isEdge(lines[start]) {
+		start--
+	}
+	hash := sha256.New()
+	hash.Write([]byte(d.Fingerprint))
+	for _, line := range lines[start+1 : end] {
+		hash.Write([]byte("\x00p" + strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "↑↓"))))
+	}
+	d.Fingerprint = hex.EncodeToString(hash.Sum(nil))[:16]
 }
 
 // agentMarker：Agent 回复与工具调用的行首标记，说明文字不会越过它们。
