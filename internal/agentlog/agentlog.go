@@ -12,9 +12,10 @@
 // DSH 的 zstd 帧由调用方（herdr 传输层）有界解压成明文字节后喂进来，本包不参与解压。
 //
 // 输出形状与冻结契约 `web/src/lib/structuredChatTypes.ts` 一一对应：
-// 角色闭集合是 `user|assistant|tool|system`（**没有 reasoning**），块只有
-// `text` / `tool-call` / `tool-result` 三种。解码语义对照公开参考实现
-// `stablyai/orca@e86cba888b2eb88241a9c12dc019962f9c74307e` 的
+// 角色闭集合是 `user|assistant|tool|system`（**没有 reasoning**），块有
+// `text` / `thinking` / `tool-call` / `tool-result` 四种。思考过程是块而不是角色：
+// 目前只有 Claude 的 thinking 块带可读正文时输出，其余读取器的 reasoning 仍按设计省略。
+// 解码语义对照公开参考实现 `stablyai/orca@e86cba888b2eb88241a9c12dc019962f9c74307e` 的
 // `transcript-line-decoders-{claude,codex}.ts` 与 `transcript-record-blocks.ts`，
 // 但按本仓库契约做了两处收紧：不输出 image-ref / edit patch，不产生 reasoning 角色。
 // DSH 的形状对照本机安装的 `@deepseek-ai/dsh@0.1.5-rc.2` 源码读出，见 dsh.go。
@@ -92,6 +93,7 @@ const (
 // 块类型，闭集合。
 const (
 	BlockText       = "text"
+	BlockThinking   = "thinking"
 	BlockToolCall   = "tool-call"
 	BlockToolResult = "tool-result"
 )
@@ -108,9 +110,9 @@ const CompactedNotice = "上下文已压缩"
 
 // Block 是一个对话块。
 //
-// 字段是「按 type 取子集」的：text 用 Text，tool-call 用 CallID/Name/Input，
-// tool-result 用 CallID/Output/IsError。MarshalJSON 保证序列化出来的 JSON 只带该类型
-// 应有的字段，与契约里的三个判别式联合完全一致。
+// 字段是「按 type 取子集」的：text 用 Text，thinking 用 Text/DurationMS，
+// tool-call 用 CallID/Name/Input，tool-result 用 CallID/Output/IsError。MarshalJSON
+// 保证序列化出来的 JSON 只带该类型应有的字段，与契约里的判别式联合完全一致。
 type Block struct {
 	Type    string
 	Text    string
@@ -119,10 +121,12 @@ type Block struct {
 	Input   json.RawMessage
 	Output  string
 	IsError bool
+	// DurationMS 是思考耗时（毫秒），provider 没记时为 nil。
+	DurationMS *int64
 }
 
-// MarshalJSON 按块类型输出契约形状。契约里三个块类型的字段都是必填的，
-// 所以这里不省略任何字段（缺省的字符串写空串，缺失的 input 写 null）。
+// MarshalJSON 按块类型输出契约形状。契约里除 thinking 的 duration_ms 外字段都是必填的，
+// 所以这里不省略其他字段（缺省的字符串写空串，缺失的 input 写 null）。
 func (b Block) MarshalJSON() ([]byte, error) {
 	switch b.Type {
 	case BlockText:
@@ -130,6 +134,12 @@ func (b Block) MarshalJSON() ([]byte, error) {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}{b.Type, b.Text})
+	case BlockThinking:
+		return json.Marshal(struct {
+			Type       string `json:"type"`
+			Text       string `json:"text"`
+			DurationMS *int64 `json:"duration_ms,omitempty"`
+		}{b.Type, b.Text, b.DurationMS})
 	case BlockToolCall:
 		input := b.Input
 		if len(input) == 0 || !json.Valid(input) {

@@ -2,6 +2,7 @@ package agentlog
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -11,7 +12,7 @@ import (
 // 返回值第二个分量是「这条消息形状的行没能产出任何内容」，也就是契约里的 skipped：
 // 上游改字段会**静默**丢消息，skipped 计数就是给这种静默准备的对策。反过来，
 // provider 的内部元数据（summary / queue-operation / file-history-snapshot、无关的 system 行等）
-// 与设计上省略的 thinking 都不计入 skipped —— 它们不是「本该有却没有」的消息。
+// 与没有可读正文的 thinking 都不计入 skipped —— 它们不是「本该有却没有」的消息。
 func decodeClaudeLine(context LineContext, line string) (*Record, bool) {
 	record := parseJSONObject(line)
 	if record == nil {
@@ -44,6 +45,12 @@ func decodeClaudeLine(context LineContext, line string) (*Record, bool) {
 
 	message := asRecord(record["message"])
 	blocks, unrecognized := claudeContentBlocks(message["content"])
+	// 思考耗时记在记录顶层，属于这条记录的第一个 thinking 块。
+	if duration, ok := safeInt(record["thinkingDurationMs"]); ok && duration >= 0 {
+		if i := slices.IndexFunc(blocks, func(block Block) bool { return block.Type == BlockThinking }); i >= 0 {
+			blocks[i].DurationMS = &duration
+		}
+	}
 	// Claude 结构上标记了注入轮次：isMeta / isSynthetic / isCompactSummary 的 user 记录
 	// 是系统注入而不是用户输入。但 tool-result 是真实输出，即使落在注入轮里也必须保留。
 	if role == RoleUser && (isTrue(record["isMeta"]) || isTrue(record["isSynthetic"]) || isTrue(record["isCompactSummary"])) {
@@ -63,7 +70,7 @@ func decodeClaudeLine(context LineContext, line string) (*Record, bool) {
 		}
 	}
 	if len(blocks) == 0 {
-		// 只有 thinking 的记录是设计上省略（reasoning 不入输出），不是格式畸形。
+		// 只有加密 thinking（没有可读正文）的记录是设计上省略，不是格式畸形。
 		return nil, unrecognized
 	}
 	return &Record{ID: id, Role: claudeRole(role, blocks), At: at, Blocks: blocks}, false
@@ -254,7 +261,7 @@ func claudeRole(role string, blocks []Block) string {
 // claudeContentBlocks 把 Claude 的 message.content（字符串或块数组）转成块。
 //
 // 第二个返回值表示「出现了无法归类的形状」：只有这种情况才该计入 skipped。
-// thinking 属于已知但按设计省略的类型，不算未识别。
+// 只有 signature 的加密 thinking 属于已知但按设计省略的形状，不算未识别。
 func claudeContentBlocks(content any) ([]Block, bool) {
 	switch typed := content.(type) {
 	case string:
@@ -283,7 +290,10 @@ func claudeContentBlocks(content any) ([]Block, bool) {
 					blocks = append(blocks, Block{Type: BlockText, Text: text})
 				}
 			case "thinking":
-				// 思想链在服务端直接省略：不输出，也不计入 skipped。
+				// 正文为空的是只有 signature 的加密思考，没有可展示的内容。
+				if text := rawString(record["thinking"]); strings.TrimSpace(text) != "" {
+					blocks = append(blocks, Block{Type: BlockThinking, Text: text})
+				}
 			case "tool_use":
 				blocks = append(blocks, Block{
 					Type:   BlockToolCall,

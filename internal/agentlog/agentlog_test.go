@@ -53,11 +53,14 @@ func TestClaudeDecodesUserAndAssistantTurns(t *testing.T) {
 	if record.Role != RoleAssistant {
 		t.Fatalf("assistant role = %q", record.Role)
 	}
-	// thinking 是设计上省略，不是格式畸形，所以这里只剩 text + tool-call。
-	if got := roles(record.Blocks); len(got) != 2 || got[0] != BlockText || got[1] != BlockToolCall {
+	// thinking 块按原顺序保留在助手记录里，它是块不是角色。
+	if got := roles(record.Blocks); len(got) != 3 || got[0] != BlockThinking || got[1] != BlockText || got[2] != BlockToolCall {
 		t.Fatalf("assistant block types = %v", got)
 	}
-	call := record.Blocks[1]
+	if record.Blocks[0].Text != "先看目录" || record.Blocks[0].DurationMS != nil {
+		t.Fatalf("thinking block = %+v", record.Blocks[0])
+	}
+	call := record.Blocks[2]
 	if call.CallID != "toolu_1" || call.Name != "Bash" || string(call.Input) != `{"command":"pnpm test"}` {
 		t.Fatalf("unexpected tool call: %+v", call)
 	}
@@ -98,7 +101,7 @@ func TestClaudeSeparatesDesignElisionFromFormatDrift(t *testing.T) {
 	}{
 		{"meta injection", `{"type":"user","uuid":"u-4","isMeta":true,"cwd":"/srv/proj","message":{"role":"user","content":"<system-reminder>灌进来的</system-reminder>"}}`, true, false},
 		{"compact summary", `{"type":"user","uuid":"u-5","isCompactSummary":true,"cwd":"/srv/proj","message":{"role":"user","content":"摘要注入"}}`, true, false},
-		{"thinking only", `{"type":"assistant","uuid":"a-2","cwd":"/srv/proj","message":{"role":"assistant","content":[{"type":"thinking","thinking":"只有思想链"}]}}`, true, false},
+		{"signature-only thinking", `{"type":"assistant","uuid":"a-2","cwd":"/srv/proj","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"}]}}`, true, false},
 		{"metadata record", `{"type":"summary","summary":"会话摘要","leafUuid":"u-1"}`, true, false},
 		{"unknown block", `{"type":"assistant","uuid":"a-3","cwd":"/srv/proj","message":{"role":"assistant","content":[{"type":"server_tool_use","id":"x"}]}}`, true, true},
 		{"missing content", `{"type":"assistant","uuid":"a-4","cwd":"/srv/proj","message":{"role":"assistant"}}`, true, true},
@@ -383,6 +386,8 @@ func TestBlockMarshalsContractShape(t *testing.T) {
 		{Block{Type: BlockText, Text: "hi"}, `{"type":"text","text":"hi"}`},
 		{Block{Type: BlockToolCall, Name: "Bash"}, `{"type":"tool-call","call_id":"","name":"Bash","input":null}`},
 		{Block{Type: BlockToolResult, CallID: "c1", Output: "ok"}, `{"type":"tool-result","call_id":"c1","output":"ok","is_error":false}`},
+		{Block{Type: BlockThinking, Text: "t", DurationMS: new(int64(2922))}, `{"type":"thinking","text":"t","duration_ms":2922}`},
+		{Block{Type: BlockThinking, Text: "t"}, `{"type":"thinking","text":"t"}`},
 	}
 	for _, testCase := range cases {
 		encoded, err := json.Marshal(testCase.block)
