@@ -84,12 +84,22 @@ export type ChatToolResultBlock = {
   is_error: boolean
 }
 
-export type ChatBlock = ChatTextBlock | ChatToolCallBlock | ChatToolResultBlock
+/**
+ * Agent 的思考过程（Claude 的 `thinking` 块）。只读展示，默认折叠；不进入复制正文、
+ * 不参与轮次切分。`duration_ms` 来自 provider 记录的思考耗时，缺失时省略。
+ */
+export type ChatThinkingBlock = {
+  type: 'thinking'
+  text: string
+  duration_ms?: number
+}
+
+export type ChatBlock = ChatTextBlock | ChatToolCallBlock | ChatToolResultBlock | ChatThinkingBlock
 
 /**
  * 一条对话记录。
  *
- * 只输出文本、工具调用、工具结果三类块；不输出图片引用、编辑补丁、token 用量、
+ * 只输出文本、思考、工具调用、工具结果四类块；不输出图片引用、编辑补丁、token 用量、
  * 请求 id、原始 provider 帧等 provider 内部字段。
  */
 export type ChatRecord = {

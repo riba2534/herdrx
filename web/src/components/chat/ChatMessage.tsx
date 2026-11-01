@@ -47,6 +47,7 @@ export function ChatMessage({ record, tools }: { record: ChatRecord; tools?: Cha
   if (record.role === 'assistant') {
     return <article className="chat-message chat-message-assistant" data-role="assistant" data-record-id={record.id}>
       {record.blocks.map((block, index) => {
+        if (block.type === 'thinking') return null
         if (block.type === 'text') return <div className="chat-assistant-text" key={`text-${index}`}><ChatMarkdown text={block.text}/><ElisionNote text={block.text}/></div>
         if (block.type === 'tool-call') return <ChatToolCallCard key={`call-${block.call_id || index}`} name={block.name} callID={block.call_id} input={block.input}/>
         return <ChatToolResultCard key={`result-${block.call_id || index}`} name={tools?.get(block.call_id)?.name || ''} callID={block.call_id} output={block.output} isError={block.is_error}/>
@@ -57,6 +58,7 @@ export function ChatMessage({ record, tools }: { record: ChatRecord; tools?: Cha
   if (record.role === 'tool') {
     return <article className="chat-message chat-message-tool" data-role="tool" data-record-id={record.id}>
       {record.blocks.map((block, index) => {
+        if (block.type === 'thinking') return null
         if (block.type !== 'tool-result') {
           // 派生角色里的非结果块不该出现；出现时也绝不当作助手正文渲染。
           if (block.type === 'text') return <p className="chat-tool-stray" key={`text-${index}`}>{block.text}</p>

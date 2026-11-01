@@ -101,6 +101,11 @@ function normalizeBlock(value: unknown): ChatBlock | null {
         output: raw.output,
         is_error: raw.is_error === true,
       }
+    case 'thinking': {
+      if (typeof raw.text !== 'string') return null
+      const duration = optionalNumber(raw.duration_ms)
+      return duration === undefined ? { type: 'thinking', text: raw.text } : { type: 'thinking', text: raw.text, duration_ms: duration }
+    }
     default:
       // 未知块类型直接丢弃：宁可少显示，也不能猜测内容语义。
       return null
