@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -17,11 +18,25 @@ import (
 )
 
 // Option 是对话框里的一个选项。Index 对编号对话框是它的编号，否则是从 1 起的位置。
+// Description 是选项下方缩进的说明行，多行用换行连接。
 type Option struct {
-	Index    int    `json:"index"`
-	Label    string `json:"label"`
-	Selected bool   `json:"selected"`
+	Index       int    `json:"index"`
+	Label       string `json:"label"`
+	Selected    bool   `json:"selected"`
+	Description string `json:"description,omitempty"`
 }
+
+// 认出的 Claude 对话框种类（Dialog.Kind），其余对话框不填。
+const (
+	// KindQuestion 是 AskUserQuestion 的一题。
+	KindQuestion = "question"
+	// KindReview 是多题提问最后的确认页（Review your answers / Submit answers）。
+	KindReview = "review"
+	// KindPlan 是 ExitPlanMode 的计划批准。
+	KindPlan = "plan"
+	// KindTrust 是首次进入目录时的信任确认。
+	KindTrust = "trust"
+)
 
 // Dialog 是画面底部正在等待选择的对话框。Fingerprint 只覆盖问题与选项文字，
 // 不含光标位置：方向键移动光标不改变用户看到的那个问题。
@@ -31,9 +46,11 @@ type Dialog struct {
 	Options     []Option `json:"options"`
 	Numbered    bool     `json:"numbered"`
 	Fingerprint string   `json:"fingerprint"`
+	Kind        string   `json:"kind,omitempty"`
 	// Multiple：多选题（选项带勾选框）。卡片不作答，用户回终端操作。
 	Multiple bool `json:"-"`
-	// FreeText：光标停在“Type something”之类的自由输入项上，键入的文字进入对话框自己的输入框。
+	// FreeText：光标停在“Type something”之类的自由输入项上（含已经打了字、文字原地替换了
+	// 标签的那一项），键入的文字进入对话框自己的输入框。
 	FreeText bool `json:"-"`
 }
 
@@ -94,6 +111,11 @@ func isRule(line string) bool {
 // 带标签的横线：`──── session-name ─`。
 var labeledRule = regexp.MustCompile(`^─{2,}\s.*\s─+$`)
 
+// isSessionRule：带会话名的横线。
+func isSessionRule(line string) bool {
+	return isRule(line) && labeledRule.MatchString(strings.TrimSpace(line))
+}
+
 // isBoxEdge：对话框边框的顶/底边 `╭───╮`、`╰───╯`。
 // 也认 Claude 新版选择器顶上的 `▔▔▔▔`（可能带一段提示文字）。
 func isBoxEdge(line string) bool {
@@ -126,6 +148,9 @@ var (
 	// 按键提示页脚：`Enter to confirm · Esc to cancel`、`Press enter to confirm or esc to cancel`、
 	// `↑/↓ to navigate`。不含 Claude 工作中的 `esc to interrupt`：那不是对话框。
 	footerPattern = regexp.MustCompile(`(?i)\b(?:enter to (?:confirm|select|submit|continue)|esc to (?:cancel|go back|exit|close))\b|↑/?↓ to (?:navigate|select|move)`)
+	// Claude 计划批准框的页脚没有 Esc 提示，只有编辑器快捷键和计划文件路径：
+	// `ctrl+g to edit in Vim · ~/.claude/plans/<名>.md`。
+	planFooter = regexp.MustCompile(`(?i)^\s*ctrl\+g to edit in .+ · \S+/plans/[^/\s]+\.md$`)
 	// 多选题的勾选框：`[ ] Red`、`[x] Blue`、`☐ Green`。
 	checkboxPattern = regexp.MustCompile(`^(?:\[[ xX✓✔]\]|[☐☑☒◻◼])\s`)
 	// 自由输入类选项（按 Claude 提问框的实际文案列白名单，整行精确匹配）：选中后键入的文字进入
@@ -145,7 +170,10 @@ const (
 //   - 最后几行里有按键提示页脚（Claude 的选择框、Codex 的审批框；页脚下方可以还有一两行状态，
 //     如 `⏵⏵ accept edits on`），选项紧贴在页脚上方，中间只有空行；
 //   - 或者没有页脚，带光标的编号选项在画面最底部（下方至多两行状态），且上方有对话框顶边
-//     （横线、边框、▔▔▔▔），如 Claude 的权限确认、Rewind。
+//     （横线、边框、▔▔▔▔），如 Claude 的权限确认、Rewind、多题提问的确认页。
+//
+// Claude 计划批准框的页脚是 `ctrl+g to edit in … · …/plans/<名>.md`；全屏渲染画在画面最底下的
+// 会话名横线不算对话框的一部分。
 //
 // 选项或页脚下方出现横线或提示符（输入框、Shell、Codex 的输入行）时不算：输入框里的草稿、
 // Codex 历史里回显的 `› 1. …`、Shell 输出都不会被当成对话框。认不出时调用方用 LooksLikeDialog
@@ -160,16 +188,17 @@ func ParseDialog(ansi string) *Dialog {
 		if len(region) == 0 {
 			return nil
 		}
+		plan := planFooter.MatchString(lines.plain[footer])
 		if hasNumberedCursor(region) {
-			return parseNumbered(region, false)
+			return parseNumbered(region, false).classify(plan)
 		}
-		return parseUnnumbered(region)
+		return parseUnnumbered(region).classify(plan)
 	}
 	region := lines.aboveStatus()
 	if !hasNumberedCursor(region) {
 		return nil
 	}
-	return parseNumbered(region, true)
+	return parseNumbered(region, true).classify(false)
 }
 
 // LooksLikeDialog：画面底部像是有一个对话框（最后几行里有按键提示页脚，或底部有带光标的编号选项），
@@ -198,6 +227,11 @@ func screenLines(ansi string) screenView {
 		lines.dim[i] = wholeLineDim(raw[i])
 	}
 	end := len(trimDialogTail(lines.plain))
+	// 全屏渲染的 Claude 在对话框下方画一条带会话名的横线（输入框在时它是输入框的上沿）。
+	// 画面最底下的这条线不属于对话框，去掉后按没有它处理。
+	if end > 0 && isSessionRule(lines.plain[end-1]) {
+		end = len(trimDialogTail(lines.plain[:end-1]))
+	}
 	for _, line := range lines.plain[end:] {
 		lines.boxBottom = lines.boxBottom || isBoxBottom(line)
 	}
@@ -239,7 +273,7 @@ func (lines screenView) footerLine() int {
 		if strings.TrimSpace(line) == "" || isBoxBottom(line) {
 			continue
 		}
-		if footerPattern.MatchString(line) {
+		if footerPattern.MatchString(line) || planFooter.MatchString(line) {
 			return i
 		}
 		if !lines.agentStatus(i) {
@@ -335,10 +369,11 @@ func isEdge(line string) bool {
 }
 
 type optionRow struct {
-	line     int
-	index    int
-	label    string
-	selected bool
+	line        int
+	index       int
+	label       string
+	selected    bool
+	description string
 }
 
 // parseNumbered 从选项区底部往上收集连续的编号选项（直到编号 1）。选项下方可以有缩进更深的
@@ -382,10 +417,11 @@ func parseNumbered(lines []string, requireEdge bool) *Dialog {
 		if len(rows) > 0 && index != rows[0].index-1 {
 			break
 		}
-		if !detailsBelong(line, lines[i+1:below], utf8.RuneCountInString(match[1]+match[2]), width) {
+		description, ok := optionDetails(line, lines[i+1:below], utf8.RuneCountInString(match[1]+match[2]), width)
+		if !ok {
 			return nil
 		}
-		rows = append([]optionRow{{line: i, index: index, label: strings.TrimSpace(match[4]), selected: match[2] != ""}}, rows...)
+		rows = append([]optionRow{{line: i, index: index, label: strings.TrimSpace(match[4]), selected: match[2] != "", description: description}}, rows...)
 		below = i
 		if index == 1 {
 			break
@@ -397,18 +433,30 @@ func parseNumbered(lines []string, requireEdge bool) *Dialog {
 	return build(lines, rows, true, requireEdge)
 }
 
-// detailsBelong：option 下方这些行都属于它——说明行（缩进比编号所在列更深）、分隔线，或折行的
-// 续行（缩进可以与编号列对齐，但上一行几乎占满画面宽度）。缩进不够又不像折行时无法确定，返回 false。
-func detailsBelong(option string, lines []string, numberColumn, width int) bool {
+// optionDetails 检查 option 下方这些行都属于它，并取出说明。属于它的是说明行（缩进比编号所在列
+// 更深）或折行的续行（缩进可以与编号列对齐，但上一行几乎占满画面宽度）；缩进不够又不像折行时
+// 无法确定，返回 false。选项文字的续行不算说明，说明的续行接回同一行，多行说明用换行连接。
+func optionDetails(option string, lines []string, numberColumn, width int) (string, bool) {
+	var parts []string
 	previous := option
 	for _, line := range lines {
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		if !isEdge(line) && indent <= numberColumn && cells(previous) < width-12 {
-			return false
-		}
+		wrapped := fillsWidth(previous, width)
 		previous = line
+		switch text := strings.TrimSpace(line); {
+		case !wrapped && len(line)-len(strings.TrimLeft(line, " ")) <= numberColumn:
+			return "", false
+		case !wrapped:
+			parts = append(parts, text)
+		case len(parts) > 0:
+			parts[len(parts)-1] = joinWrapped(parts[len(parts)-1], text)
+		}
 	}
-	return true
+	return strings.Join(parts, "\n"), true
+}
+
+// fillsWidth：一行几乎占满画面宽度（以最宽的一行为准，按列计），下一行是它的折行续行。
+func fillsWidth(line string, width int) bool {
+	return cells(line) >= width-12
 }
 
 func valueAt(match []string, index int) string {
@@ -469,7 +517,7 @@ func parseUnnumbered(lines []string) *Dialog {
 	}
 	var rows []optionRow
 	for i := first; i <= last; i++ {
-		if i < last && cells(lines[i]) >= width-12 {
+		if i < last && fillsWidth(lines[i], width) {
 			return nil
 		}
 		label := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(lines[i]), "❯"))
@@ -513,7 +561,7 @@ func build(lines []string, rows []optionRow, numbered, requireEdge bool) *Dialog
 		} else {
 			context = append(context, text)
 		}
-		wrapped = cells(line) >= width-12
+		wrapped = fillsWidth(line, width)
 	}
 	dialog := &Dialog{Numbered: numbered, Lines: []string{}}
 	// 标题取最后一行问句（信任目录提示末尾是“Security guide”链接），其余作说明行。
@@ -541,9 +589,8 @@ func build(lines []string, rows []optionRow, numbered, requireEdge bool) *Dialog
 		hash.Write([]byte("\x00l" + line))
 	}
 	for _, row := range rows {
-		dialog.Options = append(dialog.Options, Option{Index: row.index, Label: columnGap.ReplaceAllString(row.label, " · "), Selected: row.selected})
+		dialog.Options = append(dialog.Options, Option{Index: row.index, Label: columnGap.ReplaceAllString(row.label, " · "), Selected: row.selected, Description: row.description})
 		dialog.Multiple = dialog.Multiple || checkboxPattern.MatchString(row.label)
-		dialog.FreeText = dialog.FreeText || (row.selected && freeTextPattern.MatchString(row.label))
 		hash.Write([]byte("\x00o" + strconv.Itoa(row.index) + "\x00" + row.label))
 	}
 	if numbered {
@@ -551,6 +598,33 @@ func build(lines []string, rows []optionRow, numbered, requireEdge bool) *Dialog
 	}
 	dialog.Fingerprint = hex.EncodeToString(hash.Sum(nil))[:16]
 	return dialog
+}
+
+// classify 按 Claude 对话框的固定文案（Claude Code 2.1.316 实测）填上种类，并标出光标是否停在
+// 自由输入项上：提问框里分隔线和“Chat about this”之上的末项（“Type something.”，打字后标签被
+// 原地替换成已输入的文字；多选题除外），计划批准框的反馈项“Tell Claude what to change”（同样
+// 会被替换，靠下方的 shift+tab 提示认）。其他对话框按 freeTextPattern 认。plan：页脚是计划批准
+// 框的页脚。
+func (d *Dialog) classify(plan bool) *Dialog {
+	if d == nil {
+		return nil
+	}
+	cursor, last := d.Selected(), len(d.Options)-1
+	switch {
+	case plan && d.Numbered:
+		d.Kind = KindPlan
+		d.FreeText = cursor >= 0 && slices.Contains(strings.Split(d.Options[cursor].Description, "\n"), "shift+tab to approve with this feedback")
+	case d.Numbered && last >= 2 && d.Options[last].Label == "Chat about this":
+		d.Kind = KindQuestion
+		d.FreeText = cursor == last-1 && !d.Multiple
+	case d.Numbered && last == 1 && d.Options[0].Label == "Submit answers" && d.Options[1].Label == "Cancel" && slices.Contains(d.Lines, "Review your answers"):
+		d.Kind = KindReview
+	case !d.Numbered && slices.ContainsFunc(d.Options, func(option Option) bool { return option.Label == "Yes, I trust this folder" }):
+		d.Kind = KindTrust
+	default:
+		d.FreeText = cursor >= 0 && freeTextPattern.MatchString(d.Options[cursor].Label)
+	}
+	return d
 }
 
 // agentMarker：Agent 回复与工具调用的行首标记，说明文字不会越过它们。

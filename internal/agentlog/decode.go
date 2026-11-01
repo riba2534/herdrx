@@ -397,7 +397,7 @@ func ElideOversized(record Record, limit int) Record {
 
 func elideBlock(block Block, limit int) (Block, int) {
 	switch block.Type {
-	case BlockText:
+	case BlockText, BlockThinking:
 		if cut, removed := truncateUTF8(block.Text, limit); removed > 0 {
 			block.Text = cut
 			return block, removed
