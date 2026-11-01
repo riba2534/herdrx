@@ -28,7 +28,6 @@ import {
   type ChatRole,
   type ChatSessionCandidate,
   type ChatSource,
-  type ChatTurn,
   type StructuredChatFetch,
   type StructuredChatQuery,
   type StructuredChatRequest,
@@ -334,62 +333,6 @@ export function prependStructuredChatPage(state: StructuredChatState, page: Stru
   return mergePage(state, page, 'earlier')
 }
 
-/**
- * 轮次分组：连续的 assistant / tool / system 记录归到前一条 user 之下。
- * Agent 工作中插入的消息（`queued`）已被并入正在进行的那一轮，留在该轮里，不另起一轮。
- */
-export function groupChatTurns(messages: readonly ChatRecord[]): ChatTurn[] {
-  const turns: ChatTurn[] = []
-  for (const item of messages) {
-    if (item.role === 'user' && !(item.queued && turns.length)) {
-      turns.push({ key: item.id, user: item, responses: [] })
-      continue
-    }
-    const last = turns[turns.length - 1]
-    if (last) last.responses.push(item)
-    else turns.push({ key: item.id, responses: [item] })
-  }
-  return turns
-}
-
-/** 一轮回复的折叠视图：中间过程收成一行，只露出最后一条助手正文。 */
-export type ChatTurnFold = {
-  /** 被折叠的中间过程（工具调用 / 结果、非最终的助手文本）。 */
-  folded: ChatRecord[]
-  /** 折叠时仍然直接显示的记录，按原顺序：系统提示、工作中插入的消息、最终助手正文及其后的记录。 */
-  visible: ChatRecord[]
-  toolCount: number
-  /** 从提问到最后一条过程记录的用时（毫秒）；时间戳缺失时为 undefined。 */
-  durationMs?: number
-}
-
-function hasText(item: ChatRecord) {
-  return item.blocks.some((block) => block.type === 'text' && block.text.trim() !== '')
-}
-
-/**
- * 折叠一轮回复。最终正文是该轮最后一条带文本的助手记录；它之前的 assistant / tool 记录
- * 是中间过程。系统提示与插入的用户消息不折叠。没有可折叠的过程时返回 null，调用方原样渲染。
- * 正在进行的那一轮由调用方决定不折叠：此时"最后一条正文"还不是最终回答。
- */
-export function foldChatTurn(turn: ChatTurn): ChatTurnFold | null {
-  let final = -1
-  turn.responses.forEach((item, index) => { if (item.role === 'assistant' && hasText(item)) final = index })
-  const end = final < 0 ? turn.responses.length : final
-  const folded: ChatRecord[] = []
-  const visible: ChatRecord[] = []
-  turn.responses.forEach((item, index) => {
-    if (index < end && (item.role === 'assistant' || item.role === 'tool')) folded.push(item)
-    else visible.push(item)
-  })
-  if (!folded.length) return null
-  const toolCount = folded.reduce((count, item) => count + item.blocks.filter((block) => block.type === 'tool-call').length, 0)
-  const start = Date.parse(turn.user?.at || folded[0].at || '')
-  const last = Date.parse((final >= 0 ? turn.responses[final].at : folded[folded.length - 1].at) || '')
-  const durationMs = Number.isNaN(start) || Number.isNaN(last) || last < start ? undefined : last - start
-  return { folded, visible, toolCount, durationMs }
-}
-
 /** 用时文案：秒级精度，超过一分钟带分钟，超过一小时带小时。 */
 export function formatChatDuration(ms: number) {
   const seconds = Math.max(0, Math.round(ms / 1000))
@@ -397,24 +340,6 @@ export function formatChatDuration(ms: number) {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return seconds % 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${minutes} 分`
   return minutes % 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分` : `${Math.floor(minutes / 60)} 小时`
-}
-
-/** 折叠行的摘要：「工具 N · 用时 X」；没有工具调用时说过程条数。 */
-export function chatFoldSummary(fold: ChatTurnFold) {
-  const parts = [fold.toolCount ? `工具 ${fold.toolCount}` : `过程 ${fold.folded.length} 条`]
-  if (fold.durationMs !== undefined) parts.push(`用时 ${formatChatDuration(fold.durationMs)}`)
-  return parts.join(' · ')
-}
-
-/** 收集会话里所有 tool-call，供只带结果的 tool 记录回填真实工具名与入参。 */
-export function collectToolCalls(messages: readonly ChatRecord[]) {
-  const calls = new Map<string, { name: string; input: unknown }>()
-  for (const item of messages) {
-    for (const block of item.blocks) {
-      if (block.type === 'tool-call' && block.call_id) calls.set(block.call_id, { name: block.name, input: block.input })
-    }
-  }
-  return calls
 }
 
 /** 时间戳展示：今天只显示时分，其余显示月日时分；无法解析时返回空串。 */

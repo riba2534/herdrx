@@ -2,13 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APIError, api, currentSessionID, invalidateAuthentication } from './api'
 import {
   applyStructuredChatPage,
-  chatFoldSummary,
-  collectToolCalls,
-  foldChatTurn,
   formatChatDuration,
   fetchStructuredChat,
   formatChatTime,
-  groupChatTurns,
   mergeChatRecords,
   normalizeStructuredChatResponse,
   paneAgentRejectsReadSource,
@@ -286,34 +282,6 @@ describe('page merging', () => {
     const rebuilt = applyStructuredChatPage(more, page({ messages: [textRecord('b', 'user', '新')], binding: 'selected', reset: true }))
     expect(rebuilt.truncated).toBe(0)
     expect(normalizeStructuredChatResponse({ supported: true, messages: [], truncated: 'x' }).truncated).toBeUndefined()
-  })
-})
-
-describe('turn grouping', () => {
-  it('keeps two rounds in order and attaches tools to the round they answer', () => {
-    const messages: ChatRecord[] = [
-      textRecord('u1', 'user', '第一问'),
-      textRecord('a1', 'assistant', '第一答'),
-      { id: 't1', role: 'tool', blocks: [{ type: 'tool-result', call_id: 'c1', output: '结果', is_error: false }] },
-      textRecord('u2', 'user', '第二问'),
-      textRecord('a2', 'assistant', '第二答'),
-    ]
-    const turns = groupChatTurns(messages)
-    expect(turns).toHaveLength(2)
-    expect(turns[0].user?.id).toBe('u1')
-    expect(turns[0].responses.map((item) => item.id)).toEqual(['a1', 't1'])
-    expect(turns[1].user?.id).toBe('u2')
-    expect(turns[1].responses.map((item) => item.id)).toEqual(['a2'])
-  })
-
-  it('keeps records that arrive before any user record in their own turn', () => {
-    const turns = groupChatTurns([textRecord('s1', 'system', '会话开始'), textRecord('u1', 'user', '问')])
-    expect(turns.map((turn) => turn.key)).toEqual(['s1', 'u1'])
-  })
-
-  it('indexes tool calls by call id for result labels', () => {
-    const calls = collectToolCalls([{ id: 'a', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'c1', name: 'Read', input: { file: 'a.ts' } }] }])
-    expect(calls.get('c1')).toEqual({ name: 'Read', input: { file: 'a.ts' } })
   })
 })
 
@@ -774,51 +742,7 @@ describe('verified binding', () => {
   })
 })
 
-describe('turn folding', () => {
-  function at(record: ChatRecord, time: string): ChatRecord {
-    return { ...record, at: time }
-  }
-  const call = (id: string): ChatRecord => ({ id, role: 'assistant', at: '2026-10-01T08:00:20Z', blocks: [{ type: 'tool-call', call_id: id, name: 'Bash', input: {} }] })
-  const result = (id: string): ChatRecord => ({ id: `${id}-r`, role: 'tool', blocks: [{ type: 'tool-result', call_id: id, output: 'ok', is_error: false }] })
-
-  it('keeps a message typed while the agent works inside the running turn', () => {
-    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
-    const turns = groupChatTurns([textRecord('u', 'user', '问'), call('t1'), queued, textRecord('a', 'assistant', '答')])
-    expect(turns).toHaveLength(1)
-    expect(turns[0].responses.map((item) => item.id)).toEqual(['t1', 'q', 'a'])
-    // 没有前一轮时它就是一轮的开头。
-    expect(groupChatTurns([queued])[0].user?.id).toBe('q')
-  })
-
-  it('folds tools and interim text, leaving the final answer, system notes and queued input visible', () => {
-    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
-    const [turn] = groupChatTurns([
-      at(textRecord('u', 'user', '问'), '2026-10-01T08:00:00Z'),
-      textRecord('a1', 'assistant', '先看看'),
-      call('t1'), result('t1'),
-      textRecord('s', 'system', 'API 错误'),
-      queued,
-      call('t2'), result('t2'),
-      at(textRecord('a2', 'assistant', '答'), '2026-10-01T08:01:05Z'),
-      textRecord('s2', 'system', '本轮已被中断'),
-    ])
-    const fold = foldChatTurn(turn)!
-    expect(fold.folded.map((item) => item.id)).toEqual(['a1', 't1', 't1-r', 't2', 't2-r'])
-    expect(fold.visible.map((item) => item.id)).toEqual(['s', 'q', 'a2', 's2'])
-    expect(fold.toolCount).toBe(2)
-    expect(chatFoldSummary(fold)).toBe('工具 2 · 用时 1 分 5 秒')
-  })
-
-  it('does not fold a turn without intermediate steps and omits unknown durations', () => {
-    expect(foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a', 'assistant', '答')])[0])).toBeNull()
-    const fold = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a1', 'assistant', '想'), textRecord('a2', 'assistant', '答')])[0])!
-    expect(chatFoldSummary(fold)).toBe('过程 1 条')
-    // 没有最终正文（例如被中断）时整段过程都折叠。
-    const interrupted = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), call('t1'), textRecord('s', 'system', '中断')])[0])!
-    expect(interrupted.folded.map((item) => item.id)).toEqual(['t1'])
-    expect(interrupted.visible.map((item) => item.id)).toEqual(['s'])
-  })
-
+describe('durations', () => {
   it('formats durations', () => {
     expect(formatChatDuration(4_400)).toBe('4 秒')
     expect(formatChatDuration(120_000)).toBe('2 分')
