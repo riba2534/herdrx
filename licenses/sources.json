@@ -2,5 +2,13 @@
   "saxes-6.0.0.txt": {
     "source": "https://raw.githubusercontent.com/lddubeau/saxes/v6.0.0/LICENSE",
     "sha256": "0fac2374380621b22e6b50451057721a9c52935b02d16d106a9f04897f061d0e"
+  },
+  "cindy-19dad9c225-LICENSE.txt": {
+    "source": "https://raw.githubusercontent.com/makecindy/cindy/19dad9c225/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "cindy-19dad9c225-NOTICE.txt": {
+    "source": "https://raw.githubusercontent.com/makecindy/cindy/19dad9c225/NOTICE",
+    "sha256": "77ad73b2535cd4011ed8b509aa51d7c745ae5a6f411370d8f94337562c03cd97"
   }
 }

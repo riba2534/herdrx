@@ -1,0 +1,8 @@
+Cindy
+Copyright 2026 XD Inc.
+
+This product includes software developed by XD Inc.
+
+Third-party components distributed with this product retain their own
+copyright and license terms. Their attribution notices and SPDX SBOMs are
+collected under docs/legal/notices/, not in this file.
