@@ -18,9 +18,14 @@ const drainGrace = 200 * time.Millisecond
 
 // Run executes Script in an interactive zsh on this machine and returns what
 // it printed on descriptor 3. stdin is /dev/null, the startup files' stdout and
-// stderr are discarded, and TERM is dumb. zsh leads a new process group; that
-// group is killed on timeout and once zsh exits, so nothing the probe started
-// outlives it there.
+// stderr are discarded, and TERM is dumb. zsh leads a new session, so its
+// process group id is its pid; that group is killed on timeout and once zsh
+// exits, so nothing the probe started outlives it there.
+//
+// A new session rather than only a new group: the session has no controlling
+// terminal. A website or daemon started from a terminal would otherwise hand
+// it one, zsh -i would open /dev/tty, turn on job control from a background
+// group and be stopped by SIGTTIN/SIGTTOU until the timeout.
 func Run(ctx context.Context) ([]byte, error) {
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
@@ -36,7 +41,7 @@ func Run(ctx context.Context) ([]byte, error) {
 	command := exec.Command(zsh, "-ic", Loader)
 	command.Env = probeEnvironment(os.Environ())
 	command.ExtraFiles = []*os.File{writer}
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	err = command.Start()
 	_ = writer.Close()
 	if err != nil {
