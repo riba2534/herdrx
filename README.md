@@ -5,9 +5,9 @@
 <h1 align="center">herdrx</h1>
 
 <p align="center">
-  <strong>自托管、多用户的 Herdr 远程终端工作台</strong>
+  <strong>自托管、多用户的 Herdr Agent 工作台</strong>
   <br />
-  在电脑和手机上连接多台主机，继续同一组工作区、分屏终端与 Agent 任务。
+  在电脑和手机上用 Web 界面驱动多台主机上的 Claude Code，需要时切到完整终端。
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ---
 
-herdrx 是 [Herdr](https://herdr.dev/) 的 Web 客户端，适合个人和可信小团队。把运行 Herdr 的主机接入后，你可以在电脑和手机上查看 Agent 状态、切换工作区、操作分屏终端。
+herdrx 是 [Herdr](https://herdr.dev/) 的 Web 客户端，为 Agent 而生，适合个人和可信小团队。把运行 Herdr 的主机接入后，你可以在电脑和手机上用 **Web UI** 查看 Claude Code 的对话与工作过程、回答提问、批准计划、新建会话；需要完整终端时切到 **Web Shell**，继续分屏、快捷键和任何终端程序。
 
 **Herdr 和任务独立运行在远程主机上。** 关闭浏览器、退出账号或重启网站后，远程任务继续运行；重新进入即可连接原有会话。远程主机自身的重启与任务恢复由 Herdr 和任务管理器负责。
 
@@ -38,8 +38,10 @@ herdrx 是 [Herdr](https://herdr.dev/) 的 Web 客户端，适合个人和可信
 
 | 功能 | 使用方式 |
 |---|---|
+| 用 Web UI 驱动 Claude | 默认进入 Web UI：Claude 的对话、工作过程（读文件、命令、diff）折叠成一行可展开；提问、计划审批、信任目录用卡片作答；状态栏显示进度、权限模式和中断按钮 |
+| 新建 Claude 会话 | 选目录和远程主机 `~/.zshrc` 里的启动器 alias（显示是否免授权），在新工作区或标签页中启动；alias 正文不离开远程主机 |
 | 管理多台主机 | 使用 SSH 或 Tailcat 接入，按名称和地址搜索，通过文件夹分组 |
-| 操作终端 | 切换工作区、标签页与终端，使用分屏、历史滚动、中文输入和 Shift+Enter；手机上点终端直接逐键输入（Tab 补全、方向键、Ctrl 组合键），点输入框则本地编辑、整段发送 |
+| 在 Web Shell 中操作终端 | 切换工作区、标签页与终端，使用分屏、历史滚动、中文输入和 Shift+Enter；手机上点终端直接逐键输入（Tab 补全、方向键、Ctrl 组合键），点输入框则本地编辑、整段发送 |
 | 跨主机查看 Agent | Agent 总览汇总所有主机的 Agent，等待你处理和完成未看的排在最前，点一下进入对应终端 |
 | 向 Agent 传图片 | 粘贴、拖入或上传 PNG/JPEG/WebP/GIF，单张最大 20 MB |
 | 在手机上继续任务 | 单终端视图、本地输入框、辅助键条；终端按屏幕自动选择完整显示、铺满宽度或可读字号，双指捏合调整字号，弹出键盘不改变远端尺寸 |
@@ -121,6 +123,10 @@ Herdr 没有运行时，工作台会显示「在远程主机启动 Herdr」。�
 绑定凭据 10 分钟内有效且只能使用一次，请勿公开分享。完整安装、后台运行、手动下载及排障见 [Tailcat 接入教程](docs/tailcat-quickstart.md)。
 
 ## 日常使用
+
+工作台有 **Web UI** 和 **Web Shell** 两种模式，用顶栏（手机在顶部右侧）的 **UI / Shell** 开关切换，默认 Web UI。两者看的是同一组工作区和终端，切换不会重启终端或影响远程任务。Web UI 中，Claude 终端显示对话视图：你的消息在右侧气泡，Claude 的工作过程折叠成一行可展开，需要你回答的提问、计划审批和信任目录以卡片替代输入框，输入框上方的状态栏显示进度、权限模式（点击切换，相当于 Shift+Tab）和中断按钮；其他终端显示只读画面和一行命令输入，「在 Shell 中打开」可切到完整终端。「新建 Claude 会话」按远程主机 `~/.zshrc` 里的 alias 启动 Claude。第一版只为 Claude Code 提供对话视图，其他 Agent 请在 Web Shell 中使用。说明见 [Web UI 与 Web Shell](docs/web-ui.md)。
+
+以下是 Web Shell 模式的操作说明。
 
 进入主机后，选择原有工作区和标签页，在对应终端中继续操作。电脑上可拖动分屏分隔或用 Ctrl+B R 调整比例，Ctrl+B ? 查看快捷键；断线时顶部条幅可立即重连，不必整页刷新。手机上终端和底部输入框同时可用，点哪里就输入到哪里：点终端画面直接逐键输入，Tab 补全、方向键历史和 Ctrl 组合键立即生效，并自动展开辅助键（手动收起后不再自动展开；屏幕较矮时辅助键优先，输入框暂时收起、草稿保留，点顶栏键盘按钮即可切回）；点输入框则在本地编辑，中文、粘贴和换行都在本地完成，点击「发送」后整段进入当前终端并提交一次。输入框左侧的图标显示当前输入去向，也可从这里切换。平板等触屏设备在电脑布局下也可从标签栏的键盘按钮打开辅助键。底部辅助键与 orca 手机端同序：Esc、Tab、Enter、Shift+Tab、空格、退格、Del、方向键，以及 Ctrl+C/D/L/Z/R/A/E/W/U，退格、Del 和方向键可长按连发；方向键后的 Ctrl、Alt、⇧ 是粘滞修饰键，点一下只作用于下一个键（键栏或软键盘输入），例如 Alt+← 按词左移，⇧+Enter 与实体键盘的 Shift+Enter 一样换行，再点一次取消；「粘贴」只送正文不追加回车。终端工具里可打开「选择文本」或「复制屏幕」。发送成功只表示输入已被接受，不代表远端程序已经执行完。电脑和手机的输入方式分开记住：缩小窗口不会把手机输入框留在电脑上，电脑上主动打开的本地输入也不会被窗口变化清掉。
 
@@ -208,10 +214,10 @@ docker start herdrx                                # 启动网站
 
 - [安装与兼容要求](docs/install.md) · [Tailcat 接入教程](docs/tailcat-quickstart.md)
 - [SSH 密钥与文件夹](docs/ssh-keys-and-folders.md)
-- [Agent 总览与已读标记](docs/agents-overview.md)
+- [Web UI 与 Web Shell](docs/web-ui.md) · [Agent 总览与已读标记](docs/agents-overview.md)
 - [运维与备份](docs/operations.md) · [更新与恢复](docs/update-and-recovery.md)
 - [版本与发布说明](https://github.com/riba2534/herdrx/releases) · [反馈问题](https://github.com/riba2534/herdrx/issues)
 
 ## 致谢与许可
 
-感谢 [Herdr](https://herdr.dev/) 和 [Tailcat](https://github.com/tailscale/tailcat)。herdrx 使用 [MIT 许可证](LICENSE)，第三方依赖声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+感谢 [Herdr](https://herdr.dev/) 和 [Tailcat](https://github.com/tailscale/tailcat)；Web UI 对话界面的设计与部分代码改编自 [Cindy](https://github.com/makecindy/cindy)（Apache-2.0）。herdrx 使用 [MIT 许可证](LICENSE)，第三方依赖声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

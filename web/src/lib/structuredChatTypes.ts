@@ -48,8 +48,8 @@ export type ChatSource = (typeof CHAT_SOURCES)[number]
 /**
  * 记录角色。
  *
- * 这里**没有** `reasoning`：provider 记录里的思考过程 / 思想链一律在服务端丢弃，
- * 既不输出，也不计入 `skipped`（丢弃是设计行为，不是格式畸形）。
+ * 这里**没有** `reasoning` 角色：Claude 的思考作为 assistant 记录里的 `thinking` 块下发（见
+ * `ChatThinkingBlock`），其他 provider 的思考过程在服务端丢弃，不计入 `skipped`。
  *
  * `tool` 是派生角色，不是 provider 的原生 role：provider 里 `type: 'user'` 且 blocks
  * 全部是 `tool-result` 的记录会被重判为 `tool`。工具结果因此**永远不会**被当成用户问题
