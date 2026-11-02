@@ -121,6 +121,24 @@ describe('NewSessionDialog', () => {
     await waitFor(() => expect(sentInput().launcher).toBe('claude'))
   })
 
+  it('accepts a hand-typed alias when the host cannot list launchers', async () => {
+    vi.mocked(api.launchers).mockResolvedValue({ supported: false, reason: 'shell_unavailable', launchers: [] })
+    open()
+    const field = await screen.findByLabelText('启动器')
+    expect(screen.getByText(/可以在上面填写 zsh 里的 alias 名，或直接用 claude/)).toBeInTheDocument()
+    fireEvent.change(field, { target: { value: 'xcc' } })
+    submit()
+    await waitFor(() => expect(sentInput().launcher).toBe('xcc'))
+  })
+
+  it('trims the directory before validating and sending it', async () => {
+    open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '  /srv/app  ' } })
+    submit()
+    await waitFor(() => expect(sentInput().cwd).toBe('/srv/app'))
+  })
+
   it('explains an empty launcher list and a failed read, and reads again on request', async () => {
     vi.mocked(api.launchers).mockResolvedValueOnce({ supported: true, launchers: [] })
     open()
@@ -142,6 +160,79 @@ describe('NewSessionDialog', () => {
     submit()
     await waitFor(() => expect(handlers.onStarted).toHaveBeenCalled())
     expect(sentInput(1).request_id).toBe(sentInput(0).request_id)
+  })
+
+  it('uses a new request id once any field changes, and reuses it for an unchanged retry', async () => {
+    vi.mocked(api.startSession).mockRejectedValue(new TypeError('Failed to fetch'))
+    open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    submit()
+    await waitFor(() => expect(api.startSession).toHaveBeenCalledTimes(1))
+    const edits: Array<() => void> = [
+      () => fireEvent.change(screen.getByLabelText('标签可选'), { target: { value: 'review' } }),
+      () => fireEvent.change(screen.getByRole('combobox'), { target: { value: '/home/user/notes' } }),
+      () => fireEvent.click(screen.getByRole('radio', { name: /ccplain/ })),
+      () => fireEvent.click(screen.getByRole('radio', { name: '在“alpha”里新建标签' })),
+    ]
+    for (const [index, change] of edits.entries()) {
+      change()
+      submit()
+      await waitFor(() => expect(api.startSession).toHaveBeenCalledTimes(index + 2))
+      expect(sentInput(index + 1).request_id).not.toBe(sentInput(index).request_id)
+    }
+    // 首条消息不在请求里：只改它不换编号。
+    fireEvent.change(screen.getByLabelText('首条消息可选'), { target: { value: 'hi' } })
+    submit()
+    await waitFor(() => expect(api.startSession).toHaveBeenCalledTimes(6))
+    expect(sentInput(5).request_id).toBe(sentInput(4).request_id)
+  })
+
+  it('offers the directory the terminal really opened in, with a new request id', async () => {
+    vi.mocked(api.startSession).mockRejectedValueOnce(new APIError(409, 'cwd_mismatch', 'x', { code: 'cwd_mismatch', details: { workspace_id: 'w9', tab_id: 't9', pane_id: 'p9', actual_cwd: '/home/user' } }))
+    const handlers = open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    submit()
+    expect(await screen.findByRole('alert')).toHaveTextContent('终端实际在 /home/user 打开，和填写的目录不一致（目录可能不存在，或填的是软链接）。新终端已保留，没有启动 Claude')
+    fireEvent.click(screen.getByRole('button', { name: '在 Shell 中查看' }))
+    expect(handlers.onOpenInShell).toHaveBeenCalledWith({ workspace_id: 'w9', tab_id: 't9', pane_id: 'p9' })
+    fireEvent.click(screen.getByRole('button', { name: '改用 /home/user' }))
+    expect(screen.getByRole('combobox')).toHaveValue('/home/user')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    submit()
+    await waitFor(() => expect(api.startSession).toHaveBeenCalledTimes(2))
+    expect(sentInput(1)).toMatchObject({ cwd: '/home/user' })
+    expect(sentInput(1).request_id).not.toBe(sentInput(0).request_id)
+  })
+
+  it('says which program took over the new terminal instead of zsh', async () => {
+    vi.mocked(api.startSession).mockRejectedValueOnce(new APIError(409, 'shell_mismatch', 'x', { code: 'shell_mismatch', details: { workspace_id: 'w9', tab_id: 't9', pane_id: 'p9', foreground: 'tmux' } }))
+    const handlers = open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    submit()
+    expect(await screen.findByRole('alert')).toHaveTextContent('新终端里正在运行 tmux，不是 zsh，没有输入启动命令')
+    expect(screen.queryByRole('button', { name: /^改用/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '在 Shell 中查看' }))
+    expect(handlers.onOpenInShell).toHaveBeenCalledWith({ workspace_id: 'w9', tab_id: 't9', pane_id: 'p9' })
+  })
+
+  it('resubmits once with a new request id when the server reports a request mismatch', async () => {
+    vi.mocked(api.startSession).mockRejectedValueOnce(new APIError(409, 'request_mismatch', 'x'))
+    const handlers = open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    submit()
+    await waitFor(() => expect(handlers.onStarted).toHaveBeenCalledTimes(1))
+    expect(api.startSession).toHaveBeenCalledTimes(2)
+    expect(sentInput(1).request_id).not.toBe(sentInput(0).request_id)
+    expect(handlers.onStarted.mock.calls[0][2]).toBe(sentInput(1).request_id)
+  })
+
+  it('stops after one resubmission when the mismatch persists', async () => {
+    vi.mocked(api.startSession).mockRejectedValue(new APIError(409, 'request_mismatch', 'x'))
+    open()
+    await screen.findByRole('radio', { name: /xcc/ })
+    submit()
+    expect(await screen.findByRole('alert')).toHaveTextContent('换了新的请求编号重新提交后仍然对不上')
+    expect(api.startSession).toHaveBeenCalledTimes(2)
   })
 
   it('uses a fresh request id after a definite rejection and names the unknown launcher', async () => {

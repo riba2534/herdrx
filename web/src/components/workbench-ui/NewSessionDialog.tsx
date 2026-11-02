@@ -37,24 +37,26 @@ function cwdSuggestions(snapshot: Snapshot | null, first?: string) {
   return [...seen]
 }
 
+// 列表不可用或为空时，服务端接受任何合法的名字：可以手填 alias 名，或直接用 claude。
+const TYPE_A_NAME = '可以在上面填写 zsh 里的 alias 名，或直接用 claude。'
 const fallbackHints: Record<string, string> = {
-  unsupported_agent: '这台主机的受控端版本较旧，列不出 zsh 里的 Claude 启动器。在远程主机执行 herdrx update 升级后重新打开本窗口即可选择；现在可以直接用 claude 启动。',
-  shell_unavailable: '远程主机上没有找到 zsh，读不到 alias；可以直接用 claude 启动。',
-  timeout: '读取 zsh alias 超时（.zshrc 加载较慢）；可以点「重新读取」，或直接用 claude 启动。',
-  read_failed: '读取 zsh alias 失败；可以点「重新读取」，或直接用 claude 启动。',
+  unsupported_agent: `这台主机的受控端版本较旧，列不出 zsh 里的 Claude 启动器；在远程主机执行 herdrx update 升级后重新打开本窗口即可从列表选择。现在${TYPE_A_NAME}`,
+  shell_unavailable: `远程主机上没有找到 zsh，读不到 alias。${TYPE_A_NAME}`,
+  timeout: `读取 zsh alias 超时（.zshrc 加载较慢）；可以点「重新读取」。也${TYPE_A_NAME}`,
+  read_failed: `读取 zsh alias 失败；可以点「重新读取」。也${TYPE_A_NAME}`,
 }
 
 function launcherHint(state: LaunchersState) {
-  if (state.phase === 'error') return `读取启动器失败：${state.message}。可以点「重新读取」，或直接用 claude 启动。`
+  if (state.phase === 'error') return `读取启动器失败：${state.message}。可以点「重新读取」，也${TYPE_A_NAME}`
   if (state.phase !== 'ready') return ''
   const { result } = state
   if (!result.supported) return fallbackHints[result.reason || 'read_failed'] || fallbackHints.read_failed
-  return '没有在 zsh 里找到调用 claude 的 alias，将直接运行 claude；也可以填写其他启动命令名。'
+  return `没有在 zsh 里找到调用 claude 的 alias。${TYPE_A_NAME}`
 }
 
 type LaunchersState = { phase: 'loading' } | { phase: 'ready'; result: LaunchersResult } | { phase: 'error'; message: string }
 type FieldErrors = Partial<Record<'cwd' | 'launcher' | 'label', string>>
-type Failure = { text: string; location?: SessionLocation }
+type Failure = { text: string; location?: SessionLocation; actualCwd?: string }
 
 function validate(cwd: string, launcher: string, label: string): FieldErrors {
   const errors: FieldErrors = {}
@@ -68,7 +70,17 @@ function validate(cwd: string, launcher: string, label: string): FieldErrors {
 }
 
 // 服务端明确拒绝、什么都没有执行的错误：改正后用新的请求编号再提交，免得被第一次的结果顶回来。
-const REJECTED = new Set(['invalid_request_id', 'invalid_cwd', 'invalid_launcher', 'invalid_label', 'invalid_target', 'launcher_unknown', 'workspace_not_found'])
+const REJECTED = new Set(['invalid_request_id', 'invalid_cwd', 'invalid_launcher', 'invalid_label', 'invalid_target', 'launcher_unknown', 'workspace_not_found', 'request_mismatch'])
+
+type FailureDetails = Partial<SessionLocation> & { actual_cwd?: string; foreground?: string }
+/** 新终端已建好但没启动 Claude 的错误带回终端的位置和原因（`details`）。 */
+function detailsOf(error: APIError): FailureDetails {
+  const payload = error.details as ({ details?: FailureDetails } & FailureDetails) | undefined
+  return payload?.details || payload || {}
+}
+function locationOf(details: FailureDetails): SessionLocation | undefined {
+  return details.workspace_id && details.tab_id && details.pane_id ? { workspace_id: details.workspace_id, tab_id: details.tab_id, pane_id: details.pane_id } : undefined
+}
 
 function failureFor(error: unknown, launcher: string): Failure & { fresh: boolean } {
   if (!(error instanceof APIError)) return { fresh: false, text: '网络中断，不确定会话是否已经创建。请先看一眼侧栏的工作区列表；确认没有新会话后再点「新建会话」，会沿用同一个请求编号，不会重复创建。' }
@@ -82,12 +94,17 @@ function failureFor(error: unknown, launcher: string): Failure & { fresh: boolea
     case 'workspace_not_found': return { fresh, text: '当前工作区已经不存在，请改为「新工作区」后重试。' }
     case 'invalid_request_id': return { fresh, text: '请求编号无效，请关闭本窗口后重新打开再试。' }
     case 'herdr_unavailable': return { fresh, text: '远程主机上的 Herdr 没有响应。请确认 Herdr 正在运行后再点「新建会话」。' }
-    case 'start_failed': {
-      const payload = error.details as { details?: Partial<SessionLocation> } & Partial<SessionLocation> | undefined
-      const raw = payload?.details || payload
-      const location = raw?.workspace_id && raw.tab_id && raw.pane_id ? { workspace_id: raw.workspace_id, tab_id: raw.tab_id, pane_id: raw.pane_id } : undefined
-      return { fresh, location, text: '已经新建了终端，但没能在里面启动 Claude。可以在 Shell 中查看这个终端，确认启动命令后手动运行；终端不会被关闭。' }
+    case 'start_failed':
+      return { fresh, location: locationOf(detailsOf(error)), text: '已经新建了终端，但没能在里面启动 Claude。可以在 Shell 中查看这个终端，确认启动命令后手动运行；终端不会被关闭。' }
+    case 'cwd_mismatch': {
+      const details = detailsOf(error)
+      return { fresh, location: locationOf(details), actualCwd: details.actual_cwd, text: `终端实际在 ${details.actual_cwd || '另一个目录'} 打开，和填写的目录不一致（目录可能不存在，或填的是软链接）。新终端已保留，没有启动 Claude。` }
     }
+    case 'shell_mismatch': {
+      const details = detailsOf(error)
+      return { fresh, location: locationOf(details), text: `新终端里正在运行 ${details.foreground || '其他程序'}，不是 zsh，没有输入启动命令。新终端已保留。` }
+    }
+    case 'request_mismatch': return { fresh, text: '换了新的请求编号重新提交后仍然对不上。请关闭本窗口后重新打开再试。' }
     default: return { fresh, text: error.message || '新建会话失败，请稍后重试。' }
   }
 }
@@ -182,8 +199,9 @@ function LauncherList({ launchers, value, onChange }: { launchers: Launcher[]; v
  * 新建 Claude 会话：在远程主机的某个目录新建工作区（或在当前工作区新建标签），用选定的
  * 启动器启动 Claude。启动器只显示名字和三个开关，alias 正文从不离开远程主机。
  *
- * 一次对话框一个 `request_id`，网络中断后重试沿用（服务端 10 分钟内去重，不会重复建会话）；
- * 服务端明确拒绝、什么都没执行时才换新编号。首条消息由工作台在 Claude 就绪后发送。
+ * `request_id` 跟着表单内容走：字段没改时的重试沿用同一个（服务端 10 分钟内去重，网络中断后
+ * 重试不会重复建会话）；目录、启动器、位置、标签任何一项改了就换新编号；服务端明确拒绝、什么都
+ * 没执行时也换新编号。首条消息由工作台在 Claude 就绪后发送。
  */
 export function NewSessionDialog({ hostID, snapshot, workspaceID, defaultCwd, onClose, onStarted, onOpenInShell }: {
   hostID: string
@@ -197,7 +215,8 @@ export function NewSessionDialog({ hostID, snapshot, workspaceID, defaultCwd, on
   onOpenInShell: (location: SessionLocation) => void
 }) {
   const ids = { cwd: useId(), launcher: useId(), label: useId(), message: useId() }
-  const [requestID, setRequestID] = useState(createClientID)
+  // 上一次提交用的编号和它对应的请求体。
+  const request = useRef<{ id: string; body: string } | null>(null)
   const suggestions = useMemo(() => cwdSuggestions(snapshot, defaultCwd), [snapshot, defaultCwd])
   const [cwd, setCwd] = useState(() => suggestions[0] || '')
   const workspace = snapshot?.workspaces.find((item) => item.workspace_id === workspaceID)
@@ -233,32 +252,40 @@ export function NewSessionDialog({ hostID, snapshot, workspaceID, defaultCwd, on
     event.preventDefault()
     if (busy || launchers.phase === 'loading') return
     const name = launcher.trim()
-    const next = validate(cwd, name, label.trim())
+    const directory = cwd.trim()
+    const next = validate(directory, name, label.trim())
     setErrors(next)
     const invalid = (['cwd', 'launcher', 'label'] as const).find((field) => next[field])
     if (invalid) {
       document.getElementById(ids[invalid])?.focus()
       return
     }
+    const input = {
+      cwd: directory,
+      launcher: name,
+      target: effectiveTarget === 'tab' ? { kind: 'tab' as const, workspace_id: workspaceID } : { kind: 'workspace' as const },
+      label: label.trim() || undefined,
+    }
+    const body = JSON.stringify(input)
     setBusy(true)
     setFailure(null)
-    try {
-      const result = await api.startSession(hostID, {
-        request_id: requestID,
-        cwd,
-        launcher: name,
-        target: effectiveTarget === 'tab' ? { kind: 'tab', workspace_id: workspaceID } : { kind: 'workspace' },
-        label: label.trim() || undefined,
-      })
-      rememberLauncher(hostID, result.launcher || name)
-      onStarted(result, message, requestID)
-    } catch (error) {
-      const next = failureFor(error, name)
-      if (next.fresh) setRequestID(createClientID())
-      setFailure(next)
-    } finally {
-      setBusy(false)
+    // 服务端说同一编号的请求体对不上（request_mismatch）时，换新编号再提交一次。
+    for (let attempt = 0; ; attempt++) {
+      if (request.current?.body !== body) request.current = { id: createClientID(), body }
+      const requestID = request.current.id
+      try {
+        const result = await api.startSession(hostID, { request_id: requestID, ...input })
+        rememberLauncher(hostID, result.launcher || name)
+        onStarted(result, message, requestID)
+      } catch (error) {
+        const failed = failureFor(error, name)
+        if (failed.fresh) request.current = null
+        if (attempt === 0 && error instanceof APIError && error.code === 'request_mismatch') continue
+        setFailure(failed)
+      }
+      break
     }
+    setBusy(false)
   }
 
   const clearError = (field: keyof FieldErrors) => setErrors((current) => ({ ...current, [field]: undefined }))
@@ -303,7 +330,10 @@ export function NewSessionDialog({ hostID, snapshot, workspaceID, defaultCwd, on
       </div>
       {failure && <div className="console-alert" role="alert">
         <span>{failure.text}</span>
-        {failure.location && <Button type="button" className="console-button" onClick={() => onOpenInShell(failure.location!)}>在 Shell 中查看</Button>}
+        {(failure.actualCwd || failure.location) && <span className="console-alert-actions">
+          {failure.actualCwd && <Button type="button" className="console-button" data-tooltip={failure.actualCwd} onClick={() => { setCwd(failure.actualCwd!); clearError('cwd'); setFailure(null) }}><span className="console-button-text">改用 {failure.actualCwd}</span></Button>}
+          {failure.location && <Button type="button" className="console-button" onClick={() => onOpenInShell(failure.location!)}>在 Shell 中查看</Button>}
+        </span>}
       </div>}
       <div className="console-actions">
         <Button type="button" className="console-button" disabled={busy} onClick={onClose}>取消</Button>
