@@ -79,8 +79,15 @@ describe('first message after starting a Claude session', () => {
     expect(api.panePrompt).toHaveBeenCalledTimes(1)
   })
 
-  it('treats a pane_dialog refusal as nothing sent and retries with the same id', async () => {
-    vi.mocked(api.panePrompt).mockRejectedValueOnce(new APIError(409, 'pane_dialog', '终端正弹着一个选择对话框'))
+  it.each([
+    [409, 'pane_dialog', undefined],
+    [409, 'pane_draft', undefined],
+    [429, 'prompt_busy', undefined],
+    [502, 'pane_read_failed', undefined],
+    [502, 'pane_send_failed', undefined],
+    [502, 'host_unreachable', { code: 'host_unreachable', retryable: true }],
+  ])('treats %s %s as nothing sent and retries with the same id when Claude is ready again', async (status, code, details) => {
+    vi.mocked(api.panePrompt).mockRejectedValueOnce(new APIError(status, code, '什么都没有发送', details))
     queueFirstMessage('host', 'p1', 'hello', 'retry0001')
     mount([pane({ agent: 'claude', agent_status: 'idle' })])
     await flush()
@@ -102,6 +109,17 @@ describe('first message after starting a Claude session', () => {
     expect(api.panePrompt).toHaveBeenCalledTimes(1)
     expect(readComposerDraft('host', 'p1')).toBe('整理一下变更')
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ tone: 'error', text: expect.stringContaining('不会自动重发') }))
+  })
+
+  it('gives up on a permanent refusal instead of retrying it', async () => {
+    vi.mocked(api.panePrompt).mockRejectedValueOnce(new APIError(409, 'host_auth_failed', '主机拒绝了认证', { code: 'host_auth_failed', retryable: false }))
+    queueFirstMessage('host', 'p1', 'nope', 'permanent1')
+    mount([pane({ agent: 'claude', agent_status: 'idle' })])
+    await flush()
+    await act(async () => { vi.advanceTimersByTime(FIRST_MESSAGE_POLL_MS * 2) })
+    await flush()
+    expect(api.panePrompt).toHaveBeenCalledTimes(1)
+    expect(readComposerDraft('host', 'p1')).toBe('nope')
   })
 
   it('also keeps a server-side failure in the draft without retrying', async () => {
