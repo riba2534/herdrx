@@ -51,7 +51,7 @@ func (a *API) hostRoutes(router chi.Router) {
 		router.With(a.requireOrigin).Get("/ws", a.workbench)
 		router.With(a.requireCSRF).Post("/trust-host-key", a.trustHostKey)
 		router.With(a.requireCSRF).Post("/herdr/start", a.startHerdr)
-		router.Get("/launchers", a.hostLaunchers)
+		router.With(a.requireCSRF).Get("/launchers", a.hostLaunchers)
 		router.With(a.requireCSRF).Post("/sessions", a.startSession)
 		router.With(a.requireCSRF).Delete("/", a.deleteHost)
 		router.With(a.requireCSRF).Post("/panes/{paneID}/paste-image", a.pasteImage)
