@@ -137,7 +137,7 @@ function ActionDetail({ entry, diff }: { entry: ToolEntry; diff: ToolDiff | null
   }
   if (diff) {
     return <>
-      <p className="chat-detail-path" title={descriptor.kind === 'file' ? descriptor.filePath : undefined}>{descriptor.kind === 'file' ? descriptor.filePath : entry.name}</p>
+      <p className="chat-detail-path" data-tooltip={descriptor.kind === 'file' ? descriptor.filePath : undefined}>{descriptor.kind === 'file' ? descriptor.filePath : entry.name}</p>
       {diff.segments.map(({ key, details }) => <DiffView key={key} details={details}/>)}
       <ElisionNote text={entry.elided}/>
       {result?.isError && output}
@@ -164,15 +164,15 @@ export function ActionRow({ entry, live }: { entry: ToolEntry; live: boolean }) 
       <StatusIcon status={status} task={entry.descriptor.kind === 'task'}/>
       {view.verb && <span className="chat-action-verb">{view.verb}</span>}
       {view.param && (view.file
-        ? <span className="chat-file-chip" title={view.title}><FileText size={12} aria-hidden="true"/><span>{view.param}</span></span>
-        : <span className={`chat-action-param${view.mono ? ' chat-mono' : ''}`} title={view.title ?? view.param}>{truncateToolText(view.param, 160)}</span>)}
+        ? <span className="chat-file-chip" data-tooltip={view.title}><FileText size={12} aria-hidden="true"/><span>{view.param}</span></span>
+        : <span className={`chat-action-param${view.mono ? ' chat-mono' : ''}`} data-tooltip={view.title ?? view.param}>{truncateToolText(view.param, 160)}</span>)}
       {view.chip && <span className="chat-action-chip">{view.chip}</span>}
       <span className="chat-row-spacer"/>
       {stats && <span className="chat-diff-stat" aria-label={`新增 ${stats.add} 行，删除 ${stats.del} 行`}><span data-type="add">+{stats.add}</span><span data-type="del">-{stats.del}</span></span>}
       {risky && <span className="chat-risk" data-tooltip={HIGH_RISK_HINT}>高风险</span>}
       <span className="chat-row-chevron" aria-hidden="true"><ChevronRight size={13}/></span>
     </button>
-    {view.raw && !expanded && <div className="chat-action-raw chat-mono" title={view.raw}>{view.raw}</div>}
+    {view.raw && !expanded && <div className="chat-action-raw chat-mono" data-tooltip={view.raw}>{view.raw}</div>}
     {expanded && <div className="chat-action-detail"><ActionDetail entry={entry} diff={diff}/></div>}
   </div>
 }

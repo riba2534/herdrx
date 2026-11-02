@@ -50,7 +50,7 @@ describe('ActionRow', () => {
   it('shows a file chip, +/- stats and the diff for edits', () => {
     const { container } = render(<ActionRow entry={tool('Edit', { file_path: '/srv/app/calc.py', old_string: 'def add(a, b):\n    return a + b\n', new_string: 'def plus(a, b):\n    return a + b\n' }, { output: 'ok' })} live={false}/>)
     expect(container.querySelector('.chat-file-chip')).toHaveTextContent('calc.py')
-    expect(container.querySelector('.chat-file-chip')).toHaveAttribute('title', '/srv/app/calc.py')
+    expect(container.querySelector('.chat-file-chip')).toHaveAttribute('data-tooltip', '/srv/app/calc.py')
     expect(screen.getByLabelText('新增 1 行，删除 1 行')).toHaveTextContent('+1-1')
     fireEvent.click(screen.getByRole('button', { name: /编辑 calc.py/ }))
     const rows = Array.from(container.querySelectorAll('.chat-diff-row'), (row) => `${row.getAttribute('data-type')}:${row.querySelector('.chat-diff-text')?.textContent}`)
