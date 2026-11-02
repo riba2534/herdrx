@@ -60,7 +60,7 @@ func TestStartSessionOpensAWorkspaceAndTypesOneLine(t *testing.T) {
 			order = append(order, call.method)
 		}
 	}
-	if strings.Join(order, ",") != "workspace.create,session.snapshot,pane.process_info,pane.send_input" {
+	if strings.Join(order, ",") != "workspace.create,pane.process_info,session.snapshot,pane.send_input" {
 		t.Fatalf("order = %v", order)
 	}
 	if info := f.endpoint.callsOf("pane.process_info"); info[0].params["pane_id"] != "w9:p1" {
@@ -143,7 +143,7 @@ func TestStartSessionValidatesEveryField(t *testing.T) {
 	body := sessionBody("request-0004", "xcc", newWorkspace)
 	body["label"] = strings.Repeat("名", 64)
 	body["cwd"] = "/" + strings.Repeat("a", 4095)
-	f.endpoint.setForegroundCWD(body["cwd"].(string))
+	f.endpoint.setPaneCWD(body["cwd"].(string), body["cwd"].(string))
 	f.start(t, body, 200)
 	postJSON(t, f.client, f.url("session-host", "/sessions"), "", sessionBody("request-0005", "xcc", newWorkspace), 403)
 	if len(f.endpoint.callsOf("workspace.create")) != 1 {
@@ -268,7 +268,7 @@ func pane409(t *testing.T, f *sessionFixture, result map[string]any, code, key, 
 func TestStartSessionRefusesAPaneOutsideTheRequestedDirectory(t *testing.T) {
 	f := newSessionFixture(t)
 	// Herdr opened the missing directory's pane in the home directory instead.
-	f.endpoint.setForegroundCWD("/home/user")
+	f.endpoint.setPaneCWD("/home/user", "/home/user")
 	result := f.start(t, sessionBody("request-0024", "xcc", newWorkspace), 409)
 	pane409(t, f, result, "cwd_mismatch", "actual_cwd", "/home/user")
 	if !strings.Contains(result["error"].(string), "/home/user") {
@@ -285,31 +285,78 @@ func TestStartSessionRefusesAPaneOutsideTheRequestedDirectory(t *testing.T) {
 	}
 }
 
-func TestStartSessionComparesDirectoriesWithoutTheTrailingSlash(t *testing.T) {
+func TestStartSessionReportsTheLogicalDirectoryWhenBothDiffer(t *testing.T) {
 	f := newSessionFixture(t)
-	body := sessionBody("request-0025", "xcc", newWorkspace)
-	body["cwd"] = "/srv/proj one/"
-	f.start(t, body, 200)
-	f.endpoint.setForegroundCWD("/")
-	body = sessionBody("request-0026", "xcc", newWorkspace)
-	body["cwd"] = "/"
-	f.start(t, body, 200)
-	// Without a foreground directory the pane's own cwd decides.
-	f.endpoint.setForegroundCWD("")
-	f.start(t, sessionBody("request-0027", "xcc", newWorkspace), 200)
+	f.endpoint.setPaneCWD("/home/user", "/private/home/user")
+	result := f.start(t, sessionBody("request-0032", "xcc", newWorkspace), 409)
+	pane409(t, f, result, "cwd_mismatch", "actual_cwd", "/home/user")
+	// Without a logical directory the physical one is reported.
+	f = newSessionFixture(t)
+	f.endpoint.setPaneCWD("", "/private/home/user")
+	result = f.start(t, sessionBody("request-0033", "xcc", newWorkspace), 409)
+	pane409(t, f, result, "cwd_mismatch", "actual_cwd", "/private/home/user")
 }
 
-func TestStartSessionRefusesAForegroundThatCannotRunTheLauncher(t *testing.T) {
-	cases := []struct {
-		name, launcher, info, want string
-	}{
-		{"tmux from .zshrc", "claude", foregroundInfo(42, "zsh", "tmux: client"), "tmux: client"},
-		{"bash for a zsh alias", "xcc", foregroundInfo(41, "bash"), "bash"},
+// Either directory matching is enough: the logical one the shell reports
+// (OSC 7) or the physical one (macOS /tmp is /private/tmp).
+func TestStartSessionAcceptsTheLogicalOrThePhysicalDirectory(t *testing.T) {
+	cases := []struct{ name, request, logical, physical string }{
+		{"logical matches", "/tmp/proj", "/tmp/proj", "/private/tmp/proj"},
+		{"physical matches", "/private/tmp/proj", "/tmp/proj", "/private/tmp/proj"},
+		{"stale logical, physical matches", "/srv/proj one", "/home/user", "/srv/proj one"},
+		{"only logical known", "/srv/proj one", "/srv/proj one", ""},
+		{"only physical known", "/srv/proj one", "", "/srv/proj one"},
+		{"trailing slash", "/srv/proj one/", "/srv/proj one", "/srv/proj one"},
+		{"root", "/", "/", "/"},
 	}
 	for index, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSessionFixture(t)
-			f.endpoint.processInfo = tc.info
+			f.endpoint.setPaneCWD(tc.logical, tc.physical)
+			body := sessionBody("request-cwd-"+strconv.Itoa(index), "xcc", newWorkspace)
+			body["cwd"] = tc.request
+			f.start(t, body, 200)
+		})
+	}
+}
+
+// shortForegroundWait shortens the wait for the foreground shell in tests
+// that expect it to run out.
+func shortForegroundWait(t *testing.T) {
+	t.Helper()
+	wait, poll := sessionForegroundWait, sessionForegroundPoll
+	sessionForegroundWait, sessionForegroundPoll = 300*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { sessionForegroundWait, sessionForegroundPoll = wait, poll })
+}
+
+func TestStartSessionWaitsForStartupCommandsToLeaveTheForeground(t *testing.T) {
+	f := newSessionFixture(t)
+	// .zshrc runs fastfetch and ssh-add before the shell takes the foreground back.
+	f.endpoint.processSequence = []string{foregroundInfo(42, "zsh", "fastfetch"), foregroundInfo(42, "zsh", "sleep"), foregroundInfo(42, "zsh", "ssh-add"), foregroundInfo(41, "zsh")}
+	f.start(t, sessionBody("request-0034", "xcc", newWorkspace), 200)
+	if n := len(f.endpoint.callsOf("pane.process_info")); n != 4 {
+		t.Fatalf("process_info read %d times", n)
+	}
+	if len(f.endpoint.callsOf("pane.send_input")) != 1 {
+		t.Fatal("the launcher line was not typed once the shell had the foreground")
+	}
+}
+
+func TestStartSessionRefusesAForegroundThatCannotRunTheLauncher(t *testing.T) {
+	shortForegroundWait(t)
+	cases := []struct {
+		name, launcher string
+		infos          []string
+		want           string
+	}{
+		{"tmux from .zshrc", "claude", []string{foregroundInfo(42, "zsh", "tmux: client")}, "tmux: client"},
+		{"bash for a zsh alias", "xcc", []string{foregroundInfo(41, "bash")}, "bash"},
+		{"the last process read is reported", "claude", []string{foregroundInfo(42, "zsh", "sleep"), foregroundInfo(42, "zsh", "fastfetch")}, "fastfetch"},
+	}
+	for index, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSessionFixture(t)
+			f.endpoint.processSequence = tc.infos
 			result := f.start(t, sessionBody("request-shell-"+strconv.Itoa(index), tc.launcher, newWorkspace), 409)
 			pane409(t, f, result, "shell_mismatch", "foreground", tc.want)
 		})
@@ -327,9 +374,11 @@ func TestStartSessionRefusesAForegroundThatCannotRunTheLauncher(t *testing.T) {
 }
 
 func TestStartSessionTypesNothingWhenThePaneCannotBeChecked(t *testing.T) {
+	shortForegroundWait(t)
 	cases := map[string]func(*sessionTestEndpoint){
 		"snapshot fails":       func(e *sessionTestEndpoint) { e.snapshotErr = errors.New("read remote herdr response: EOF") },
 		"pane not in snapshot": func(e *sessionTestEndpoint) { e.snapshot.Panes = nil },
+		"no directory known":   func(e *sessionTestEndpoint) { e.setPaneCWD("", "") },
 		"process info fails":   func(e *sessionTestEndpoint) { e.processErr = errors.New("unknown method") },
 		"no foreground":        func(e *sessionTestEndpoint) { e.processInfo = foregroundInfo(41) },
 	}
@@ -340,6 +389,22 @@ func TestStartSessionTypesNothingWhenThePaneCannotBeChecked(t *testing.T) {
 			result := f.start(t, sessionBody("request-0030", "xcc", newWorkspace), 502)
 			pane409(t, f, result, "start_failed", "pane_id", "w9:p1")
 		})
+	}
+}
+
+// Revoking access mid-start cancels the start's context, but the pane may
+// already exist: its audit entry must still be written.
+func TestStartSessionAuditSurvivesRevokedAccess(t *testing.T) {
+	f := newSessionFixture(t)
+	f.endpoint.beforeSend = func() {
+		if err := f.api.access.change(f.owner, "", true, func() error { return nil }); err != nil {
+			t.Error(err)
+		}
+	}
+	f.start(t, sessionBody("request-0035", "xcc", newWorkspace), 200)
+	entries, err := f.db.ListAudit(context.Background(), store.AuditFilter{Action: "session.start"})
+	if err != nil || len(entries) != 1 || !strings.Contains(string(entries[0].Details), `"pane_id":"w9:p1"`) {
+		t.Fatalf("audit = %+v %v", entries, err)
 	}
 }
 
