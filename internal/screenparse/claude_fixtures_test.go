@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -175,6 +176,36 @@ func TestPlanFingerprintCoversThePlanBody(t *testing.T) {
 			t.Fatalf("%s: the scroll indicator changed the fingerprint", name)
 		}
 	}
+}
+
+// 提问框末项按位置算自由输入，前提是它没有说明行：真实选项都带说明。布局变了、末项变成真实
+// 选项时，光标停在它上面不能放行发送。标签本身是“Type something.”时照旧算。
+func TestQuestionSlotWithADescriptionIsNotFreeText(t *testing.T) {
+	real := ParseDialog(realOptionAboveChat(Plain(fixture(t, "question-multi"))))
+	if real == nil || real.Kind != KindQuestion || real.Selected() != 1 || real.Options[1].Description == "" || real.FreeText {
+		t.Fatalf("a real option above “Chat about this”: %+v", real)
+	}
+	// 没有分隔线、“Type something.”带说明：位置判定不成立，标签照旧算。
+	lines := strings.Split(Plain(fixture(t, "question-typesomething")), "\n")
+	i := slices.Index(lines, "❯ 3. Type something.")
+	if i < 0 {
+		t.Fatal("free-text option not on the screen")
+	}
+	lines[i+1] = "     enter your own format"
+	described := ParseDialog(strings.Join(lines, "\n"))
+	if described == nil || described.Kind != KindQuestion || described.Options[2].Description != "enter your own format" || !described.FreeText {
+		t.Fatalf("the free-text label with a description: %+v", described)
+	}
+}
+
+// realOptionAboveChat 去掉 question-multi 的“Type something.”和它下面的分隔线，让带说明的
+// unittest 紧挨着“Chat about this”，光标停在它上面。
+func realOptionAboveChat(text string) string {
+	lines := strings.Split(text, "\n")
+	if i := slices.Index(lines, "  3. Type something."); i >= 0 {
+		lines = slices.Delete(lines, i, i+2)
+	}
+	return strings.NewReplacer("  4. Chat about this", "  3. Chat about this", "❯ 1. pytest", "  1. pytest", "  2. unittest", "❯ 2. unittest").Replace(strings.Join(lines, "\n"))
 }
 
 // 多选题的末项不是自由输入：卡片和发送都不接。

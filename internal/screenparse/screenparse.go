@@ -604,28 +604,29 @@ func build(lines []string, rows []optionRow, numbered, requireEdge bool) *Dialog
 }
 
 // classify 按 Claude 对话框的固定文案（Claude Code 2.1.316 实测）填上种类，并标出光标是否停在
-// 自由输入项上：提问框里分隔线和“Chat about this”之上的末项（“Type something.”，打字后标签被
-// 原地替换成已输入的文字；多选题除外），计划批准框的反馈项“Tell Claude what to change”（同样
-// 会被替换，靠下方的 shift+tab 提示认）。其他对话框按 freeTextPattern 认。plan：页脚是计划批准
-// 框的页脚。
+// 自由输入项上。标签命中 freeTextPattern 的照旧算；提问框里分隔线和“Chat about this”之上的
+// 末项没有说明行时也算（“Type something.”，打字后标签被原地替换成已输入的文字；真实选项都带
+// 说明，布局变了也不会把它们当成输入框）；多选题都不算。计划批准框认反馈项“Tell Claude what
+// to change”（同样会被替换，靠下方的 shift+tab 提示认）。plan：页脚是计划批准框的页脚。
 func (d *Dialog) classify(plan bool) *Dialog {
 	if d == nil {
 		return nil
 	}
 	cursor, last := d.Selected(), len(d.Options)-1
+	freeLabel := cursor >= 0 && freeTextPattern.MatchString(d.Options[cursor].Label)
 	switch {
 	case plan && d.Numbered:
 		d.Kind = KindPlan
 		d.FreeText = cursor >= 0 && slices.Contains(strings.Split(d.Options[cursor].Description, "\n"), "shift+tab to approve with this feedback")
 	case d.Numbered && last >= 2 && d.Options[last].Label == "Chat about this":
 		d.Kind = KindQuestion
-		d.FreeText = cursor == last-1 && !d.Multiple
+		d.FreeText = !d.Multiple && (freeLabel || (cursor == last-1 && d.Options[cursor].Description == ""))
 	case d.Numbered && last == 1 && d.Options[0].Label == "Submit answers" && d.Options[1].Label == "Cancel" && slices.Contains(d.Lines, "Review your answers"):
 		d.Kind = KindReview
 	case !d.Numbered && slices.ContainsFunc(d.Options, func(option Option) bool { return option.Label == "Yes, I trust this folder" }):
 		d.Kind = KindTrust
 	default:
-		d.FreeText = cursor >= 0 && freeTextPattern.MatchString(d.Options[cursor].Label)
+		d.FreeText = freeLabel
 	}
 	return d
 }
