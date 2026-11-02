@@ -70,6 +70,7 @@ export function findPendingInteraction(records: readonly ChatRecord[]): PendingI
   return { tool: 'AskUserQuestion', callID: call.call_id, questions: parseQuestions(call.input) }
 }
 
+const PLAN_INTRO = /^here is claude's plan:?$/i
 // 计划批准框里不属于计划正文的固定文案。
 const PLAN_CHROME = /^(?:ready to code\?|here is claude's plan:?|claude has written up a plan\b.*|would you like to proceed\?)$/i
 // 比较屏幕上的计划行与 Markdown 原文：屏幕已经渲染掉了标题、强调、代码标记和列表符号，表格画成
@@ -83,7 +84,11 @@ const squash = (value: string) => value.replace(/[\s#*_`>|~•·⎿\-─━│�
 export function planShownOnScreen(plan: string, dialog: PaneDialog, preview: readonly string[] = []) {
   const title = squash(dialog.title || '')
   const question = title ? preview.findIndex((line) => squash(line).includes(title)) : -1
-  const visible = [...dialog.lines, ...(question >= 0 ? preview.slice(0, question) : [])]
+  const above = question >= 0 ? preview.slice(0, question) : []
+  // 计划短时读屏窗口会带进更早的对话（如 `Thought for 1s`）：从最后一个「Here is Claude's plan:」之后取。
+  let intro = above.length - 1
+  while (intro >= 0 && !PLAN_INTRO.test(above[intro].trim())) intro--
+  const visible = [...dialog.lines, ...above.slice(intro + 1)]
   const first = visible.map((line) => line.trim()).find((line) => squash(line) && !PLAN_CHROME.test(line))
   return first === undefined || squash(plan).includes(squash(first))
 }

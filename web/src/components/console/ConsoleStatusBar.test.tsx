@@ -33,17 +33,17 @@ describe('ConsoleStatusBar', () => {
     expect(screen.getByText('15 秒')).toBeInTheDocument()
   })
 
-  it('locks the mode pill and interrupt while a dialog is up, and interrupts only while Herdr reports working', () => {
+  it('locks the mode pill and interrupt while a dialog is up, and interrupts on Herdr working or a visible spinner', () => {
     const view = render(<ConsoleStatusBar live={live()} working locked="终端正弹着对话框" onInterrupt={noop} onCycleMode={noop}/>)
     const pill = screen.getByRole('button', { name: /当前模式/ })
     expect(pill).toBeDisabled()
     expect(pill).toHaveAttribute('data-tooltip', '终端正弹着对话框')
     expect(screen.getByRole('button', { name: '中断' })).toBeDisabled()
-    // 只看到 spinner、Herdr 没报运行中：显示运行状态，但不能中断。
+    // Herdr 状态滞后、只读到 spinner：照样可以中断。
     view.rerender(<ConsoleStatusBar live={live()} working={false} onInterrupt={noop} onCycleMode={noop}/>)
-    expect(screen.getByRole('button', { name: '中断' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '中断' })).toBeEnabled()
     expect(screen.getByRole('button', { name: /当前模式/ })).toBeEnabled()
-    view.rerender(<ConsoleStatusBar live={live()} working onInterrupt={noop} onCycleMode={noop}/>)
+    view.rerender(<ConsoleStatusBar live={live({ spinner: null })} working onInterrupt={noop} onCycleMode={noop}/>)
     expect(screen.getByRole('button', { name: '中断' })).toBeEnabled()
   })
 
