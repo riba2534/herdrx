@@ -132,6 +132,18 @@ describe('planShownOnScreen', () => {
     expect(planShownOnScreen(otherPlan, planDialog, preview)).toBe(false)
   })
 
+  it('takes the visible plan lines after the plan heading, so earlier conversation does not count', () => {
+    // 短计划：读屏窗口里还带着计划框之前的 `Thought for 1s`。
+    const lines = planDialogScreen.split('\n')
+    const heading = lines.findIndex((line) => line.trim() === '将 calc.py 中的 add 函数改名为 plus')
+    const question = lines.findIndex((line) => line.includes('Would you like to proceed?'))
+    const shortScreen = [...lines.slice(0, heading + 1), '', ...lines.slice(question - 1)]
+    const preview = parseClaudeScreen(shortScreen.map(plainScreenLine)).preview
+    expect(preview).toContain('Thought for 1s')
+    expect(planShownOnScreen('# 将 calc.py 中的 add 函数改名为 plus\n', planDialog, preview)).toBe(true)
+    expect(planShownOnScreen(otherPlan, planDialog, preview)).toBe(false)
+  })
+
   it('checks the first plan line in the dialog lines, skipping the fixed wording', () => {
     const withLines = { ...planDialog, lines: ['Ready to code?', "Here is Claude's plan:", '给 calc.py 添加 sub 函数', '新增 sub，并补 pytest 用例。'] }
     expect(planShownOnScreen(otherPlan, withLines)).toBe(true)

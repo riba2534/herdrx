@@ -55,7 +55,7 @@ function useAction(run: () => Promise<void>, fallback: string) {
 
 export type ConsoleStatusBarProps = {
   live: ConsoleLive
-  /** 调用方判断的「工作中」（如 Herdr 报 working）；读屏看到 spinner 时也显示运行状态，但只有 working 时才能中断。 */
+  /** 调用方判断的「工作中」（如 Herdr 报 working）；读屏看到 spinner 时也算工作中（Herdr 状态可能滞后），都可以中断。 */
   working: boolean
   /** 有对话框时的说明：模式胶囊和「中断」都停用，免得按键落进对话框。 */
   locked?: string
@@ -131,9 +131,9 @@ export function ConsoleStatusBar({ live, working, locked, onInterrupt, onCycleMo
         {active && <button
           type="button"
           className="console-button console-interrupt"
-          disabled={interrupt.pending || !working || Boolean(locked)}
+          disabled={interrupt.pending || Boolean(locked)}
           aria-busy={interrupt.pending || undefined}
-          data-tooltip={locked || (working ? '中断这一轮（相当于按一次 Esc），不会关闭终端' : 'Herdr 还没报告运行中，暂不能中断')}
+          data-tooltip={locked || '中断这一轮（相当于按一次 Esc），不会关闭终端'}
           onClick={() => void interrupt.trigger()}
         >
           {interrupt.pending ? <LoaderCircle className="console-spin" size={13} aria-hidden="true"/> : <Square size={12} aria-hidden="true"/>}中断
