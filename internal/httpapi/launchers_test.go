@@ -33,8 +33,11 @@ type sessionTestEndpoint struct {
 	emptyReads   int
 	sendErr      error
 	// processInfo is the pane.process_info result; processErr fails the call.
-	processInfo string
-	processErr  error
+	// processSequence, when set, answers the calls in order and then repeats its last entry.
+	processInfo     string
+	processErr      error
+	processSequence []string
+	beforeSend      func()
 }
 
 // newSessionTestEndpoint answers like a fresh pane whose zsh opened in the
@@ -65,12 +68,12 @@ func foregroundInfo(group int, names ...string) string {
 	return string(encoded)
 }
 
-// setForegroundCWD moves the shell of every new pane to dir.
-func (e *sessionTestEndpoint) setForegroundCWD(dir string) {
+// setPaneCWD sets the logical (OSC 7) and physical directory of every new pane.
+func (e *sessionTestEndpoint) setPaneCWD(logical, physical string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for index := range e.snapshot.Panes {
-		e.snapshot.Panes[index].ForegroundCWD = dir
+		e.snapshot.Panes[index].CWD, e.snapshot.Panes[index].ForegroundCWD = logical, physical
 	}
 }
 
@@ -92,6 +95,9 @@ func (e *sessionTestEndpoint) Snapshot(context.Context) (herdr.Snapshot, error) 
 func (e *sessionTestEndpoint) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	if (method == "workspace.create" || method == "tab.create") && e.createGate != nil {
 		<-e.createGate
+	}
+	if method == "pane.send_input" && e.beforeSend != nil {
+		e.beforeSend()
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -126,6 +132,13 @@ func (e *sessionTestEndpoint) Call(ctx context.Context, method string, params an
 	case "pane.process_info":
 		if e.processErr != nil {
 			return nil, e.processErr
+		}
+		if len(e.processSequence) > 0 {
+			info := e.processSequence[0]
+			if len(e.processSequence) > 1 {
+				e.processSequence = e.processSequence[1:]
+			}
+			return json.RawMessage(info), nil
 		}
 		return json.RawMessage(e.processInfo), nil
 	}

@@ -43,7 +43,7 @@ const (
 	sessionStartUserCapacity = 64
 	// 整个启动的预算：连接、取启动器列表、建 pane、等提示符、输入。不随浏览器断开取消。
 	sessionStartTimeout = 45 * time.Second
-	// 等新 pane 的 shell 打出提示符；超时也照常输入，shell 会读到排队的输入。
+	// 等新 pane 的画面出现；之后还要等前台回到 shell（sessionForegroundWait）才核对。
 	sessionShellWait    = 3 * time.Second
 	sessionShellPoll    = 100 * time.Millisecond
 	sessionCWDMaxBytes  = 4096
@@ -313,13 +313,19 @@ func launcherAllowed(name string, known launchers.Result) bool {
 	return slices.ContainsFunc(known.Launchers, func(launcher launchers.Launcher) bool { return launcher.Name == name })
 }
 
-// auditSessionStart 记下一次可能已经建好 pane 的启动；paneID 未知时省略。
+// sessionAuditTimeout 是写一条启动审计的预算。
+const sessionAuditTimeout = 2 * time.Second
+
+// auditSessionStart 记下一次可能已经建好 pane 的启动；paneID 未知时省略。请求被取消或
+// 授权已撤销时 pane 照样可能已建好，所以审计不随它们取消，只受自己的短超时约束。
 func (a *API) auditSessionStart(ctx context.Context, request *http.Request, host store.Host, input startSessionInput, paneID, outcome string) {
 	details := map[string]any{"launcher": input.Launcher, "cwd": input.CWD, "result": outcome}
 	if paneID != "" {
 		details["pane_id"] = paneID
 	}
-	a.audit(request.WithContext(ctx), "session.start", "host", host.ID, details)
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionAuditTimeout)
+	defer cancel()
+	a.audit(request.WithContext(auditCtx), "session.start", "host", host.ID, details)
 }
 
 // paneReply 是新 pane 已建好时的失败响应：details 带上它的位置，前端据此在 Shell 中打开它。
@@ -336,32 +342,35 @@ var sessionShells = map[string]bool{"zsh": true, "bash": true, "sh": true, "dash
 // 的 shell。返回非 nil 的 reply 时什么都不输入；outcome 用于审计。
 func verifyNewPane(ctx context.Context, endpoint herdr.Endpoint, input startSessionInput, result startSessionResult) (string, *sessionReply) {
 	unverified := paneReply(http.StatusBadGateway, "start_failed", "新终端已建好，但没能确认它的目录和前台程序，没有输入启动命令。终端保持打开，请到这个终端里查看后手动启动", result, nil)
+	foreground, err := waitForForegroundShell(ctx, endpoint, result.PaneID)
+	if err != nil {
+		return "check_failed", unverified
+	}
 	snapshot, err := endpoint.Snapshot(ctx)
 	if err != nil {
 		return "check_failed", unverified
 	}
-	actual := ""
+	// cwd 是 shell 用 OSC 7 报的逻辑路径，foreground_cwd 是物理路径（macOS 上 /tmp 是
+	// /private/tmp）：任一个等于请求的目录就算对。
+	logical, physical := "", ""
 	for _, pane := range snapshot.Panes {
 		if pane.ID == result.PaneID {
-			actual = pane.ForegroundCWD
-			if actual == "" {
-				actual = pane.CWD
-			}
+			logical, physical = pane.CWD, pane.ForegroundCWD
 		}
 	}
-	if actual == "" {
+	if logical == "" && physical == "" {
 		return "check_failed", unverified
 	}
 	want := strings.TrimRight(input.CWD, "/")
 	if want == "" {
 		want = "/"
 	}
-	if actual != want {
+	if logical != want && physical != want {
+		actual := logical
+		if actual == "" {
+			actual = physical
+		}
 		return "cwd_mismatch", paneReply(http.StatusConflict, "cwd_mismatch", "终端实际在 "+actual+" 打开，和填写的目录不一致（目录可能不存在，或填的是软链接）。新终端已保留，没有启动 Claude", result, map[string]string{"actual_cwd": actual})
-	}
-	foreground, err := foregroundProcess(ctx, endpoint, result.PaneID)
-	if err != nil {
-		return "check_failed", unverified
 	}
 	switch {
 	case !sessionShells[foreground]:
@@ -370,6 +379,37 @@ func verifyNewPane(ctx context.Context, endpoint herdr.Endpoint, input startSess
 		return "shell_mismatch", paneReply(http.StatusConflict, "shell_mismatch", "新终端里正在运行 "+foreground+"，不是 zsh，启动器来自 zsh 的 alias，没有输入启动命令。新终端已保留，请到终端里查看", result, map[string]string{"foreground": foreground})
 	}
 	return "", nil
+}
+
+// .zshrc 里直接跑的命令（fastfetch、keychain、ssh-add……）在 rc 跑完前占着前台进程组，
+// 前台回到 shell 之前不能下结论。只有测试会缩短这两个值。
+var (
+	sessionForegroundWait = 10 * time.Second
+	sessionForegroundPoll = 200 * time.Millisecond
+)
+
+// waitForForegroundShell 轮询前台进程直到它是 shell，最多 sessionForegroundWait。到期时
+// 返回最后一次读到的程序名；一次都没读到才返回错误。
+func waitForForegroundShell(ctx context.Context, endpoint herdr.Endpoint, paneID string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, sessionForegroundWait)
+	defer cancel()
+	last := ""
+	for {
+		if foreground, err := foregroundProcess(ctx, endpoint, paneID); err == nil {
+			if sessionShells[foreground] {
+				return foreground, nil
+			}
+			last = foreground
+		}
+		select {
+		case <-ctx.Done():
+			if last == "" {
+				return "", errors.New("foreground process unavailable")
+			}
+			return last, nil
+		case <-time.After(sessionForegroundPoll):
+		}
+	}
 }
 
 // foregroundProcess 返回 pane 前台进程组组长的程序名（登录 shell 的 `-zsh` 记作 zsh）。
