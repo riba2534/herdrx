@@ -4,6 +4,7 @@ import type { Snapshot } from '../types'
 import { WorkbenchPage } from './WorkbenchPage'
 import { clearComposerDrafts } from '../lib/composerDrafts'
 import { clearPaneViewModes, readPaneViewMode } from '../lib/paneViewMode'
+import { resetWorkbenchModeForTest, WORKBENCH_MODE_STORAGE_KEY } from '../lib/workbenchMode'
 
 const { call, connection, retryNow } = vi.hoisted(() => ({ call: vi.fn().mockResolvedValue({}), connection: { state: 'ready' as string, message: '', retryAt: 0 }, retryNow: vi.fn() }))
 const snapshot: Snapshot = {
@@ -56,6 +57,9 @@ vi.mock('../components/TerminalPane', () => ({
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
+  // 这些用例测的是终端工作台：显式进入 Web Shell 模式（默认是 Web UI）。
+  localStorage.setItem(WORKBENCH_MODE_STORAGE_KEY, 'shell')
+  resetWorkbenchModeForTest()
   clearComposerDrafts()
   clearPaneViewModes()
   call.mockClear()

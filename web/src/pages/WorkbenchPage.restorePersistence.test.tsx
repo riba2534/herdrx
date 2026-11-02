@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { WorkbenchPage } from './WorkbenchPage'
 import { api } from '../lib/api'
 import { resetWorkbenchSessionCache } from '../lib/workbenchSession'
+import { resetWorkbenchModeForTest, WORKBENCH_MODE_STORAGE_KEY } from '../lib/workbenchMode'
 import type { Snapshot } from '../types'
 
 const snapshot: Snapshot = {
@@ -36,6 +37,8 @@ afterEach(() => vi.unstubAllGlobals())
 
 it('keeps saving manual selections after a slow restore response arrives', async () => {
   resetWorkbenchSessionCache()
+  localStorage.setItem(WORKBENCH_MODE_STORAGE_KEY, 'shell')
+  resetWorkbenchModeForTest()
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   let restored!: (value: { session: { host_id: string; workspace_id: string; tab_id: string; pane_id: string } }) => void
   vi.mocked(api.workbenchSession).mockImplementationOnce(() => new Promise((resolve) => { restored = resolve }))

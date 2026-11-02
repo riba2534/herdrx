@@ -4,25 +4,30 @@ import { Input, Form } from '../components/Form'
 import { Select, SelectOption } from '../components/Select'
 import { BrandIcon } from '../components/Brand'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { Bell, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
+import { Bell, Bot, ChevronDown, ChevronRight, ClipboardPaste, Columns2, Copy, FolderOpen, GitBranchPlus, Image as ImageIcon, Keyboard, Maximize2, Menu, Minimize2, MessageSquare, MessageSquarePlus, MoreHorizontal, Move, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Rows2, ScrollText, Search, Server, Settings, Square, SquareTerminal, TextSelect, Trash2, X, ZoomIn } from 'lucide-react'
 import { ContextMenu, type ContextMenuItem } from '../components/ContextMenu'
 import { Button, StatusDot } from '../components/ui'
 import { TerminalPane, type PaneSurfaceHandle } from '../components/TerminalPane'
 import { PaneViewToggle } from '../components/PaneViewToggle'
-import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems } from '../lib/keymap'
+import { ModeSwitch } from '../components/workbench-ui/ModeSwitch'
+import { ConsoleSurface, consoleShowsChat } from '../components/workbench-ui/ConsoleSurface'
+import { NewSessionDialog, type SessionLocation } from '../components/workbench-ui/NewSessionDialog'
+import { queueFirstMessage, useFirstMessages } from '../components/workbench-ui/firstMessage'
+import { isLocalInputTarget, isModifierKey, isPrefixChord, keymapHelpGroups, matchPrefixAction, prefixModeBarItems, type PrefixAction } from '../lib/keymap'
 import { ratioFromPointer, resizeModeBarItems, RESIZE_DIRECTIONS, splitHandleStyle, splitPathFromId, type LayoutSplit } from '../lib/layoutSplit'
 import { Composer } from '../components/Composer'
 import { DialogCard } from '../components/DialogCard'
 import { StartHerdrButton, type HerdrStartFeedback } from '../components/StartHerdr'
 import { DisplaySettings, DisplayToolbar } from '../components/DisplayControls'
 import { AppearanceToggle } from '../components/AppearanceToggle'
-import { AgentOverviewLink } from '../components/AgentOverviewLink'
+import { AgentOverviewLink, followLink } from '../components/AgentOverviewLink'
 import { useAgentSeen } from '../lib/useAgentSeen'
 import { useTerminalDisplay, useWorkbenchViewport } from '../lib/displayPreferences'
 import { needsHomeScreenForNotifications } from '../lib/pwa'
 import { api } from '../lib/api'
 import { applyModifiers, hasModifiers, herdrKeyFor, isModifiableKey, KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS, NO_MODIFIERS, pasteTextTooLarge, sanitizePasteText, STICKY_MODIFIER_KEYS, TERMINAL_AUXILIARY_EXTRA_KEYS, TERMINAL_AUXILIARY_KEYS, type StickyModifiers } from '../lib/terminalKeys'
 import { readPaneViewMode, subscribePaneViewModes, writePaneViewMode, type PaneViewMode } from '../lib/paneViewMode'
+import { useWorkbenchMode, type WorkbenchMode } from '../lib/workbenchMode'
 import { navigate } from '../lib/navigation'
 import { usePaneDeepLink, workbenchPaneURL } from '../lib/workbenchDeepLink'
 import { WorkbenchClient } from '../lib/workbench'
@@ -32,7 +37,7 @@ import { readWorkbenchSession, useWorkbenchSessionPersistence } from '../lib/wor
 import { gitWorkspaceFetchKey, isLinkedWorktree, visibleWorkspaceGroups, workspaceBranchText, workspaceGroupHasChildren, workspaceGroupKey, workspaceRepoKey } from '../lib/workspaceGroups'
 import { useWorkspaceBranches } from '../lib/useWorkspaceBranches'
 import { terminalThemes } from '../lib/themes'
-import type { Agent, Host, Layout, Pane, Snapshot, Tab, Workspace } from '../types'
+import type { Agent, Host, Layout, Pane, Snapshot, StartSessionResult, Tab, Workspace } from '../types'
 
 
 type ContextTarget =
@@ -74,6 +79,13 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [workspaceID, setWorkspaceID] = useState('')
   const [tabID, setTabID] = useState('')
   const [paneID, setPaneID] = useState('')
+  // Web UI（默认）与 Web Shell 是看同一份 workspace / tab / pane 的两种方式：切换只换本地视图，
+  // 保留当前选中的 pane，不调用任何 Herdr 接口。
+  const [mode, setMode] = useWorkbenchMode()
+  const uiMode = mode === 'ui'
+  const [newSessionOpen, setNewSessionOpen] = useState(false)
+  // 新建会话后要选中的位置：接口结果可能先于包含它的快照到达，最多等 10 秒。
+  const pendingLocation = useRef<(SessionLocation & { until: number }) | null>(null)
   const [restore, setRestore] = useState<{ phase: 'loading' | 'ready'; location: WorkbenchLocation | null }>(() => {
     const cached = peekWorkbenchSession()
     if (cached === undefined) return { phase: 'loading', location: null }
@@ -166,6 +178,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => loadCollapsedGroups(hostID))
   const [rightClickTargets, setRightClickTargets] = useState<Record<string, 'herdr' | 'pane'>>(() => loadRightClickTargets(hostID))
   const { gitWorkspaces, workspaceBranches, refreshWorkspaceBranches } = useWorkspaceBranches(client, connection, snapshot?.workspaces || [])
+  useFirstMessages(hostID, snapshot?.panes, connection === 'ready', setNotice)
   const previousStatuses = useRef(new Map<string, string>())
   const pushStatusRef = useRef<PushStatusCache['current']>(null)
   const pendingTabSelection = useRef<{ workspaceID: string; existing: Set<string> } | null>(null)
@@ -435,6 +448,19 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
 
   useEffect(() => {
     if (!snapshot) return
+    const pendingTarget = pendingLocation.current
+    if (pendingTarget) {
+      const created = snapshot.panes.find((item) => item.pane_id === pendingTarget.pane_id)
+      if (created) {
+        pendingLocation.current = null
+        setWorkspaceID(created.workspace_id)
+        setTabID(created.tab_id)
+        setPaneID(created.pane_id)
+        return
+      }
+      if (Date.now() < pendingTarget.until) return
+      pendingLocation.current = null
+    }
     if (pendingWorkspaceSelection.current) {
       const created = snapshot.workspaces.find((item) => item.workspace_id === pendingWorkspaceSelection.current)
       if (!created) return // The RPC result can precede its snapshot.
@@ -579,6 +605,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       const match = matchPrefixAction(eventOrKey)
       if (!match || !match.binding.implemented) { setActionError(''); return }
       const action = match.binding.action
+      // 这些键操作的是 Shell 模式才看得见的分屏布局；Web UI 模式下不响应。
+      if (uiMode && SHELL_ONLY_PREFIX_ACTIONS.has(action)) { setActionError(''); return }
       if (action === 'split-right') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'right', ratio: 0.5, focus: false })
       else if (action === 'split-down') await client.call('pane.split', { workspace_id: workspaceID, target_pane_id: paneID, direction: 'down', ratio: 0.5, focus: false })
       else if (action === 'zoom') await client.call('pane.zoom', { pane_id: paneID })
@@ -823,6 +851,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       { id: 'right-click', label: pane.right_click_passthrough ? '恢复 Herdrx 右键菜单' : '将右键发送给终端（Shift+右键仍打开本菜单）', icon: <Menu size={15}/>, separatorBefore: true, onSelect: () => runAction(async () => { const value = pane.right_click_passthrough ? 'herdr' : 'pane'; await client.call('pane.input.set', { pane_id: pane.pane_id, right_click: value }); setPaneRightClickTarget(pane.pane_id, value) }) },
       { id: 'close', label: '关闭终端', icon: <Trash2 size={15}/>, danger: true, separatorBefore: true, onSelect: async () => { if (await confirm('关闭这个终端？其中运行的进程也会结束。', { title: '关闭终端', confirmLabel: '关闭终端' })) runAction(async () => { await client.call('pane.close', { pane_id: pane.pane_id }) }) } },
     )
+    // Web UI 模式没有终端画布：去掉只对 xterm 有意义的项，补一个「在 Shell 中打开」。
+    if (uiMode) return [{ id: 'open-shell', label: '在 Shell 中打开', icon: <SquareTerminal size={15}/>, onSelect: () => openPaneInShell(pane.pane_id) }, ...items.filter((item) => !SHELL_ONLY_PANE_ITEMS.has(item.id))]
     return items
   }
 
@@ -887,6 +917,39 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const selectTab = (tab: Tab) => { const fromSwitcher = switcherOpen; userPickedLocation.current = true; setMobileToolsOpen(false); setWorkspaceID(tab.workspace_id); setTabID(tab.tab_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
   const selectAgent = (agent: Agent) => { const fromSwitcher = switcherOpen; userPickedLocation.current = true; setMobileToolsOpen(false); setWorkspaceID(agent.workspace_id); setTabID(agent.tab_id); setPaneID(agent.pane_id); setSwitcherOpen(false); afterSelectLocation(fromSwitcher) }
 
+  const switchMode = (next: WorkbenchMode) => {
+    if (next === mode) return
+    setPrefix(false)
+    setResizeMode(false)
+    setMobileToolsOpen(false)
+    setMode(next)
+  }
+  const goToLocation = (location: SessionLocation) => {
+    userPickedLocation.current = true
+    pendingLocation.current = { workspace_id: location.workspace_id, tab_id: location.tab_id, pane_id: location.pane_id, until: Date.now() + 10_000 }
+    setWorkspaceID(location.workspace_id)
+    setTabID(location.tab_id)
+    setPaneID(location.pane_id)
+  }
+  // 「在 Shell 中打开」：选中这个 pane 并切到 Shell 的终端视图（不停在对话或只读画面上）。
+  const openInShell = (location: SessionLocation) => {
+    goToLocation(location)
+    if (paneModeFor(location.pane_id) !== 'terminal') setPaneMode(location.pane_id, 'terminal')
+    setNewSessionOpen(false)
+    switchMode('shell')
+  }
+  const openPaneInShell = (targetPaneID: string) => {
+    const pane = snapshot?.panes.find((item) => item.pane_id === targetPaneID)
+    if (pane) openInShell(pane)
+  }
+  const openNewSession = () => { setContextMenu(null); setSwitcherOpen(false); setNewSessionOpen(true) }
+  const sessionStarted = (result: StartSessionResult, firstMessage: string, requestID: string) => {
+    setNewSessionOpen(false)
+    goToLocation(result)
+    queueFirstMessage(hostID, result.pane_id, firstMessage, requestID)
+    setNotice({ tone: 'ok', text: firstMessage.trim() ? '已新建会话，Claude 正在启动；就绪后会自动发送首条消息。' : '已新建会话，Claude 正在启动。' })
+  }
+
   const workspaces = snapshot?.workspaces || []
   const activeWorkspace = workspaces.find((workspace) => workspace.workspace_id === workspaceID)
   const activeWorktreeGroupKey = activeWorkspace && isLinkedWorktree(activeWorkspace) ? workspaceRepoKey(activeWorkspace) : ''
@@ -901,7 +964,8 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   // Herdr keeps every pane's split rect while a tab is zoomed. The desktop then
   // shows only the selected pane, across the whole tab, as a phone always does.
   const zoomed = !mobile && Boolean(layout?.zoomed)
-  const visiblePanes = mobile || zoomed ? panes?.filter((pane) => pane.pane_id === paneID) : panes
+  // Web UI 模式和手机一样一次只看一个 pane。
+  const visiblePanes = mobile || zoomed || uiMode ? panes?.filter((pane) => pane.pane_id === paneID) : panes
   useAgentSeen(hostID, visiblePanes?.map((pane) => pane.pane_id), snapshot?.agents)
   // Take over the pane Herdr zooms, also when its zoom moves to another pane;
   // picking a pane afterwards stays local, like every other selection here.
@@ -916,6 +980,7 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
   const showOverlay = connection === 'offline' || (connection === 'connecting' && !snapshot && Boolean(message))
   // Herdr did not answer over a working SSH connection: offer to start it there.
   const herdrMayBeDown = host?.transport === 'ssh' && client.errorCode() === 'snapshot_failed'
+  const selectedPane = snapshot?.panes.find((pane) => pane.pane_id === paneID)
   const otherPaneBlocked = (snapshot?.panes || []).some((pane) => pane.pane_id !== paneID && pane.agent_status === 'blocked')
   const beginSplitDrag = (event: ReactPointerEvent<HTMLElement>, split: LayoutSplit) => {
     if (mobile || event.pointerType === 'touch' || !layout) return
@@ -949,25 +1014,33 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     window.addEventListener('pointercancel', onUp)
   }
 
+  // 连接横幅与离线遮罩：两种模式共用，位于各自主区的最上层。
+  const connectionNotices = <>
+    {showBanner && <div className="connection-banner" role="status"><span>{connectionLabel(connection)}{message ? ` · ${message}` : ''}{retrySeconds ? ` · ${retrySeconds} 秒后重试` : ''}</span><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>}
+    {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>{herdrMayBeDown && host && <><p className="connection-overlay-hint">远程主机上的 Herdr 可能没有运行。</p><StartHerdrButton host={host} className="button-secondary" onStarted={(feedback) => { setNotice(feedback); client.retryNow() }}/>{uiMode && <Button className="button-secondary" onClick={openNewSession}><MessageSquarePlus size={15}/>新建 Claude 会话</Button>}</>}</div>}
+  </>
   return <div ref={workbenchRef} className={`workbench ${mobile ? 'workbench-compact' : ''} ${shortWorkbench ? 'workbench-short' : ''} ${keyboardOpen ? 'workbench-keyboard' : ''} ${!mobile && !sidebarOpen ? 'workbench-sidebar-closed' : ''}`} data-window-form={attachForm} style={{ '--workbench-height': `${viewportHeight}px`, '--workbench-offset-top': `${viewportOffsetTop}px`, '--terminal': terminalTheme.background, '--terminal-ink': terminalTheme.foreground, '--terminal-cursor': terminalTheme.cursor } as CSSProperties}>
     <h1 className="workbench-title">{host?.name || '工作台'}</h1>
-    {mobile ? <header className="mobile-topbar" aria-label="工作台导航">
+    {mobile ? <header className={`mobile-topbar${uiMode ? '' : ' mobile-topbar-shell'}`} aria-label="工作台导航">
       <button className="mobile-location" aria-label="切换工作区或终端" aria-haspopup="dialog" onClick={() => setSwitcherOpen(true)}>
         <span className={`mobile-menu-wrap${otherPaneBlocked ? ' mobile-menu-blocked' : ''}`}><Menu size={18}/></span>
         <StatusDot status={activePane?.agent_status || 'unknown'}/>
         <span><strong>{activeWorkspace?.label || '工作区'}</strong><small>{host?.name || '连接中…'} · {activeTab?.label || '终端'}{(panes?.length || 0) > 1 ? ` · ${activePane?.label || activePane?.agent || `${(panes?.findIndex((pane) => pane.pane_id === paneID) || 0) + 1}/${panes?.length}`}` : ''}</small></span>
       </button>
       <div className={`connection connection-${connection}`} aria-label={connectionLabel(connection)} data-tooltip={connectionLabel(connection)}><span/><span>{connectionLabel(connection)}</span></div>
-      {paneID && <PaneViewToggle className="mobile-view-toggle" mode={paneModeFor(paneID)} onChange={(mode) => togglePaneMode(paneID, mode)}/>}
-      <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => {
-        const next = !open
-        keysDismissedRef.current = !next
-        if (shortWorkbench && next) patchInput({ composerOpen: false })
-        else if (shortWorkbench && !next) patchInput({ composerOpen: true })
-        return next
-      })}><Keyboard size={18}/></Button>
-      <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
-      <AgentOverviewLink compact className="tool-button"/>
+      <ModeSwitch mode={mode} onChange={switchMode}/>
+      {uiMode ? <Button className="tool-button" aria-label="新建 Claude 会话" disabled={connection !== 'ready'} onClick={openNewSession}><MessageSquarePlus size={18}/></Button> : <>
+        {paneID && <PaneViewToggle className="mobile-view-toggle" mode={paneModeFor(paneID)} onChange={(mode) => togglePaneMode(paneID, mode)}/>}
+        <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => {
+          const next = !open
+          keysDismissedRef.current = !next
+          if (shortWorkbench && next) patchInput({ composerOpen: false })
+          else if (shortWorkbench && !next) patchInput({ composerOpen: true })
+          return next
+        })}><Keyboard size={18}/></Button>
+        <button type="button" ref={mobileToolsTrigger} className="button tool-button" aria-label="终端工具" data-terminal-controls-trigger aria-expanded={mobileToolsOpen} onClick={() => setMobileToolsOpen((value) => !value)}><MoreHorizontal size={20}/></button>
+      </>}
+      <AgentOverviewLink compact className={`tool-button${uiMode ? '' : ' mobile-shell-hidden'}`}/>
       <Button className="tool-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={18}/></Button>
     </header> : <header className="hostbar" aria-label="主机导航">
       <button className="hostbar-home" aria-label="返回主机列表" data-tooltip="管理主机" onClick={() => navigate('/')}><BrandIcon/><span>herdrx</span></button>
@@ -980,12 +1053,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         }}>{item.name}</a>)}
       </nav>
       <Button className="tool-button" aria-label="重命名当前主机" data-tooltip="重命名当前主机" disabled={!host} onClick={() => { if (host) openPrompt({ title: '重命名主机', label: '主机名称', value: host.name, submitLabel: '保存名称', onSubmit: async (name) => { const result = await api.renameHost(hostID, name); setHost(result.host); setAvailableHosts((current) => current.map((item) => item.id === hostID ? result.host : item)) } }) }}><Pencil size={13}/></Button>
+      <ModeSwitch mode={mode} onChange={switchMode}/>
       <div className={`connection connection-${connection}`} data-tooltip={hostListError || undefined}><span/><span>{hostConnectionText(connection, host?.transport, hostListError)}</span><Button className="tool-button hostbar-switcher" aria-label="切换工作区或终端" data-tooltip={`切换工作区或终端 · ${activeWorkspace?.label || ""} / ${activeTab?.label || ""} · Ctrl+B W`} onClick={() => setSwitcherOpen(true)}><Menu size={14}/></Button><Button className="tool-button" aria-label="工作台设置" data-tooltip="工作台设置" onClick={() => setSettingsOpen(true)}><Settings size={14}/></Button><Button className="tool-button hostbar-reconnect" aria-label="重新连接" data-tooltip="重新连接" onClick={() => client.retryNow()}><RefreshCw size={13}/></Button></div>
       <AgentOverviewLink compact className="hostbar-agents"/>
     </header>}
     {mobile && (panes?.length || 0) > 1 && <nav className="mobile-pane-chips" aria-label="切换终端">{panes!.map((pane) => <button type="button" key={pane.pane_id} className={`mobile-pane-chip${pane.pane_id === paneID ? ' mobile-pane-chip-active' : ''}`} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); afterSelectLocation() }}><StatusDot status={pane.agent_status || 'unknown'}/>{paneDisplayName(pane)}</button>)}</nav>}
     {!mobile && <aside className="workbench-sidebar" onContextMenu={(event) => openContextMenu(event, { kind: 'sidebar' })}>
-      <SidebarSection title="工作区" action={<button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={14}/><span>{workspaceBusy ? '创建中…' : '新建'}</span></button>}>
+      <SidebarSection title="工作区" action={<span className="sidebar-section-actions">
+        {uiMode && <button className="workspace-create" aria-label="新建 Claude 会话" data-tooltip="新建 Claude 会话" disabled={connection !== 'ready'} onClick={openNewSession}><MessageSquarePlus size={14}/><span>Claude</span></button>}
+        <button className="workspace-create" aria-label="新建工作区" disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={14}/><span>{workspaceBusy ? '创建中…' : '新建'}</span></button>
+      </span>}>
         {workspaceGroups.map((group) => {
           // `group.key` is a repo path and need not be unique, so the React key and
           // the DOM id come from the parent workspace, which is emitted once.
@@ -1007,13 +1084,14 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
       {!mobile && <header className="tabbar">
         <div className={`tabs-scroller${tabOverflow.left ? ' tabs-overflow-left' : ''}${tabOverflow.right ? ' tabs-overflow-right' : ''}`}><div className="tabs" ref={tabsRef}>{tabs.map((tab) => <div className={tab.tab_id === tabID ? 'tab tab-active' : 'tab'} key={tab.tab_id} onContextMenu={(event) => openContextMenu(event, { kind: 'tab', tab })}><button className="tab-select" aria-pressed={tab.tab_id === tabID} data-tooltip={tab.label} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/>{tab.label !== String(tab.number) && <small className="tab-number">{tab.number}</small>}<span>{tab.label}{layout?.zoomed && tab.tab_id === tabID ? ' Z' : ''}</span></button><button className="tab-close" aria-label={`关闭标签页 ${tab.label}`} data-tooltip="关闭标签页" onClick={() => void closeTab(tab)}><X size={12}/></button></div>)}<button className="tab-add" aria-label="新建标签页" data-tooltip="新建标签页" onClick={() => runAction(createTab)}><Plus size={14}/></button></div></div>
         <span className="tabbar-summary" data-tooltip={activeWorkspace?.label}>{activeWorkspace?.label} · {terminalCountLabel(panes?.length || 0)}</span>
-        {coarse && <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" data-tooltip="Esc、Ctrl、方向键等辅助键" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => { keysDismissedRef.current = open; return !open })}><Keyboard size={16}/></Button>}
-        <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
+        {uiMode ? <Button className="tool-button tabbar-new-session" aria-label="新建 Claude 会话" data-tooltip="在这台主机上新建 Claude 会话" disabled={connection !== 'ready'} onClick={openNewSession}><MessageSquarePlus size={14}/>新建 Claude 会话</Button> : <>
+          {coarse && <Button className="tool-button" aria-label="终端辅助键" aria-expanded={auxiliaryKeysOpen} aria-controls="terminal-auxiliary-keys" data-tooltip="Esc、Ctrl、方向键等辅助键" onPointerDown={(event) => event.preventDefault()} onClick={() => setAuxiliaryKeysOpen((open) => { keysDismissedRef.current = open; return !open })}><Keyboard size={16}/></Button>}
+          <Button className="tool-button" aria-label="本地输入框" aria-pressed={composerOpen} data-tooltip="在本地编辑后再整段发送" onClick={() => setDesktopInput((current) => ({ composerOpen: !current.composerOpen, directInput: current.composerOpen }))}>本地输入</Button>
+        </>}
       </header>}
 
-      <section className="terminal-surface" aria-label="终端工作区" ref={surfaceRef}>
-        {showBanner && <div className="connection-banner" role="status"><span>{connectionLabel(connection)}{message ? ` · ${message}` : ''}{retrySeconds ? ` · ${retrySeconds} 秒后重试` : ''}</span><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>}
-        {showOverlay && <div className={`connection-overlay${connection === 'offline' ? ' connection-overlay-offline' : ''}`}><Server size={28}/><h2>{connection === 'connecting' ? '正在连接主机' : '主机暂时不可用'}</h2><p>{message || '正在建立安全连接…'}{retrySeconds ? ` ${retrySeconds} 秒后重试` : ''}</p><div className="connection-overlay-actions"><Button className="button-primary" onClick={() => client.retryNow()}>立即重连</Button><Button className="button-secondary" onClick={() => navigate('/')}>返回主机</Button></div>{herdrMayBeDown && host && <><p className="connection-overlay-hint">远程主机上的 Herdr 可能没有运行。</p><StartHerdrButton host={host} className="button-secondary" onStarted={(feedback) => { setNotice(feedback); client.retryNow() }}/></>}</div>}
+      {uiMode ? <ConsoleSurface hostID={hostID} client={client} panes={panes || snapshot?.panes.filter((pane) => pane.tab_id === tabID) || []} paneID={paneID} onSelectPane={(target) => { userPickedLocation.current = true; setPaneID(target) }} compact={mobile} connected={connection === 'ready'} connectionEpoch={connectionEpoch} loading={!snapshot && !message} showPanePicker={!mobile} onOpenInShell={openPaneInShell} onShell={() => switchMode('shell')} onNewSession={openNewSession} overlay={connectionNotices}/> : <section className="terminal-surface" aria-label="终端工作区" ref={surfaceRef}>
+        {connectionNotices}
         {visiblePanes?.map((pane) => {
           const interactivePane = { ...pane, right_click_passthrough: rightClickTargets[pane.pane_id] === 'pane' }
           // Herdr resizes only the zoomed pane to the whole area; another pane
@@ -1025,15 +1103,16 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
         })}
         {!snapshot && !message && <div className="terminal-loading"><i/><span>加载 Herdr 会话…</span></div>}
         {!mobile && !layout?.zoomed && layout?.splits.map((split) => <div key={split.id} role="separator" aria-orientation={split.direction === 'right' ? 'vertical' : 'horizontal'} aria-label={split.direction === 'right' ? '左右调整分屏' : '上下调整分屏'} className={`split-resize-handle split-resize-handle-${split.direction}${splitDrag?.id === split.id ? ' split-resize-handle-active' : ''}`} style={splitHandleStyle(layout, split, splitDrag?.id === split.id ? splitDrag.ratio : undefined)} onPointerDown={(event) => beginSplitDrag(event, split)}/>)}
-      </section>
+      </section>}
 
       {resizeMode && <div className="mode-bar"><strong>调整分屏 RESIZE</strong>{resizeModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {prefix && !resizeMode && <div className="mode-bar"><strong>前缀模式 PREFIX</strong>{prefixModeBarItems().map((item) => <span key={item}>{item}</span>)}</div>}
       {notice && !actionError && !switcherOpen && <div className={`action-toast action-toast-${notice.tone}`} role="status"><span>{notice.text}</span><button aria-label="关闭提示" onClick={() => setNotice(null)}><X size={14}/></button></div>}
       {actionError && !switcherOpen && <div className="action-toast" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={14}/></button></div>}
       {/* 当前 pane 的 Agent 在等选择时，浮出对话框答题卡片（认不出的对话框不出卡片）。 */}
-      {snapshot?.panes.find((pane) => pane.pane_id === paneID)?.agent_status === 'blocked' && connection === 'ready' && <div className="workbench-dialog-card"><DialogCard key={`${hostID}\n${paneID}`} primary hostID={hostID} paneID={paneID}/></div>}
-      {((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
+      {/* Web UI 模式的 Claude pane 由对话视图自己显示交互卡片。 */}
+      {selectedPane?.agent_status === 'blocked' && connection === 'ready' && !(uiMode && consoleShowsChat(selectedPane)) && <div className="workbench-dialog-card"><DialogCard key={`${hostID}\n${paneID}`} primary hostID={hostID} paneID={paneID}/></div>}
+      {!uiMode && ((!chatOpen && (composerOpen || mobile || screenOpen)) || (touchKeys && auxiliaryKeysOpen)) && <div className="workbench-dock" ref={dockRef}>
       {!chatOpen && <Composer compact={mobile} hostID={hostID} paneID={paneID} visible={composerOpen || screenOpen} directInput={directInput && !screenOpen} localOnly={screenOpen} sendDisabled={connection !== 'ready'} placeholder={disconnected ? '主机未连接，暂不能发送' : undefined} onDirectInput={focusDirectInput} onLocalInput={() => patchInput({ composerOpen: true, directInput: false })} onPasteImages={(files) => void pasteImages(files)}/>}
       {touchKeys && auxiliaryKeysOpen && <div id="terminal-auxiliary-keys" className="keybar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }} role="toolbar" aria-label="终端辅助键">
         {[...TERMINAL_AUXILIARY_KEYS, ...TERMINAL_AUXILIARY_EXTRA_KEYS].map((key) => <Fragment key={key.id}>
@@ -1049,16 +1128,17 @@ export function WorkbenchPage({ hostID }: { hostID: string }) {
     {switcherOpen && <Modal title="切换工作区或终端" className="switcher" closeLabel="关闭切换位置" onClose={() => setSwitcherOpen(false)}>
       <SwitcherGroup title="终端">{panes?.map((pane) => <button key={pane.pane_id} aria-pressed={pane.pane_id === paneID} onClick={() => { setPaneID(pane.pane_id); setSwitcherOpen(false); afterSelectLocation(true) }}><StatusDot status={pane.agent_status || 'unknown'}/><span><strong>{paneDisplayName(pane)}</strong><small>{pane.cwd}</small></span></button>)}</SwitcherGroup>
       <SwitcherGroup title="标签页"><button onClick={() => { setSwitcherOpen(false); runAction(createTab) }}><Plus size={16}/><span><strong>新建标签页</strong></span></button>{tabs.map((tab) => <button aria-pressed={tab.tab_id === tabID} key={tab.tab_id} onClick={() => selectTab(tab)}><StatusDot status={tab.agent_status}/><span><strong>{tab.number} · {tab.label}</strong><small>{terminalCountLabel(tab.pane_count)}</small></span></button>)}</SwitcherGroup>
-      <SwitcherGroup title="工作区"><button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspaceSwitcherDetail(workspace.pane_count, workspaceBranchText(workspace, workspaceBranches))}</small></span></button>)}</SwitcherGroup>
+      <SwitcherGroup title="工作区">{uiMode && <button disabled={connection !== 'ready'} onClick={openNewSession}><MessageSquarePlus size={16}/><span><strong>新建 Claude 会话</strong><small>在远程主机的目录里启动 Claude</small></span></button>}<button disabled={workspaceBusy || connection !== 'ready'} onClick={() => void createWorkspace()}><Plus size={16}/><span><strong>新建工作区</strong></span></button>{workspaces.map((workspace) => <button aria-current={workspace.workspace_id === workspaceID ? 'true' : undefined} key={workspace.workspace_id} onClick={() => selectWorkspace(workspace)}><StatusDot status={workspace.agent_status}/><span><strong>{workspace.number} · {workspace.label}</strong><small>{workspaceSwitcherDetail(workspace.pane_count, workspaceBranchText(workspace, workspaceBranches))}</small></span></button>)}</SwitcherGroup>
       {agents.length > 0 && <SwitcherGroup title="Agent">{agents.map((agent) => <button key={agent.pane_id} onClick={() => selectAgent(agent)}><StatusDot status={agent.agent_status}/><span><strong>{agent.name || agent.agent}</strong><small>{workspaceName(workspaces, agent.workspace_id)} · {agentStatusLabel(agent.agent_status)}</small></span></button>)}</SwitcherGroup>}
-      <SwitcherGroup title="主机"><a className="switcher-host-manage" href="/" onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('/') }}><Server size={16}/><span><strong>管理主机</strong></span></a>{hostEntries.map((item) => <a key={item.id} href={`/h/${encodeURIComponent(item.id)}`} className={item.id === hostID ? 'host-tab-active' : ''} aria-current={item.id === hostID ? 'page' : undefined} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); setSwitcherOpen(false); navigate(`/h/${encodeURIComponent(item.id)}`) }}><Server size={16}/><span><strong>{item.name}</strong></span></a>)}</SwitcherGroup>
-      <SwitcherGroup title="操作">{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{paneID && <button aria-pressed={paneModeFor(paneID) === 'screen'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'screen' ? 'terminal' : 'screen'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'screen' ? <SquareTerminal size={16}/> : <ScrollText size={16}/>}<span><strong>{paneModeFor(paneID) === 'screen' ? '切换到终端视图' : '切换到画面视图'}</strong><small>{paneModeFor(paneID) === 'screen' ? '回到完整终端' : '按屏幕宽度重排终端文字，不改远端尺寸'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button><button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button><button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
+      <SwitcherGroup title="主机"><a className="switcher-host-manage" href="/" onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate('/') }}><Server size={16}/><span><strong>管理主机</strong></span></a>{mobile && !uiMode && <a className="switcher-host-manage" href="/agents" onClick={followLink('/agents')}><Bot size={16}/><span><strong>Agent 总览</strong></span></a>}{hostEntries.map((item) => <a key={item.id} href={`/h/${encodeURIComponent(item.id)}`} className={item.id === hostID ? 'host-tab-active' : ''} aria-current={item.id === hostID ? 'page' : undefined} onClick={(event) => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); setSwitcherOpen(false); navigate(`/h/${encodeURIComponent(item.id)}`) }}><Server size={16}/><span><strong>{item.name}</strong></span></a>)}</SwitcherGroup>
+      <SwitcherGroup title="操作">{!uiMode && <>{paneID && <button aria-pressed={paneModeFor(paneID) === 'chat'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'chat' ? 'terminal' : 'chat'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'chat' ? <SquareTerminal size={16}/> : <MessageSquare size={16}/>}<span><strong>{paneModeFor(paneID) === 'chat' ? '切换到终端视图' : '切换到对话视图'}</strong><small>{paneModeFor(paneID) === 'chat' ? '回到完整终端' : '读取终端文本并发送输入'}</small></span></button>}{paneID && <button aria-pressed={paneModeFor(paneID) === 'screen'} onClick={() => { togglePaneMode(paneID, paneModeFor(paneID) === 'screen' ? 'terminal' : 'screen'); setSwitcherOpen(false) }}>{paneModeFor(paneID) === 'screen' ? <SquareTerminal size={16}/> : <ScrollText size={16}/>}<span><strong>{paneModeFor(paneID) === 'screen' ? '切换到终端视图' : '切换到画面视图'}</strong><small>{paneModeFor(paneID) === 'screen' ? '回到完整终端' : '按屏幕宽度重排终端文字，不改远端尺寸'}</small></span></button>}{mobile && <button onClick={() => { patchInput({ composerOpen: !composerOpen }); setSwitcherOpen(false) }}><Keyboard size={16}/><span><strong>{composerOpen ? '收起输入框' : '打开输入框'}</strong></span></button>}</>}<button onClick={() => void runPrefixAction('v')}><Columns2 size={16}/><span><strong>左右分屏</strong></span></button><button onClick={() => void runPrefixAction('-')}><Rows2 size={16}/><span><strong>上下分屏</strong></span></button>{!uiMode && <button onClick={() => void runPrefixAction('z')}><ZoomIn size={16}/><span><strong>聚焦当前终端</strong></span></button>}<button onClick={() => { setSwitcherOpen(false); setSettingsOpen(true) }}><Settings size={16}/><span><strong>设置</strong></span></button></SwitcherGroup>
       {actionError && <div className="switcher-feedback" role="alert"><span>{actionError}</span><button aria-label="关闭错误提示" onClick={() => setActionError('')}><X size={16}/></button></div>}
     </Modal>}
     {settingsOpen && <Modal title="工作台设置" className="settings-modal" closeLabel="关闭设置" onClose={() => setSettingsOpen(false)}><div className="form-stack"><div className="setting-row"><span><strong>界面外观</strong><small>导航与弹窗配色；网站和终端主题单独设置。</small></span><AppearanceToggle scope="workbench"/></div><DisplaySettings display={display} mobile={mobile} profile={displayProfile} onChange={updateDisplay} onReset={resetDisplay}/><label className="field"><span className="field-label">终端主题</span><Select aria-label="终端主题" className="input" value={themeName} onChange={(event) => { setThemeName(event.target.value); localStorage.setItem('herdrx.terminal-theme', event.target.value) }}>{Object.keys(terminalThemes).map((name) => <SelectOption key={name}>{name}</SelectOption>)}</Select></label><label className="setting-toggle"><Input type="checkbox" checked={enhancedContrast} onChange={(event) => { setEnhancedContrast(event.target.checked); localStorage.setItem('herdrx.enhanced-contrast', String(event.target.checked)) }}/><span><strong>增强终端对比度</strong><small>默认关闭，以免改写主题原色。开启后会提高低对比色的可读性。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={optionAsMeta} onChange={(event) => { setOptionAsMeta(event.target.checked); localStorage.setItem('herdrx.option-as-meta', String(event.target.checked)) }}/><span><strong>Option 作为 Meta</strong><small>Mac 默认开启。Option 组合键按 Meta 发送，并在按住 Option 点击时强制选择文本。</small></span></label><label className="setting-toggle"><Input type="checkbox" checked={screenReaderMode} onChange={(event) => { setScreenReaderMode(event.target.checked); localStorage.setItem('herdrx.screen-reader-mode', String(event.target.checked)) }}/><span><strong>屏幕阅读器模式</strong><small>让终端向辅助技术暴露可朗读的输出。</small></span></label><div className="setting-row"><span><strong>快捷键</strong><small>查看 Ctrl+B 前缀键位。</small></span><Button className="button-secondary" onClick={() => { setSettingsOpen(false); setHelpOpen(true) }}><Keyboard size={15}/>快捷键</Button></div><div className="setting-row"><span><strong>Agent 通知</strong><small>{notificationHint}</small></span><Button className="button-secondary" disabled={iosWithoutNotification || notificationPermission === 'denied'} onClick={async () => { setNotificationPermission(await enablePushNotifications()); pushStatusRef.current = null }}><Bell size={15}/>{notificationButtonLabel}</Button></div><Button className="button-primary" onClick={() => setSettingsOpen(false)}>完成</Button></div></Modal>}
     {helpOpen && <Modal title="快捷键" className="keymap-modal" closeLabel="关闭快捷键" onClose={() => setHelpOpen(false)}><div className="keymap-help">{keymapHelpGroups().map((group) => <section key={group.id} className="keymap-group"><h3>{group.title}</h3><ul>{group.entries.map((entry) => <li key={entry.chord} className={entry.implemented ? undefined : 'keymap-unimplemented'}><kbd>{entry.chord}</kbd><span>{entry.label}</span></li>)}</ul></section>)}</div></Modal>}
     {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenuLabel(contextMenu.target.kind)} items={contextItems(contextMenu.target)} onClose={() => setContextMenu(null)}/>}
     {prompt && <Modal title={prompt.title} className="prompt-modal" busy={promptBusy} onClose={() => setPrompt(null)}><Form className="form-stack" onSubmit={(event) => void submitPrompt(event)}><label className="field"><span className="field-label">{prompt.label}</span><Input aria-label={prompt.label} className={promptError ? 'input input-error' : 'input'} name="value" defaultValue={prompt.value} placeholder={prompt.placeholder} data-initial-focus autoComplete="off" aria-invalid={Boolean(promptError)} aria-describedby={promptError ? 'prompt-error' : undefined}/>{promptError && <span className="field-error" id="prompt-error" role="alert">{promptError}</span>}</label><div className="modal-actions"><Button type="button" className="button-secondary" disabled={promptBusy} onClick={() => setPrompt(null)}>取消</Button><Button type="submit" className="button-primary" pending={promptBusy}>{prompt.submitLabel}</Button></div></Form></Modal>}
+    {newSessionOpen && <NewSessionDialog hostID={hostID} snapshot={snapshot} workspaceID={workspaceID} defaultCwd={activePane?.cwd} onClose={() => setNewSessionOpen(false)} onStarted={sessionStarted} onOpenInShell={openInShell}/>}
     {confirmationDialog}
   </div>
 }
@@ -1091,6 +1171,9 @@ function workspaceSidebarItem(workspace: Workspace, options: {
     </button>
   </div>
 }
+
+const SHELL_ONLY_PREFIX_ACTIONS = new Set<PrefixAction>(['zoom', 'resize-mode', 'swap-left', 'swap-down', 'swap-up', 'swap-right'])
+const SHELL_ONLY_PANE_ITEMS = new Set(['copy', 'paste', 'select-all', 'clear-selection', 'search', 'view-mode', 'view-terminal', 'view-chat', 'zoom', 'right-click'])
 
 function SidebarSection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return <section className="sidebar-section"><div className="sidebar-section-title"><span>{title}</span>{action}</div><div className="sidebar-list">{children}</div></section>
