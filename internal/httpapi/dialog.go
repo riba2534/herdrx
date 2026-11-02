@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -101,8 +102,9 @@ func dialogKeys(dialog *screenparse.Dialog, index int) []string {
 	if target < 0 {
 		return nil
 	}
-	// 超过 9 个选项时数字键有歧义，一律走方向键。
-	if dialog.Numbered && len(dialog.Options) <= 9 {
+	// 超过 9 个选项时数字键有歧义，一律走方向键。光标停在自由输入项上时数字会被打进输入框，
+	// 同样走方向键。
+	if dialog.Numbered && len(dialog.Options) <= 9 && !dialog.FreeText {
 		return []string{strconv.Itoa(index)}
 	}
 	if current < 0 {
@@ -116,6 +118,45 @@ func dialogKeys(dialog *screenparse.Dialog, index int) []string {
 		keys = append(keys, "Up")
 	}
 	return append(keys, "Enter")
+}
+
+// paneLocks 是按 key（host+pane）分开的互斥锁；等锁可以随 context 放弃，没人用的锁随即删除。
+type paneLocks struct {
+	mu    sync.Mutex
+	locks map[string]*paneLock
+}
+
+type paneLock struct {
+	held  chan struct{}
+	users int
+}
+
+func (l *paneLocks) lock(ctx context.Context, key string) (func(), error) {
+	l.mu.Lock()
+	if l.locks == nil {
+		l.locks = make(map[string]*paneLock)
+	}
+	entry := l.locks[key]
+	if entry == nil {
+		entry = &paneLock{held: make(chan struct{}, 1)}
+		l.locks[key] = entry
+	}
+	entry.users++
+	l.mu.Unlock()
+	leave := func() {
+		l.mu.Lock()
+		if entry.users--; entry.users == 0 {
+			delete(l.locks, key)
+		}
+		l.mu.Unlock()
+	}
+	select {
+	case entry.held <- struct{}{}:
+		return func() { <-entry.held; leave() }, nil
+	case <-ctx.Done():
+		leave()
+		return nil, ctx.Err()
+	}
 }
 
 func (a *API) answerPaneDialog(writer http.ResponseWriter, request *http.Request) {
@@ -133,6 +174,14 @@ func (a *API) answerPaneDialog(writer http.ResponseWriter, request *http.Request
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), paneDialogTimeout)
 	defer cancel()
+	// 读屏核对到按键之间按 pane 串行：两个浏览器同时作答时，后一个要读到前一个按键之后的画面，
+	// 不然两次都通过核对，第二次按键会落到下一题上。
+	unlock, err := a.prompts.answers.lock(ctx, host.ID+"\x00"+paneID)
+	if err != nil {
+		writeError(writer, http.StatusConflict, "dialog_busy", "另一次作答还没结束，这次什么都没有按。请刷新卡片后重试")
+		return
+	}
+	defer unlock()
 	endpoint, text, ok := a.openPaneScreen(ctx, writer, host, paneID)
 	if !ok {
 		return

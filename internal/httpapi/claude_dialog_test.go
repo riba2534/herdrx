@@ -1,11 +1,19 @@
 package httpapi
 
 import (
+	"context"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/riba2534/herdrx/internal/screenparse"
 )
 
 // claudeScreen 读 screenparse 的真实全屏画面夹具（Claude Code 2.1.316，已脱敏）。
@@ -49,7 +57,11 @@ func TestDialogAnswerPressesTheRightKeysForClaudeDialogs(t *testing.T) {
 	}{
 		{"question-multi", 2, `["2"]`},
 		{"question-multi", 4, `["4"]`},
-		{"question-typesomething", 1, `["1"]`},
+		// 光标停在自由输入项上（打没打字都一样）：数字会进输入框，从光标处用方向键移过去。
+		{"question-typesomething", 1, `["Up","Up","Enter"]`},
+		{"question-typed", 4, `["Down","Enter"]`},
+		{"plan-feedback", 1, `["Up","Up","Enter"]`},
+		{"plan-feedback-typed", 3, `["Enter"]`},
 		{"question-multi-submit", 1, `["1"]`},
 		{"plan-dialog", 1, `["1"]`},
 		{"plan-dialog", 3, `["3"]`},
@@ -96,5 +108,125 @@ func TestPromptGuardOnClaudeDialogs(t *testing.T) {
 			f := newPromptFixture(t, claudeScreen(t, name))
 			f.prompt(t, map[string]any{"text": "继续", "submit": true, "client_msg_id": "m1"}, 200)
 		})
+	}
+}
+
+// 布局变了、“Chat about this”上面是带说明的真实选项：光标停在它上面时照常拦截发送。
+func TestPromptRefusesARealOptionAboveChat(t *testing.T) {
+	lines := strings.Split(screenparse.Plain(claudeScreen(t, "question-multi")), "\n")
+	if i := slices.Index(lines, "  3. Type something."); i >= 0 {
+		lines = slices.Delete(lines, i, i+2) // 去掉“Type something.”和它下面的分隔线
+	}
+	screen := strings.NewReplacer("  4. Chat about this", "  3. Chat about this", "❯ 1. pytest", "  1. pytest", "  2. unittest", "❯ 2. unittest").Replace(strings.Join(lines, "\n"))
+	if dialog := screenparse.ParseDialog(screen); dialog == nil || dialog.Kind != screenparse.KindQuestion || dialog.Selected() != 1 {
+		t.Fatalf("dialog=%+v", dialog)
+	}
+	f := newPromptFixture(t, screen)
+	if result := f.prompt(t, map[string]any{"text": "1", "submit": true, "client_msg_id": "m1"}, 409); result["code"] != "pane_dialog" {
+		t.Fatalf("result=%v", result)
+	}
+	if len(f.endpoint.callsOf("pane.send_input")) != 0 {
+		t.Fatal("text was typed into a dialog")
+	}
+}
+
+// 两个浏览器同时作答同一个对话框：读屏核对到按键之间按 pane 串行，后一个读到的是前一个按键
+// 之后的下一题，指纹不符，什么都不按。
+func TestConcurrentAnswersPressKeysOnce(t *testing.T) {
+	f := newPromptFixture(t, claudeScreen(t, "question-multi"))
+	fingerprint := f.dialog(t)["fingerprint"]
+	next := claudeScreen(t, "question-multi-step2")
+	var once sync.Once
+	f.endpoint.beforeKeys = func() {
+		once.Do(func() {
+			// 给另一个请求读屏的机会（不串行时它会在这时读到还没变的画面），然后这次按键生效。
+			deadline := time.Now().Add(500 * time.Millisecond)
+			for len(f.endpoint.callsOf("pane.read")) < 3 && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			f.endpoint.setScreen(next)
+		})
+	}
+	results := make(chan map[string]any, 2)
+	for range 2 {
+		go func() {
+			results <- requestJSONNoFatal(f.client, f.url("/dialog/answer"), f.csrf, map[string]any{"fingerprint": fingerprint, "option_index": 1})
+		}()
+	}
+	first, second := <-results, <-results
+	if len(keysSent(f)) != 1 {
+		t.Fatalf("keys=%q", keysSent(f))
+	}
+	if !slices.Contains([]any{first["code"], second["code"]}, "dialog_changed") || (first["ok"] != true && second["ok"] != true) {
+		t.Fatalf("first=%v second=%v", first, second)
+	}
+}
+
+// 锁只管同一个 pane：一个 pane 的按键卡住时，另一个 pane 照常作答。
+func TestAnswersOnDifferentPanesDoNotWait(t *testing.T) {
+	f := newPromptFixture(t, claudeScreen(t, "question-multi"))
+	fingerprint := f.dialog(t)["fingerprint"]
+	entered, release := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	f.endpoint.beforeKeys = func() {
+		// 只卡住第一次按键；sync.Once 会让后来的调用也等着，不能用。
+		if first.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+	}
+	defer close(release)
+	go requestJSONNoFatal(f.client, f.url("/dialog/answer"), f.csrf, map[string]any{"fingerprint": fingerprint, "option_index": 1})
+	<-entered
+	other := make(chan map[string]any, 1)
+	go func() {
+		other <- requestJSONNoFatal(f.client, f.server+"/api/hosts/prompt-host/panes/"+url.PathEscape("w1:p2")+"/dialog/answer", f.csrf, map[string]any{"fingerprint": fingerprint, "option_index": 2})
+	}()
+	select {
+	case result := <-other:
+		if result["ok"] != true {
+			t.Fatalf("other pane=%v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("an answer on another pane waited for this pane's lock")
+	}
+}
+
+// 作答锁按 host+pane 分开、等锁可以放弃，用完即删。
+func TestPaneLocks(t *testing.T) {
+	var locks paneLocks
+	unlock, err := locks.lock(t.Context(), "h\x00p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := locks.lock(t.Context(), "h\x00p2")
+	if err != nil {
+		t.Fatal("another pane waited for the first pane's lock")
+	}
+	other()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := locks.lock(ctx, "h\x00p1"); err == nil {
+		t.Fatal("the same pane was locked twice")
+	}
+	unlock()
+	again, err := locks.lock(t.Context(), "h\x00p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again()
+	if len(locks.locks) != 0 {
+		t.Fatalf("locks left behind: %v", locks.locks)
+	}
+}
+
+// 光标停在自由输入项上时不按数字键。
+func TestDialogKeysFromAFreeTextCursor(t *testing.T) {
+	dialog := &screenparse.Dialog{Numbered: true, FreeText: true, Options: []screenparse.Option{{Index: 1}, {Index: 2}, {Index: 3, Selected: true}, {Index: 4}}}
+	if got := strings.Join(dialogKeys(dialog, 1), ","); got != "Up,Up,Enter" {
+		t.Fatalf("keys=%s", got)
+	}
+	if got := strings.Join(dialogKeys(dialog, 4), ","); got != "Down,Enter" {
+		t.Fatalf("keys=%s", got)
 	}
 }
