@@ -4,7 +4,8 @@ export type Appearance = 'dark' | 'light' | 'solarized-light'
 export type AppearanceScope = 'site' | 'workbench'
 const keys: Record<AppearanceScope, string> = { site: 'herdrx.site-appearance.v1', workbench: 'herdrx.workbench-appearance.v1' }
 const changed = 'herdrx:appearance'
-const defaults: Record<AppearanceScope, Appearance> = { site: 'light', workbench: 'dark' }
+// Both sections default to light; the terminal theme (Cobalt2 by default) is chosen separately.
+const defaults: Record<AppearanceScope, Appearance> = { site: 'light', workbench: 'light' }
 const fallback = { ...defaults }
 let activeScope: AppearanceScope = 'site'
 
