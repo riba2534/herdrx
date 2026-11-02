@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { ITheme } from '@xterm/xterm'
 import { Clock3, MessageSquarePlus, SquareTerminal } from 'lucide-react'
-import { ChatView, type ChatViewProps } from '../ChatView'
+import { ChatView } from '../ChatView'
 import { ScreenView } from '../ScreenView'
 import { DialogCard, usePrimaryDialogCard } from '../DialogCard'
 import { useConfirm } from '../useConfirm'
@@ -17,9 +17,6 @@ import './workbench-ui.css'
 
 /** Web UI 模式用对话视图显示的 pane（v1 只支持 Claude）；其余 pane 显示只读画面。 */
 export const consoleShowsChat = (pane: Pane) => pane.agent === 'claude'
-
-// F1 adds `variant` to ChatView; until that lands the prop goes through this widened type.
-const ConsoleChatView = ChatView as ComponentType<ChatViewProps & { variant?: 'pane' | 'console' }>
 
 /** 只读画面的配色：底色和正文跟随控制台，ANSI 色板按深浅外观取一套终端主题。 */
 function useConsoleScreenTheme(): ITheme {
@@ -152,7 +149,7 @@ export function ConsoleSurface({ hostID, client, panes, paneID, onSelectPane, co
       </div>
     </div>
   } else if (consoleShowsChat(pane)) {
-    content = <ConsoleChatView key={pane.pane_id} variant="console" hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} onSwitchToTerminal={() => onOpenInShell(pane.pane_id)}/>
+    content = <ChatView key={pane.pane_id} variant="console" hostID={hostID} pane={pane} client={client} compact={compact} connected={connected} onSwitchToTerminal={() => onOpenInShell(pane.pane_id)}/>
   } else {
     content = <div className="console-screen" key={pane.pane_id}>
       <div className="console-screen-view"><ScreenView client={client} pane={pane} compact={compact} connected={connected} connectionEpoch={connectionEpoch} theme={theme}/></div>
