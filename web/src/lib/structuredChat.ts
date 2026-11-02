@@ -442,6 +442,13 @@ export type StructuredChatSnapshot = {
  */
 const DISCOVERY_FAST_WINDOW_MS = 60_000
 const DISCOVERY_SLOW_POLL_MS = 10_000
+/**
+ * 只有可能自己消失的原因才继续等：还没有记录文件（no_session_candidates）、会话被轮转
+ * （session_unavailable）、取不到 cwd 或日志根目录（Agent 刚启动、第一次写盘会建好）。
+ * 不支持的接入方式 / 程序、读取被拒、格式不认识、超限、服务端内部错误都不会靠等待恢复，
+ * 而每次读取服务端都会记一条审计，这些情形保持只读一次，由用户点「重试」。
+ */
+const RECLAIMABLE_REASONS: ReadonlySet<ChatReason> = new Set<ChatReason>(['no_session_candidates', 'session_unavailable', 'cwd_unavailable', 'log_root_unavailable'])
 
 export type StructuredChatSessionOptions = {
   hostID: string
@@ -463,7 +470,7 @@ export type StructuredChatSessionOptions = {
  * 会话状态机。职责边界：
  *
  * - **不自动认领候选**：没有显式 `select()`、也没有服务端 verified 认领（Herdr 证据）之前永不发带 `session` 的请求；
- *   未绑定时继续轮询不带 `session` 的默认查询，等服务端认领（「重选」之后不轮询）；
+ *   未绑定且原因可能自行消失时继续轮询不带 `session` 的默认查询，等服务端认领（「重选」之后不轮询）；
  * - 一次只跑一个请求（不重叠轮询），`cursor` 递增，不重读全量；
  * - 每个异步结果都绑定「host + pane + 登录身份 + 会话代次」，迟到的旧响应直接丢弃；
  * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session；
@@ -660,7 +667,17 @@ export class StructuredChatSession {
     if (!this.running || !this.active || this.inFlight) return
     const { session, nextCursor } = this.snapshotValue.state
     if (session) await this.load(nextCursor ? { session, cursor: nextCursor } : { session })
-    else if (!this.manual) await this.load({})
+    else if (this.waitingForClaim()) await this.load({})
+  }
+
+  /**
+   * 未绑定时是否继续轮询默认查询：用户没有手动「重选」、上一次读取没有传输错误，且原因可能
+   * 自己消失（或者没有原因：列出了候选但还没认领，新会话写下记录后服务端会按证据认领）。
+   */
+  private waitingForClaim() {
+    const { state, error } = this.snapshotValue
+    if (this.manual || error) return false
+    return state.reason === undefined ? state.status !== 'unavailable' : RECLAIMABLE_REASONS.has(state.reason)
   }
 
   /** 下一次轮询的间隔：已绑定按正常间隔；未绑定先按正常间隔，一分钟后放慢。 */

@@ -792,6 +792,32 @@ describe('waiting for a new session to be claimed', () => {
     session.stop()
   })
 
+  async function pollsWithin(response: () => StructuredChatResponse | Promise<StructuredChatResponse>) {
+    const { calls, fetchPage } = recorder(response)
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(30_000)
+    session.stop()
+    return calls.length
+  }
+
+  it('keeps polling only for reasons that can clear up on their own', async () => {
+    for (const reason of ['no_session_candidates', 'session_unavailable', 'cwd_unavailable', 'log_root_unavailable'] as const) {
+      expect(await pollsWithin(() => page({ reason, candidates: [] })), reason).toBe(16)
+    }
+    // 列出了候选但还没认领（原因为空）：新会话写下记录后服务端会按证据认领。
+    expect(await pollsWithin(() => page({ candidates: [candidate('old')] }))).toBe(16)
+  })
+
+  it('reads once and stops for reasons that waiting cannot fix, and after transport errors', async () => {
+    // 这些情形每次读取都会在服务端记一条审计，不能靠轮询灌满审计表。
+    for (const reason of ['unsupported_transport', 'no_agent', 'unsupported_agent', 'read_denied', 'unrecognized_format', 'read_limit_exceeded', 'internal_error'] as const) {
+      expect(await pollsWithin(() => page({ supported: false, reason })), reason).toBe(1)
+      expect(await pollsWithin(() => page({ reason, candidates: [] })), `${reason} (supported)`).toBe(1)
+    }
+    expect(await pollsWithin(() => Promise.reject(new APIError(502, 'bad_gateway', '网关错误')))).toBe(1)
+  })
+
   it('restarts the fast window when a bound session is lost again', async () => {
     let phase: 'waiting' | 'bound' | 'lost' = 'waiting'
     const { calls, fetchPage } = recorder((call) => {
