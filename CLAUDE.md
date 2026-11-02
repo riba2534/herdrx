@@ -102,6 +102,7 @@ node scripts/test-terminal-rendering.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-screen-view.mjs
+HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-web-ui-mode.mjs
 ```
 
 Docker 变更需构建候选镜像并运行 `python3 scripts/smoke-image.py <镜像> [预期版本]`。脚本需要当前用户能使用 Docker 和无交互 sudo，仅操作隔离临时目录和测试容器。

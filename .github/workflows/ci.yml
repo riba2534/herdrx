@@ -41,6 +41,8 @@ jobs:
           pnpm --dir web lint
           pnpm --dir web exec vitest run
           make web-build
+      - name: 安装启动器发现测试所需的 shell
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh busybox
       - name: Go 验证
         run: |
           go mod verify
