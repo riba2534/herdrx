@@ -435,6 +435,14 @@ export type StructuredChatSnapshot = {
   error: string
 }
 
+/**
+ * 还没绑定会话时继续按默认查询（不带 `session`）轮询，等服务端用 Herdr 证据认领：新建的
+ * Claude 会话要等收到第一条消息才写下记录文件，第一次读取时通常还没有候选。前一分钟按
+ * 正常间隔轮询，之后放慢到每 10 秒一次。用户点过「重选」后只列候选，不轮询、不自动绑定。
+ */
+const DISCOVERY_FAST_WINDOW_MS = 60_000
+const DISCOVERY_SLOW_POLL_MS = 10_000
+
 export type StructuredChatSessionOptions = {
   hostID: string
   paneID: string
@@ -455,6 +463,7 @@ export type StructuredChatSessionOptions = {
  * 会话状态机。职责边界：
  *
  * - **不自动认领候选**：没有显式 `select()`、也没有服务端 verified 认领（Herdr 证据）之前永不发带 `session` 的请求；
+ *   未绑定时继续轮询不带 `session` 的默认查询，等服务端认领（「重选」之后不轮询）；
  * - 一次只跑一个请求（不重叠轮询），`cursor` 递增，不重读全量；
  * - 每个异步结果都绑定「host + pane + 登录身份 + 会话代次」，迟到的旧响应直接丢弃；
  * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session；
@@ -470,6 +479,8 @@ export class StructuredChatSession {
   private source: ChatSource | undefined
   /** 用户点过「重选」：之后只列候选，不让 Herdr 证据把候选列表又自动绑定回去。 */
   private manual = false
+  /** 这一轮「未绑定、等认领」从什么时候开始；用户的任何选择 / 刷新都重新起算。 */
+  private unboundSince: number | undefined
   private generation = 0
   private running = false
   private active = true
@@ -624,6 +635,7 @@ export class StructuredChatSession {
 
   private invalidate() {
     this.generation++
+    this.unboundSince = undefined
     this.clearTimer()
     this.controller?.abort()
     this.controller = null
@@ -647,8 +659,19 @@ export class StructuredChatSession {
   private async tick() {
     if (!this.running || !this.active || this.inFlight) return
     const { session, nextCursor } = this.snapshotValue.state
-    if (!session) return
-    await this.load(nextCursor ? { session, cursor: nextCursor } : { session })
+    if (session) await this.load(nextCursor ? { session, cursor: nextCursor } : { session })
+    else if (!this.manual) await this.load({})
+  }
+
+  /** 下一次轮询的间隔：已绑定按正常间隔；未绑定先按正常间隔，一分钟后放慢。 */
+  private nextPollDelay() {
+    if (this.snapshotValue.state.session !== undefined) {
+      this.unboundSince = undefined
+      return this.pollMs
+    }
+    const now = Date.now()
+    this.unboundSince ??= now
+    return now - this.unboundSince < DISCOVERY_FAST_WINDOW_MS ? this.pollMs : Math.max(this.pollMs, DISCOVERY_SLOW_POLL_MS)
   }
 
   private async load(query: StructuredChatQuery, direction: PageDirection = 'forward') {
@@ -708,7 +731,7 @@ export class StructuredChatSession {
           this.earlierQueued = false
           this.loadEarlier()
         } else {
-          this.schedule(this.pollMs)
+          this.schedule(this.nextPollDelay())
         }
       }
     }
