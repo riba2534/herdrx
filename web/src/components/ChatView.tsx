@@ -407,7 +407,7 @@ function reasonText(reason: ChatReason | undefined, agent?: string, source?: Cha
     case 'no_session_candidates':
       return source === 'dsh'
         ? '在 DSH 的会话目录（默认 ~/.dsh/sessions）下没有找到与这个终端目录匹配的会话记录，可切回终端查看完整界面。'
-        : '尚未找到这个终端的会话记录（Agent 刚启动时可能还没写盘），可切回终端查看完整界面。'
+        : '尚未找到这个终端的会话记录：新会话要等 Agent 收到第一条消息才会写下记录，写下后这里会自动打开；也可以切回终端查看完整界面。'
     case 'read_denied':
       return '读取会话记录被拒绝（路径越界或文件类型不被允许），可切回终端查看完整界面。'
     case 'unrecognized_format':

@@ -742,6 +742,115 @@ describe('verified binding', () => {
   })
 })
 
+describe('waiting for a new session to be claimed', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+
+  it('keeps polling the default query until Herdr evidence binds the session, then reads forward', async () => {
+    // 新建的 Claude 会话收到第一条消息才写记录文件：第一次读取时没有候选，之后服务端按证据认领。
+    let written = false
+    const { calls, fetchPage } = recorder((call) => {
+      if (call.session) return page({ binding: 'selected', session_id: 's1', messages: [textRecord('2', 'assistant', '答')], next_cursor: 'c2' })
+      return written
+        ? page({ binding: 'verified', session: 'cand-1', session_id: 's1', candidates: [candidate('cand-1')], messages: [textRecord('1', 'user', '第一条')], next_cursor: 'c1' })
+        : page({ reason: 'no_session_candidates', candidates: [] })
+    })
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state).toMatchObject({ status: 'idle', reason: 'no_session_candidates', session: undefined })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls).toHaveLength(2)
+    expect(calls[1].session).toBeUndefined()
+    expect(calls[1].manual).toBeUndefined()
+    written = true
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().state).toMatchObject({ status: 'ready', session: 'cand-1', binding: 'verified' })
+    expect(session.getSnapshot().state.messages.map((item) => item.id)).toEqual(['1'])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls.at(-1)).toMatchObject({ session: 'cand-1', cursor: 'c1' })
+    expect(session.getSnapshot().state.messages.map((item) => item.id)).toEqual(['1', '2'])
+    session.stop()
+  })
+
+  it('polls every interval for the first minute, then every 10 seconds', async () => {
+    const { calls, fetchPage } = recorder(() => page({ reason: 'no_session_candidates', candidates: [] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(58_000)
+    expect(calls).toHaveLength(30)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls).toHaveLength(31)
+    // 等满一分钟后放慢到 10 秒一次。
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(calls).toHaveLength(31)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toHaveLength(32)
+    // 用户的刷新重新起算：立即取一次，之后又回到正常间隔。
+    session.refresh()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(calls).toHaveLength(35)
+    session.stop()
+  })
+
+  it('restarts the fast window when a bound session is lost again', async () => {
+    let phase: 'waiting' | 'bound' | 'lost' = 'waiting'
+    const { calls, fetchPage } = recorder((call) => {
+      if (phase === 'bound') return call.session
+        ? page({ binding: 'selected', session_id: 's1', messages: [], next_cursor: 'c2' })
+        : page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' })
+      if (phase === 'lost' && call.session) return page({ reason: 'session_unavailable', reset: true, candidates: [] })
+      return page({ reason: 'no_session_candidates', candidates: [] })
+    })
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    // 等过一分钟，已经是 10 秒一次的慢速轮询。
+    await vi.advanceTimersByTimeAsync(70_000)
+    phase = 'bound'
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(session.getSnapshot().state.session).toBe('cand-1')
+    phase = 'lost'
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().state).toMatchObject({ session: undefined, reason: 'session_unavailable' })
+    // 失去绑定后重新按正常间隔等认领，而不是沿用之前的慢速。
+    const lost = calls.length
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(calls).toHaveLength(lost + 2)
+    session.stop()
+  })
+
+  it('keeps refreshing candidates while waiting and stops while inactive', async () => {
+    let round = 0
+    const { calls, fetchPage } = recorder(() => page({ candidates: round++ ? [candidate('old'), candidate('new')] : [candidate('old')] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['old', 'new'])
+    // 只列候选，绝不自动认领。
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    session.setActive(false)
+    const paused = calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(calls).toHaveLength(paused)
+    session.stop()
+  })
+
+  it('does not poll or auto-bind after the user chose to reselect manually', async () => {
+    const { calls, fetchPage } = recorder((call) => call.manual
+      ? page({ candidates: [candidate('cand-1')] })
+      : page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    session.reselect()
+    await vi.advanceTimersByTimeAsync(0)
+    const listed = calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(calls).toHaveLength(listed)
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    session.stop()
+  })
+})
+
 describe('durations', () => {
   it('formats durations', () => {
     expect(formatChatDuration(4_400)).toBe('4 秒')
