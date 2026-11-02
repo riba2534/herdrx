@@ -26,6 +26,7 @@ func Zshrc(home string) string {
 	return fmt.Sprintf(`alias xcc="ANTHROPIC_BASE_URL=https://gateway.example.test ANTHROPIC_AUTH_TOKEN=sk-herdrx-FAKE-0000 CLAUDE_CODE_NO_FLICKER=1 claude --teammate-mode in-process --dangerously-skip-permissions"
 alias plain=claude
 alias pm="env HTTPS_PROXY=http://proxy.example.test /opt/tools/bin/claude --permission-mode bypassPermissions"
+alias eq="claude --permission-mode=bypassPermissions --teammate-mode=in-process --model opus"
 alias quoted='TOKEN="sk-herdrx-FAKE-0000 two words" command ~/.local/bin/claude --model opus'
 alias nf="CLAUDE_CODE_NO_FLICKER=0 claude --permission-mode default"
 alias chain="claude --model opus; echo --dangerously-skip-permissions --teammate-mode"
@@ -37,6 +38,7 @@ alias a+b=claude
 alias -g G=claude
 alias print="echo HIJACKED"
 alias local="echo HIJACKED"
+alias builtin="echo HIJACKED"
 alias -g word="| cat"
 alias -g raw="| cat"
 echo "rc noise sk-herdrx-FAKE-0000"
@@ -49,6 +51,7 @@ setopt xtrace ksh_arrays sh_word_split no_unset err_exit
 // Expected is what discovery returns for Zshrc.
 var Expected = []launchers.Launcher{
 	{Name: "chain"},
+	{Name: "eq", Bypass: true, Teammate: true},
 	{Name: "nf"},
 	{Name: "plain"},
 	{Name: "pm", Bypass: true},

@@ -58,11 +58,12 @@ const linePrefix = "herdrx-launcher\t"
 // Launcher in web/src/types.ts.
 type Launcher struct {
 	Name string `json:"name"`
-	// Bypass: --dangerously-skip-permissions, or --permission-mode bypassPermissions.
+	// Bypass: --dangerously-skip-permissions, or --permission-mode
+	// bypassPermissions (also written --permission-mode=bypassPermissions).
 	Bypass bool `json:"bypass"`
 	// Fullscreen: CLAUDE_CODE_NO_FLICKER=1 among the leading assignments.
 	Fullscreen bool `json:"fullscreen"`
-	// Teammate: --teammate-mode.
+	// Teammate: --teammate-mode (with a separate or =value argument).
 	Teammate bool `json:"teammate"`
 }
 
@@ -226,9 +227,9 @@ for name in ${(ko)aliases}; do
     raw=$words[index]
     [[ $raw == (";"|"&"|"|"|"&&"|"||"|"|&"|"&|"|"&!"|";|"|";&") ]] && break
     case ${(Q)raw} in
-      (--dangerously-skip-permissions) bypass=1 ;;
+      (--dangerously-skip-permissions|--permission-mode=bypassPermissions) bypass=1 ;;
       (--permission-mode) [[ ${(Q)words[index+1]} == bypassPermissions ]] && bypass=1 ;;
-      (--teammate-mode) teammate=1 ;;
+      (--teammate-mode|--teammate-mode=*) teammate=1 ;;
     esac
   done
   builtin print -r -u 3 -- "herdrx-launcher$tab$name$tab$bypass$tab$fullscreen$tab$teammate"
@@ -240,9 +241,12 @@ return 0
 // ScriptVariable carries Script into the zsh that runs Loader.
 const ScriptVariable = "HERDRX_LAUNCHERS_SCRIPT"
 
-// Loader is the zsh -ic command. builtin keeps its own two words away from
-// aliases; Script is parsed after alias expansion is off.
-const Loader = `builtin setopt no_aliases; builtin eval "$` + ScriptVariable + `"`
+// Loader is the zsh -ic command. A quoted command word is never alias-expanded,
+// so even `alias builtin=...` cannot take it over, and builtin keeps setopt and
+// eval away from same-named functions; Script is parsed after alias expansion
+// is off. A startup file that defines a function named builtin still wins:
+// nothing run from inside that shell can rule it out.
+const Loader = `"builtin" setopt no_aliases; "builtin" eval "$` + ScriptVariable + `"`
 
 // sshWrapper runs on a basic SSH host under POSIX sh, with Loader as $1 and
 // Script as $2. The startup files' own stdout and stderr go to /dev/null; only

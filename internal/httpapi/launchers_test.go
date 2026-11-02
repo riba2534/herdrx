@@ -23,20 +23,54 @@ type sessionTestEndpoint struct {
 	mu           sync.Mutex
 	calls        []promptCall
 	snapshot     herdr.Snapshot
+	snapshotErr  error
 	discovered   launchers.Result
 	discoveries  atomic.Int32
 	discoverGate chan struct{}
 	createErr    error
+	createRaw    string
 	createGate   chan struct{}
 	emptyReads   int
 	sendErr      error
+	// processInfo is the pane.process_info result; processErr fails the call.
+	processInfo string
+	processErr  error
 }
 
+// newSessionTestEndpoint answers like a fresh pane whose zsh opened in the
+// requested directory "/srv/proj one".
 func newSessionTestEndpoint() *sessionTestEndpoint {
 	return &sessionTestEndpoint{
-		snapshot:   herdr.Snapshot{Workspaces: []herdr.Workspace{{ID: "w1"}}},
-		discovered: launchers.Found([]launchers.Launcher{{Name: "xcc", Bypass: true, Fullscreen: true, Teammate: true}, {Name: "plain"}}),
-		emptyReads: 2,
+		snapshot: herdr.Snapshot{
+			Workspaces: []herdr.Workspace{{ID: "w1"}},
+			Panes: []herdr.Pane{
+				{ID: "w9:p1", WorkspaceID: "w9", TabID: "w9:t1", CWD: "/srv/proj one", ForegroundCWD: "/srv/proj one"},
+				{ID: "w1:p7", WorkspaceID: "w1", TabID: "w1:t4", CWD: "/srv/proj one", ForegroundCWD: "/srv/proj one"},
+			},
+		},
+		discovered:  launchers.Found([]launchers.Launcher{{Name: "xcc", Bypass: true, Fullscreen: true, Teammate: true}, {Name: "plain"}}),
+		emptyReads:  2,
+		processInfo: foregroundInfo(41, "zsh"),
+	}
+}
+
+// foregroundInfo is a pane.process_info result whose foreground group leader
+// has pid group; names are the foreground processes in order, pids from 40.
+func foregroundInfo(group int, names ...string) string {
+	processes := make([]map[string]any, 0, len(names))
+	for index, name := range names {
+		processes = append(processes, map[string]any{"pid": 40 + index + 1, "name": name, "argv": []string{name}})
+	}
+	encoded, _ := json.Marshal(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w9:p1", "shell_pid": 41, "foreground_process_group_id": group, "foreground_processes": processes}})
+	return string(encoded)
+}
+
+// setForegroundCWD moves the shell of every new pane to dir.
+func (e *sessionTestEndpoint) setForegroundCWD(dir string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for index := range e.snapshot.Panes {
+		e.snapshot.Panes[index].ForegroundCWD = dir
 	}
 }
 
@@ -52,7 +86,7 @@ func (e *sessionTestEndpoint) Snapshot(context.Context) (herdr.Snapshot, error) 
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.calls = append(e.calls, promptCall{method: "session.snapshot"})
-	return e.snapshot, nil
+	return e.snapshot, e.snapshotErr
 }
 
 func (e *sessionTestEndpoint) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -67,6 +101,9 @@ func (e *sessionTestEndpoint) Call(ctx context.Context, method string, params an
 	case "workspace.create":
 		if e.createErr != nil {
 			return nil, e.createErr
+		}
+		if e.createRaw != "" {
+			return json.RawMessage(e.createRaw), nil
 		}
 		return json.RawMessage(`{"type":"workspace_created","workspace":{"workspace_id":"w9"},"tab":{"tab_id":"w9:t1","workspace_id":"w9"},"root_pane":{"pane_id":"w9:p1","workspace_id":"w9","tab_id":"w9:t1"}}`), nil
 	case "tab.create":
@@ -86,6 +123,11 @@ func (e *sessionTestEndpoint) Call(ctx context.Context, method string, params an
 			return nil, e.sendErr
 		}
 		return json.RawMessage(`{}`), nil
+	case "pane.process_info":
+		if e.processErr != nil {
+			return nil, e.processErr
+		}
+		return json.RawMessage(e.processInfo), nil
 	}
 	return nil, errors.New("unexpected method " + method)
 }
@@ -184,9 +226,16 @@ func (f *sessionFixture) addMemberHost(t *testing.T) string {
 	return "member-host"
 }
 
-func getRaw(t *testing.T, client *http.Client, url string) (*http.Response, []byte) {
+func getRaw(t *testing.T, client *http.Client, url, csrf string) (*http.Response, []byte) {
 	t.Helper()
-	response, err := client.Get(url)
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csrf != "" {
+		request.Header.Set("X-CSRF-Token", csrf)
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,9 +247,23 @@ func getRaw(t *testing.T, client *http.Client, url string) (*http.Response, []by
 	return response, body
 }
 
+func (f *sessionFixture) launchers(t *testing.T, want int) map[string]any {
+	t.Helper()
+	return requestJSON(t, f.client, "GET", f.url("session-host", "/launchers"), f.csrf, nil, want)
+}
+
+// age makes the host's remembered discovery look older.
+func (f *sessionFixture) age(by time.Duration) {
+	f.api.launcherLists.mu.Lock()
+	defer f.api.launcherLists.mu.Unlock()
+	if entry := f.api.launcherLists.entries["session-host"]; entry != nil {
+		entry.settled = entry.settled.Add(-by)
+	}
+}
+
 func TestLaunchersReturnsNamesAndFlagsAndCachesThem(t *testing.T) {
 	f := newSessionFixture(t)
-	response, body := getRaw(t, f.client, f.url("session-host", "/launchers"))
+	response, body := getRaw(t, f.client, f.url("session-host", "/launchers"), f.csrf)
 	if response.StatusCode != 200 || response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("status %d headers %v", response.StatusCode, response.Header)
 	}
@@ -208,28 +271,45 @@ func TestLaunchersReturnsNamesAndFlagsAndCachesThem(t *testing.T) {
 	if strings.TrimSpace(string(body)) != want {
 		t.Fatalf("body = %s", body)
 	}
-	getRaw(t, f.client, f.url("session-host", "/launchers"))
+	f.launchers(t, 200)
 	if n := f.endpoint.discoveries.Load(); n != 1 {
 		t.Fatalf("discovery ran %d times within the cache window", n)
 	}
+	// The list is only reused for 60 seconds.
+	f.age(launcherListTTL + time.Second)
+	f.launchers(t, 200)
+	if n := f.endpoint.discoveries.Load(); n != 2 {
+		t.Fatalf("a stale list was served: %d discoveries", n)
+	}
 }
 
-func TestLauncherFailuresAreResultsAndNotCached(t *testing.T) {
+func TestLaunchersRequiresTheCSRFHeader(t *testing.T) {
+	f := newSessionFixture(t)
+	response, _ := getRaw(t, f.client, f.url("session-host", "/launchers"), "")
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("status %d", response.StatusCode)
+	}
+	if f.pool.opened.Load() != 0 || f.endpoint.discoveries.Load() != 0 {
+		t.Fatal("a request without the CSRF header ran discovery")
+	}
+}
+
+func TestLauncherFailuresAreResultsAndNotReusedByTheList(t *testing.T) {
 	f := newSessionFixture(t)
 	f.endpoint.discovered = launchers.Unsupported(launchers.ReasonTimeout)
 	for range 2 {
-		result := requestJSON(t, f.client, "GET", f.url("session-host", "/launchers"), "", nil, 200)
+		result := f.launchers(t, 200)
 		if result["supported"] != false || result["reason"] != "timeout" || len(result["launchers"].([]any)) != 0 {
 			t.Fatalf("result = %v", result)
 		}
 	}
 	if n := f.endpoint.discoveries.Load(); n != 2 {
-		t.Fatalf("a failed discovery was cached: %d runs", n)
+		t.Fatalf("the list reused a failed discovery: %d runs", n)
 	}
 	// An endpoint without the capability (no handle forwarding it) is an old agent.
 	f.pool.endpoint = &promptTestEndpoint{}
 	f.api.launcherLists = launcherCache{}
-	result := requestJSON(t, f.client, "GET", f.url("session-host", "/launchers"), "", nil, 200)
+	result := f.launchers(t, 200)
 	if result["supported"] != false || result["reason"] != "unsupported_agent" {
 		t.Fatalf("result = %v", result)
 	}
@@ -243,7 +323,7 @@ func TestConcurrentLauncherRequestsShareOneDiscovery(t *testing.T) {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			response, _ := getRaw(t, f.client, f.url("session-host", "/launchers"))
+			response, _ := getRaw(t, f.client, f.url("session-host", "/launchers"), f.csrf)
 			if response.StatusCode != 200 {
 				t.Errorf("status %d", response.StatusCode)
 			}
@@ -261,11 +341,42 @@ func TestConcurrentLauncherRequestsShareOneDiscovery(t *testing.T) {
 	}
 }
 
+// A panicking discovery must still settle its entry, or every later request
+// for the host would wait on it forever.
+func TestLauncherCacheSettlesWhenDiscoveryPanics(t *testing.T) {
+	var cache launcherCache
+	waiter := make(chan launchers.Result, 1)
+	started := make(chan struct{})
+	func() {
+		defer func() { _ = recover() }()
+		cache.get(context.Background(), "h", listUsable, func() launchers.Result {
+			go func() {
+				close(started)
+				waiter <- cache.get(context.Background(), "h", listUsable, func() launchers.Result { return launchers.Found(nil) })
+			}()
+			<-started
+			time.Sleep(20 * time.Millisecond)
+			panic("discovery bug")
+		})
+	}()
+	select {
+	case result := <-waiter:
+		if result.Supported || result.Reason != launchers.ReasonReadFailed {
+			t.Fatalf("waiter got %+v", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a waiter hung on a panicked discovery")
+	}
+	if result := cache.get(context.Background(), "h", listUsable, func() launchers.Result { return launchers.Found(nil) }); !result.Supported {
+		t.Fatalf("the host stayed broken after a panic: %+v", result)
+	}
+}
+
 func TestLaunchersAndSessionsAreOwnerScoped(t *testing.T) {
 	f := newSessionFixture(t)
 	other := f.addMemberHost(t)
 	for _, host := range []string{other, "no-such-host"} {
-		result := requestJSON(t, f.client, "GET", f.url(host, "/launchers"), "", nil, 404)
+		result := requestJSON(t, f.client, "GET", f.url(host, "/launchers"), f.csrf, nil, 404)
 		if result["code"] != "host_not_found" {
 			t.Fatalf("result = %v", result)
 		}
@@ -282,8 +393,7 @@ func TestLaunchersAndSessionsAreOwnerScoped(t *testing.T) {
 func TestLaunchersHostConnectionFailure(t *testing.T) {
 	f := newSessionFixture(t)
 	f.pool.openErr = errors.New("dial tcp: connection refused")
-	result := requestJSON(t, f.client, "GET", f.url("session-host", "/launchers"), "", nil, 502)
-	if result["code"] != "host_unreachable" {
+	if result := f.launchers(t, 502); result["code"] != "host_unreachable" {
 		t.Fatalf("result = %v", result)
 	}
 }

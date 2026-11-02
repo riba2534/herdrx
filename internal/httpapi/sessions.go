@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -21,14 +23,17 @@ import (
 )
 
 // 新建 Claude 会话：在 cwd 新开 workspace（或在已有 workspace 新开 tab），等 shell 提示符出来，
-// 往新 pane 输入一行 `<启动器> --session-id <uuid>` 并回车，然后立即返回，不等 Claude 就绪。
+// 核对新 pane，再输入一行 `<启动器> --session-id <uuid>` 并回车，然后立即返回，不等 Claude 就绪。
 //
-// 输入进 pane 的只有这一行：启动器名字过了正则且在这台主机发现到的列表里（或者就是 claude），
-// uuid 由服务端生成；cwd 和 label 只作为 Herdr 参数传递，从不进入 shell。
+// 输入进 pane 的只有这一行：启动器名字过了正则；发现列表可用且非空时还必须在列表里（claude
+// 总可以）。uuid 由服务端生成；cwd 和 label 只作为 Herdr 参数传递，从不进入 shell。
+// 输入前核对两件事，任一不符就什么都不输入：shell 实际所在的目录就是请求的目录（Herdr 在目录
+// 不存在时会悄悄改用主目录，免授权的 Claude 不能在那里启动），前台是 shell（启动器来自 zsh
+// alias 时必须是 zsh，.zshrc 自动进了 tmux 也算不符）。
 // 任何失败都不关闭已经建好的 pane：远程任务的生命周期不归网站管。
 //
 // request_id 在 10 分钟内（每用户 + 主机）只执行一次，重复请求拿到第一次的结果，并发的重复
-// 请求等第一次结束。确定什么都没创建的失败不记账，同一个 id 可以再试。
+// 请求等第一次结束；内容不同的重复请求被拒绝。确定什么都没创建的失败不记账，同一个 id 可以再试。
 
 var sessionRequestID = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 
@@ -56,6 +61,11 @@ type startSessionInput struct {
 	Label string `json:"label"`
 }
 
+// fingerprint 是请求里决定「建什么、启动什么」的部分。字段都不含控制字符，NUL 分隔没有歧义。
+func (input startSessionInput) fingerprint() string {
+	return strings.Join([]string{input.CWD, input.Launcher, input.Target.Kind, input.Target.WorkspaceID, input.Label}, "\x00")
+}
+
 // StartSessionResult in web/src/types.ts.
 type startSessionResult struct {
 	WorkspaceID string `json:"workspace_id"`
@@ -78,9 +88,10 @@ func sessionError(status int, code, message string) *sessionReply {
 type sessionStartKey struct{ user, host, id string }
 
 type sessionStartEntry struct {
-	at    time.Time
-	done  chan struct{}
-	reply *sessionReply // 进行中时为 nil；忘记的记录直接删掉
+	at          time.Time
+	fingerprint string
+	done        chan struct{}
+	reply       *sessionReply // 进行中时为 nil；忘记的记录直接删掉
 }
 
 // sessionStarts 是内存里的幂等表，按用户分开、容量有界；只在增删查时持锁。
@@ -91,7 +102,7 @@ type sessionStarts struct {
 
 var errSessionStartBusy = errors.New("too many session starts in flight")
 
-func (s *sessionStarts) begin(key sessionStartKey, now time.Time) (*sessionStartEntry, bool, error) {
+func (s *sessionStarts) begin(key sessionStartKey, fingerprint string, now time.Time) (*sessionStartEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.users == nil {
@@ -123,7 +134,7 @@ func (s *sessionStarts) begin(key sessionStartKey, now time.Time) (*sessionStart
 		}
 		delete(entries, oldestKey)
 	}
-	entry := &sessionStartEntry{at: now, done: make(chan struct{})}
+	entry := &sessionStartEntry{at: now, fingerprint: fingerprint, done: make(chan struct{})}
 	entries[key] = entry
 	return entry, true, nil
 }
@@ -187,7 +198,7 @@ func (a *API) startSession(writer http.ResponseWriter, request *http.Request) {
 	key := sessionStartKey{user: userFromContext(request.Context()).ID, host: host.ID, id: input.RequestID}
 	var entry *sessionStartEntry
 	for {
-		current, fresh, err := a.sessionStarts.begin(key, time.Now())
+		current, fresh, err := a.sessionStarts.begin(key, input.fingerprint(), time.Now())
 		if err != nil {
 			writeError(writer, http.StatusTooManyRequests, "session_start_busy", "同时进行中的新建会话太多，什么都没有创建。请等前面的完成后再试")
 			return
@@ -195,6 +206,10 @@ func (a *API) startSession(writer http.ResponseWriter, request *http.Request) {
 		if fresh {
 			entry = current
 			break
+		}
+		if current.fingerprint != input.fingerprint() {
+			writeError(writer, http.StatusConflict, "request_mismatch", "这个请求编号已用于另一份新建会话的内容，这次什么都没有创建。请刷新页面后重新提交")
+			return
 		}
 		select {
 		case <-current.done:
@@ -231,11 +246,8 @@ func (a *API) runSessionStart(ctx context.Context, request *http.Request, host s
 		return sessionError(http.StatusBadGateway, "herdr_unavailable", "无法连接远程主机上的 Herdr，什么都没有创建："+hostruntime.DescribeError(err).Error()), false
 	}
 	defer endpoint.Close()
-	if input.Launcher != "claude" {
-		known := a.discoverLaunchers(ctx, host, endpoint)
-		if !slices.ContainsFunc(known.Launchers, func(launcher launchers.Launcher) bool { return launcher.Name == input.Launcher }) {
-			return sessionError(http.StatusConflict, "launcher_unknown", "远程主机上没有找到这个启动器，什么都没有创建。请刷新启动器列表后重新选择"), false
-		}
+	if input.Launcher != "claude" && !launcherAllowed(input.Launcher, a.discoverLaunchers(ctx, host, endpoint, validationUsable)) {
+		return sessionError(http.StatusConflict, "launcher_unknown", "远程主机上没有找到这个启动器，什么都没有创建。请刷新启动器列表后重新选择"), false
 	}
 	method := "workspace.create"
 	params := map[string]any{"cwd": input.CWD, "focus": false}
@@ -257,8 +269,9 @@ func (a *API) runSessionStart(ctx context.Context, request *http.Request, host s
 	if err != nil {
 		var rejected *herdr.APIError
 		if errors.As(err, &rejected) {
-			return sessionError(http.StatusBadGateway, "start_failed", "Herdr 没有创建新终端（"+rejected.Message+"），请确认目录存在后重试"), false
+			return sessionError(http.StatusBadGateway, "start_failed", "Herdr 拒绝新建终端（"+rejected.Message+"），什么都没有创建。请检查远程主机上的 Herdr 后重试"), false
 		}
+		a.auditSessionStart(ctx, request, host, input, "", "create_unknown")
 		return sessionError(http.StatusBadGateway, "start_failed", "创建结果不确定，不会自动重试。请先在工作台查看是否已出现新的工作区或标签页"), true
 	}
 	var created struct {
@@ -272,25 +285,134 @@ func (a *API) runSessionStart(ctx context.Context, request *http.Request, host s
 		result.WorkspaceID = created.Workspace.ID
 	}
 	if !safePaneID.MatchString(result.PaneID) {
+		a.auditSessionStart(ctx, request, host, input, "", "pane_missing")
 		return sessionError(http.StatusBadGateway, "start_failed", "Herdr 的回应里没有新终端，不会自动重试。请先在工作台查看是否已出现新的工作区或标签页"), true
 	}
 	waitForShell(ctx, endpoint, result.PaneID)
+	if outcome, reply := verifyNewPane(ctx, endpoint, input, result); reply != nil {
+		a.auditSessionStart(ctx, request, host, input, result.PaneID, outcome)
+		return reply, true
+	}
 	result.SessionID = uuid.NewV4().String()
 	line := input.Launcher + " --session-id " + result.SessionID
 	_, sendErr := endpoint.Call(ctx, "pane.send_input", map[string]any{"pane_id": result.PaneID, "text": line, "keys": []string{"Enter"}})
-	outcome := "started"
 	if sendErr != nil {
-		outcome = "input_failed"
+		a.auditSessionStart(ctx, request, host, input, result.PaneID, "input_failed")
+		return paneReply(http.StatusBadGateway, "start_failed", "新终端已建好，但启动命令没有确认送达，不会自动重试。终端保持打开，请到这个终端里查看后手动启动", result, nil), true
 	}
-	a.audit(request.WithContext(ctx), "session.start", "host", host.ID, map[string]any{"pane_id": result.PaneID, "launcher": input.Launcher, "cwd": input.CWD, "result": outcome})
-	if sendErr != nil {
-		return &sessionReply{status: http.StatusBadGateway, body: map[string]any{
-			"code":    "start_failed",
-			"error":   "新终端已建好，但启动命令没有确认送达，不会自动重试。终端保持打开，请到这个终端里查看后手动启动",
-			"details": map[string]string{"workspace_id": result.WorkspaceID, "tab_id": result.TabID, "pane_id": result.PaneID},
-		}}, true
-	}
+	a.auditSessionStart(ctx, request, host, input, result.PaneID, "started")
 	return &sessionReply{status: http.StatusOK, body: result}, true
+}
+
+// launcherAllowed：claude 总可以；发现列表可用且非空时名字必须在列表里；发现不可用或列表为空时
+// 名字过了正则就行（用户手填）。
+func launcherAllowed(name string, known launchers.Result) bool {
+	if name == "claude" || !known.Supported || len(known.Launchers) == 0 {
+		return true
+	}
+	return slices.ContainsFunc(known.Launchers, func(launcher launchers.Launcher) bool { return launcher.Name == name })
+}
+
+// auditSessionStart 记下一次可能已经建好 pane 的启动；paneID 未知时省略。
+func (a *API) auditSessionStart(ctx context.Context, request *http.Request, host store.Host, input startSessionInput, paneID, outcome string) {
+	details := map[string]any{"launcher": input.Launcher, "cwd": input.CWD, "result": outcome}
+	if paneID != "" {
+		details["pane_id"] = paneID
+	}
+	a.audit(request.WithContext(ctx), "session.start", "host", host.ID, details)
+}
+
+// paneReply 是新 pane 已建好时的失败响应：details 带上它的位置，前端据此在 Shell 中打开它。
+func paneReply(status int, code, message string, result startSessionResult, extra map[string]string) *sessionReply {
+	details := map[string]string{"workspace_id": result.WorkspaceID, "tab_id": result.TabID, "pane_id": result.PaneID}
+	maps.Copy(details, extra)
+	return &sessionReply{status: status, body: map[string]any{"code": code, "error": message, "details": details}}
+}
+
+// sessionShells 是可以接收启动命令的前台进程。启动器来自 zsh alias，只有 zsh 认得；claude 任何 shell 都行。
+var sessionShells = map[string]bool{"zsh": true, "bash": true, "sh": true, "dash": true, "fish": true, "ksh": true, "mksh": true, "ash": true, "tcsh": true, "csh": true}
+
+// verifyNewPane 在输入前核对新 pane：shell 实际所在的目录就是请求的目录，前台是能运行这个启动器
+// 的 shell。返回非 nil 的 reply 时什么都不输入；outcome 用于审计。
+func verifyNewPane(ctx context.Context, endpoint herdr.Endpoint, input startSessionInput, result startSessionResult) (string, *sessionReply) {
+	unverified := paneReply(http.StatusBadGateway, "start_failed", "新终端已建好，但没能确认它的目录和前台程序，没有输入启动命令。终端保持打开，请到这个终端里查看后手动启动", result, nil)
+	snapshot, err := endpoint.Snapshot(ctx)
+	if err != nil {
+		return "check_failed", unverified
+	}
+	actual := ""
+	for _, pane := range snapshot.Panes {
+		if pane.ID == result.PaneID {
+			actual = pane.ForegroundCWD
+			if actual == "" {
+				actual = pane.CWD
+			}
+		}
+	}
+	if actual == "" {
+		return "check_failed", unverified
+	}
+	want := strings.TrimRight(input.CWD, "/")
+	if want == "" {
+		want = "/"
+	}
+	if actual != want {
+		return "cwd_mismatch", paneReply(http.StatusConflict, "cwd_mismatch", "终端实际在 "+actual+" 打开，和填写的目录不一致（目录可能不存在，或填的是软链接）。新终端已保留，没有启动 Claude", result, map[string]string{"actual_cwd": actual})
+	}
+	foreground, err := foregroundProcess(ctx, endpoint, result.PaneID)
+	if err != nil {
+		return "check_failed", unverified
+	}
+	switch {
+	case !sessionShells[foreground]:
+		return "shell_mismatch", paneReply(http.StatusConflict, "shell_mismatch", "新终端里正在运行 "+foreground+"，不是 shell，没有输入启动命令。新终端已保留，请到终端里查看", result, map[string]string{"foreground": foreground})
+	case input.Launcher != "claude" && foreground != "zsh":
+		return "shell_mismatch", paneReply(http.StatusConflict, "shell_mismatch", "新终端里正在运行 "+foreground+"，不是 zsh，启动器来自 zsh 的 alias，没有输入启动命令。新终端已保留，请到终端里查看", result, map[string]string{"foreground": foreground})
+	}
+	return "", nil
+}
+
+// foregroundProcess 返回 pane 前台进程组组长的程序名（登录 shell 的 `-zsh` 记作 zsh）。
+func foregroundProcess(ctx context.Context, endpoint herdr.Endpoint, paneID string) (string, error) {
+	raw, err := endpoint.Call(ctx, "pane.process_info", map[string]any{"pane_id": paneID})
+	if err != nil {
+		return "", err
+	}
+	var reply struct {
+		Info struct {
+			Group     *int `json:"foreground_process_group_id"`
+			Processes []struct {
+				PID   int    `json:"pid"`
+				Name  string `json:"name"`
+				Argv0 string `json:"argv0"`
+			} `json:"foreground_processes"`
+		} `json:"process_info"`
+	}
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		return "", err
+	}
+	processes := reply.Info.Processes
+	if len(processes) == 0 {
+		return "", errors.New("no foreground process")
+	}
+	chosen := processes[0]
+	for _, process := range processes {
+		if reply.Info.Group != nil && process.PID == *reply.Info.Group {
+			chosen = process
+		}
+	}
+	name := chosen.Name
+	if name == "" {
+		name = chosen.Argv0
+	}
+	name = path.Base(strings.TrimPrefix(name, "-"))
+	if name == "." || name == "/" {
+		return "", errors.New("unnamed foreground process")
+	}
+	if runes := []rune(name); len(runes) > 64 {
+		name = string(runes[:64])
+	}
+	return name, nil
 }
 
 // waitForShell 等新 pane 的可见画面非空（shell 打出了提示符），最多 sessionShellWait。
