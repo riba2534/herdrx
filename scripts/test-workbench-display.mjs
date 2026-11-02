@@ -7,7 +7,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
-import { chooseOption } from './browser-controls.mjs'
+import { chooseOption, enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const host = { id: 'display-test', name: '测试主机', transport: 'ssh' }
@@ -37,6 +37,7 @@ const base = `http://127.0.0.1:${server.address().port}`
 async function fixture(browser, options, fixtureSnapshot = snapshot, storedDisplay = null) {
   fixtureSnapshot = structuredClone(fixtureSnapshot)
   const context = await browser.newContext(options)
+  await enterShellMode(context)
   const page = await context.newPage()
   const messages = [], errors = []
   let closePane
@@ -546,11 +547,13 @@ try {
       await clickPaneTool(page, '调整终端字号')
       const dialog = page.getByRole('dialog', { name: '工作台设置' })
       const terminalBackground = await firstPane.evaluate((el) => getComputedStyle(el).backgroundColor)
-      await page.getByRole('button', { name: '切换为浅色', exact: true }).click()
+      // 工作台外观默认浅色：切到深色再切回，终端配色和连接都不受影响。
       await expect(page.locator('html')).toHaveAttribute('data-appearance', 'light')
-      assert.equal(await firstPane.evaluate((el) => getComputedStyle(el).backgroundColor), terminalBackground, 'UI theme must preserve terminal colors')
-      await screenshot(page, `${name}-settings-light`)
       await page.getByRole('button', { name: '切换为深色', exact: true }).click()
+      await expect(page.locator('html')).toHaveAttribute('data-appearance', 'dark')
+      assert.equal(await firstPane.evaluate((el) => getComputedStyle(el).backgroundColor), terminalBackground, 'UI theme must preserve terminal colors')
+      await screenshot(page, `${name}-settings-dark`)
+      await page.getByRole('button', { name: '切换为浅色', exact: true }).click()
       assert.equal(messages.filter((m) => m.t === 'terminal.open' || m.t === 'terminal.close' || m.op === 3).length, 0, 'UI appearance changed terminal connection or source geometry')
       await setSlider(page, '终端字号', 22)
       await setSlider(page, '终端缩放', 150)
