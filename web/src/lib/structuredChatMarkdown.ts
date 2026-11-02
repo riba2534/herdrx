@@ -58,18 +58,6 @@ export function recordText(record: Pick<ChatRecord, 'blocks'>) {
     .join('\n\n')
 }
 
-/** 整条复制的正文：正文 + 工具调用 / 工具结果的只读摘要，不含任何隐藏字段。 */
-export function recordCopyText(record: ChatRecord) {
-  const parts: string[] = []
-  const text = recordText(record)
-  if (text) parts.push(text)
-  for (const block of record.blocks) {
-    if (block.type === 'tool-call') parts.push(`[工具调用] ${block.name}${block.call_id ? ` (${block.call_id})` : ''}\n${toolInputText(block.input)}`)
-    if (block.type === 'tool-result') parts.push(`[工具结果${block.is_error ? '·错误' : ''}]${block.call_id ? ` (${block.call_id})` : ''}\n${block.output}`)
-  }
-  return parts.join('\n\n')
-}
-
 /** 工具入参预览：JSON 优先，无法序列化时退回字符串，并强制长度上限。 */
 export function toolInputText(input: unknown, limit = 4000) {
   let text: string
@@ -82,11 +70,6 @@ export function toolInputText(input: unknown, limit = 4000) {
     }
   }
   return truncateText(text, limit)
-}
-
-/** 工具输出预览：与入参同样的上限，避免把整段日志塞进 DOM。 */
-export function toolOutputText(output: string, limit = 8000) {
-  return truncateText(output, limit)
 }
 
 export function truncateText(text: string, limit: number) {

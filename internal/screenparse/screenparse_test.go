@@ -129,19 +129,19 @@ func TestParseDialogRecognizesKnownDialogs(t *testing.T) {
 		numbered bool
 	}{
 		{"permission", permissionPrompt, "Do you want to proceed?", []string{"Bash command", "rm -rf build", "Remove the build output"}, []Option{
-			{1, "Yes", true}, {2, "Yes, and don't ask again for rm commands in /workspace/example", false}, {3, "No, and tell Claude what to do differently (esc)", false},
+			{1, "Yes", true, ""}, {2, "Yes, and don't ask again for rm commands in /workspace/example", false, ""}, {3, "No, and tell Claude what to do differently (esc)", false, ""},
 		}, true},
 		{"plan", planPrompt(2), "Would you like to proceed?", []string{"Ready to code?", "Here is Claude's plan:", "1. Add the parser", "2. Wire the route"}, []Option{
-			{1, "Yes, and auto-accept edits", false}, {2, "Yes, and manually approve edits", true}, {3, "No, keep planning", false},
+			{1, "Yes, and auto-accept edits", false, ""}, {2, "Yes, and manually approve edits", true, ""}, {3, "No, keep planning", false, ""},
 		}, true},
 		{"trust", trustPrompt, "Quick safety check: Is this a project you created or one you trust?", []string{"Accessing workspace:", "/workspace/example", "Security guide"}, []Option{
-			{1, "No, exit", true}, {2, "Yes, I trust this folder", false},
+			{1, "No, exit", true, ""}, {2, "Yes, I trust this folder", false, ""},
 		}, false},
 		{"boxed", boxedPrompt, "Do you want to make this edit?", []string{"Edit file", "src/app.ts"}, []Option{
-			{1, "Yes", true}, {2, "No, and tell Claude what to do", false},
+			{1, "Yes", true, ""}, {2, "No, and tell Claude what to do", false, ""},
 		}, true},
 		{"codex", codexApproval, "Allow command?", []string{"$ cargo test --workspace"}, []Option{
-			{1, "Yes, proceed", true}, {2, "Yes, and don't ask again for this command", false}, {3, "No, and tell Codex what to do differently", false},
+			{1, "Yes, proceed", true, ""}, {2, "Yes, and don't ask again for this command", false, ""}, {3, "No, and tell Codex what to do differently", false, ""},
 		}, true},
 	}
 	for _, tc := range cases {
@@ -164,13 +164,13 @@ func TestParseDialogRecognizesKnownDialogs(t *testing.T) {
 }
 
 // AskUserQuestion 的选项中间夹着说明行，“Chat about this”与前面的选项隔着一条横线：
-// 横线下不是输入框，编号接续，照样认。
+// 横线下不是输入框，编号接续，照样认。说明行归到上方的选项。
 func TestParseDialogAskUserQuestion(t *testing.T) {
 	dialog := ParseDialog(askQuestion)
 	if dialog == nil {
 		t.Fatal("dialog not recognized")
 	}
-	want := []Option{{1, "Light", false}, {2, "Dark", true}, {3, "Type something.", false}, {4, "Chat about this", false}}
+	want := []Option{{1, "Light", false, "Bright background for daytime"}, {2, "Dark", true, "Low-glare background"}, {3, "Type something.", false, ""}, {4, "Chat about this", false, ""}}
 	if !reflect.DeepEqual(dialog.Options, want) || dialog.Title != "Which color scheme should the dashboard use?" || !reflect.DeepEqual(dialog.Lines, []string{"☐ Theme"}) {
 		t.Fatalf("dialog=%+v", dialog)
 	}
@@ -313,7 +313,7 @@ func TestParseDialogPickerWithoutQuestion(t *testing.T) {
 	if dialog.Title != "Select model" || !reflect.DeepEqual(dialog.Lines, []string{"Switch between models for new sessions."}) {
 		t.Fatalf("title=%q lines=%q", dialog.Title, dialog.Lines)
 	}
-	want := []Option{{1, "Default (recommended) · Use the default model", false}, {2, "Fast · Quick answers ✔", true}, {3, "Large · Hardest tasks", false}}
+	want := []Option{{1, "Default (recommended) · Use the default model", false, ""}, {2, "Fast · Quick answers ✔", true, ""}, {3, "Large · Hardest tasks", false, ""}}
 	if !reflect.DeepEqual(dialog.Options, want) {
 		t.Fatalf("options=%+v", dialog.Options)
 	}
@@ -353,7 +353,7 @@ func TestParseDialogDoesNotPullAgentListsIntoTheDialog(t *testing.T) {
 			if dialog == nil {
 				t.Fatal("dialog not recognized")
 			}
-			if want := []Option{{1, "Yes", true}, {2, "No", false}}; !reflect.DeepEqual(dialog.Options, want) {
+			if want := []Option{{1, "Yes", true, ""}, {2, "No", false, ""}}; !reflect.DeepEqual(dialog.Options, want) {
 				t.Fatalf("options=%+v", dialog.Options)
 			}
 			for _, line := range append([]string{dialog.Title}, dialog.Lines...) {

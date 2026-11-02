@@ -304,6 +304,8 @@ async function main() {
   resources.browser = browser
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
   resources.contexts.push(context)
+  // 默认模式是 Web UI；本脚本验收的是 Shell 模式里 pane 上的对话视图（清空存储后重新导航也会再写一次）。
+  await context.addInitScript(() => localStorage.setItem('herdrx.workbench-mode.v1', 'shell'))
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base })
   const page = await context.newPage()
   const pageErrors = []
@@ -387,24 +389,23 @@ async function main() {
   await expect(userBubbles.first()).toContainText(GOAL_TEXT)
   // 同源重复 prompt 的两条都必须在（同文不同 id，禁止按文本去重）。
   assert.equal(await chat.locator('.chat-bubble', { hasText: DUPLICATE_PROMPT }).count(), 2, 'a repeated prompt must keep both records')
-  // 注入轮与 thinking 都不渲染。
+  // 注入轮不渲染；思考过程不出现在正文里（服务端省略，或收在默认收起的工作组里）。
   await expect(chat.getByText('META-INJECTED-MARKER')).toHaveCount(0)
   await expect(chat.getByText(/THINKING-LEAK-MARKER/)).toHaveCount(0)
-  // 第一轮的正文与工具调用在同一条助手记录里，它就是最终回答，之前没有中间过程，不折叠。
-  await expect(chat.locator('.chat-fold')).toHaveCount(0)
-  // 工具结果记录是派生角色 tool，不能变成用户气泡。
-  const toolMessages = chat.locator('.chat-message[data-role="tool"]')
-  assert.equal(await toolMessages.count(), 1, 'the tool-result record must be re-roled to tool')
-  await expect(toolMessages.first()).toContainText('Read')
+  // 第一轮正文之后还有工具调用，正文留在外面，工具收进一个完成态的工作组。
+  const firstTurn = chat.locator('.chat-turn').first()
+  const readGroup = firstTurn.getByRole('button', { name: '已工作 1 秒 · 读取 1 个文件' })
+  await expect(readGroup).toHaveAttribute('aria-expanded', 'false')
+  // 工具结果回填到调用那一行，绝不变成用户气泡，也不单独成为一条消息。
   assert.equal(await chat.locator('.chat-message-user', { hasText: TOOL_OUTPUT.split('\n')[0] }).count(), 0, 'tool output leaked into a user bubble')
-  // 工具调用与结果都是可折叠分区，带真实工具名与 call id。
-  const toolCall = chat.locator('.chat-tool-call').first()
-  await expect(toolCall).toContainText('工具调用')
-  await expect(toolCall).toContainText(TOOL_CALL_ID)
-  const toolResult = chat.locator('.chat-tool-result').first()
-  await expect(toolResult).toContainText('工具结果')
-  await toolResult.locator('summary').click()
-  await expect(toolResult).toContainText('make web-build')
+  await expect(chat.locator('.chat-message[data-role="tool"]')).toHaveCount(0)
+  await readGroup.click()
+  const readRow = firstTurn.locator('.chat-action[data-tool="Read"]')
+  await expect(readRow).toHaveAttribute('data-status', 'done')
+  await expect(readRow.locator('.chat-file-chip')).toHaveText('README.md')
+  await readRow.getByRole('button', { name: /读取 README.md/ }).click()
+  await expect(readRow.locator('.chat-detail-input')).toContainText('README.md')
+  await expect(readRow.locator('.chat-output-pre')).toContainText('make web-build')
   // 助手正文是 Markdown 文档流。
   await expect(chat.locator('.chat-markdown h2').first()).toContainText('构建')
   await expect(chat.locator('.chat-markdown strong').first()).toContainText('pnpm')
@@ -487,7 +488,7 @@ async function main() {
   // 重新进入对话视图会新建一个只读会话（pane 视图切换会卸载 ChatView），
   // 先显式重选一次，让窄宽度量的是**真实消息**（Markdown、代码块、工具卡片）而不是候选列表。
   await chat.locator('.chat-candidate').filter({ hasText: 'aaaaaaaa' }).click()
-  await expect(chat.locator('.chat-tool-call').first()).toBeVisible()
+  await expect(chat.locator('.chat-work').first()).toBeVisible()
   for (const target of [496, 320, 280]) {
     const measured = await aimPaneWidth(page, target)
     assert.ok(Math.abs(measured.actual - target) <= 6, `could not size the pane to ${target}px (got ${measured.actual})`)
@@ -614,7 +615,9 @@ async function main() {
   await expect(dshChat).toContainText('DSH 合成回答：正在运行。')
   await expect(dshChat).not.toContainText('DSH-PRIVATE-REASONING')
   await expect(dshChat.locator('.chat-message-user')).toHaveCount(1)
-  await expect(dshChat.locator('.chat-message-tool')).toHaveCount(1)
+  // DSH 的工具调用与结果同样收进工作组的一行里。
+  await dshChat.getByRole('button', { name: /^已工作 \d+ 秒 · 调用 1 个工具$/ }).click()
+  await expect(dshChat.locator('.chat-action[data-tool="bash"]')).toHaveCount(1)
   assert.equal(await spawnCount(), beforeDshOpen, 'DSH source selection reopened the terminal')
   await dshSwitch.click()
   assert.equal(await spawnCount(), beforeDshOpen, 'leaving DSH view reopened the terminal')
@@ -654,14 +657,15 @@ async function main() {
   await expect(verifiedChat.locator('.chat-head-verified')).toHaveText('已确认')
   await expect(verifiedChat.locator('.chat-message-user').first()).toHaveText(/^补齐 example 测试/)
   await expect(verifiedChat.locator('.chat-candidate')).toHaveCount(0)
-  const verifiedFold = verifiedChat.locator('.chat-fold')
-  await expect(verifiedFold).toHaveText('工具 1 · 用时 42 秒')
-  await expect(verifiedChat.locator('.chat-message[data-role="tool"]')).toHaveCount(0)
+  // 中间文字与工具收成一组，计时到插入的消息为止；最终回复与插入的消息留在外面。
+  const verifiedFold = verifiedChat.getByRole('button', { name: '已工作 5 秒 · 运行 1 条命令' })
+  await expect(verifiedFold).toHaveAttribute('aria-expanded', 'false')
+  await expect(verifiedChat.locator('.chat-action')).toHaveCount(0)
   await expect(verifiedChat.getByText('VERIFIED-FINAL 测试已补齐。')).toBeVisible()
   await expect(verifiedChat.locator('.chat-queued')).toHaveText('工作中插入')
   await screenshot(page, '11-chat-verified-folded')
   await verifiedFold.click()
-  await expect(verifiedChat.locator('.chat-message[data-role="tool"]')).toHaveCount(1)
+  await expect(verifiedChat.locator('.chat-action[data-tool="Bash"]')).toHaveCount(1)
   await expect(verifiedChat.getByText('先看一下现有测试。')).toBeVisible()
   await screenshot(page, '12-chat-verified-expanded')
   await verifiedChat.getByRole('button', { name: '重新选择会话记录' }).click()

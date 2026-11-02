@@ -213,7 +213,7 @@ func TestScrollFlickerWithRealHerdr(t *testing.T) {
 				if err := scroll.Send(ctx, -3, 10, 5); err != nil {
 					t.Fatal(err)
 				}
-				wait(func() bool { value, ok := readState(); return ok && value.Position == -gesture-1 })
+				wait(func() bool { value, ok := readState(); return ok && value.Position == -3*(gesture+1) })
 				wait(func() bool { scroll.mu.Lock(); defer scroll.mu.Unlock(); return scroll.connection == nil })
 				// The app records SIGWINCH immediately; allow the native shell's
 				// restore render to complete before checking the final dimensions.

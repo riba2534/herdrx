@@ -20,10 +20,14 @@
     "@xterm/addon-web-links": "0.11.0",
     "@xterm/addon-webgl": "0.18.0",
     "@xterm/xterm": "5.5.0",
+    "diff": "9.0.0",
+    "highlight.js": "11.11.2",
+    "lowlight": "3.3.0",
     "lucide-react": "^0.542.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
+    "remark-cjk-friendly": "2.3.3",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {

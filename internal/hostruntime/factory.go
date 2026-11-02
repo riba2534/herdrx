@@ -14,6 +14,7 @@ import (
 	"github.com/riba2534/herdrx/internal/agentlog"
 	"github.com/riba2534/herdrx/internal/config"
 	"github.com/riba2534/herdrx/internal/herdr"
+	"github.com/riba2534/herdrx/internal/launchers"
 	"github.com/riba2534/herdrx/internal/secure"
 	"github.com/riba2534/herdrx/internal/store"
 	"github.com/riba2534/herdrx/internal/tunnel"
@@ -349,6 +350,21 @@ func (h *sharedHandle) TranscriptUnavailableReason() string {
 		return diagnostics.TranscriptUnavailableReason()
 	}
 	return ""
+}
+
+// Launchers forwards the optional launcher discovery. An endpoint without it
+// reports unsupported_agent; a failed discovery is a result, and only a broken
+// transport drops the shared connection.
+func (h *sharedHandle) Launchers(ctx context.Context) (launchers.Result, error) {
+	endpoint, ok := h.entry.endpoint.(herdr.LauncherEndpoint)
+	if !ok {
+		return launchers.Unsupported(launchers.ReasonUnsupportedAgent), nil
+	}
+	value, err := endpoint.Launchers(ctx)
+	if ctx.Err() == nil && isTransportError(err) {
+		h.invalidate()
+	}
+	return value, err
 }
 
 func (h *sharedHandle) StageImage(ctx context.Context, ext string, r io.Reader) (string, error) {

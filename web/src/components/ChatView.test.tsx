@@ -1,11 +1,12 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatView } from './ChatView'
 import { clearComposerDrafts, readComposerDraft } from '../lib/composerDrafts'
 import { api, invalidateAuthentication } from '../lib/api'
-import type { WorkbenchClient } from '../lib/workbench'
+import type { ScreenError, WorkbenchClient } from '../lib/workbench'
+import type { ScreenFrame } from '../lib/ansiScreen'
 import type { ChatRecord } from '../lib/structuredChatTypes'
-import type { Pane } from '../types'
+import type { Pane, PaneDialog } from '../types'
 
 /**
  * 语音替身：默认「未启用」，只有显式 enable() 的用例才会出现麦克风入口。
@@ -121,8 +122,27 @@ function sequence(...pages: unknown[]) {
   }
 }
 
+type ScreenWatch = { paneID: string; onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void; stopped: boolean }
+
 function createClient() {
-  return { call: vi.fn().mockRejectedValue(new Error('Chat 视图不应调用任何 RPC')), getHostID: () => 'host' } as unknown as WorkbenchClient
+  const watches: ScreenWatch[] = []
+  return {
+    watches,
+    call: vi.fn().mockRejectedValue(new Error('Chat 视图不应调用任何 RPC')),
+    getHostID: () => 'host',
+    watchScreen: vi.fn((paneID: string, _lines: number, handlers: { onFrame: (frame: ScreenFrame) => void; onError: (error: ScreenError) => void }) => {
+      const watch = { paneID, ...handlers, stopped: false }
+      watches.push(watch)
+      return () => { watch.stopped = true }
+    }),
+    onEpoch: vi.fn(() => () => true),
+  } as unknown as WorkbenchClient & { watches: ScreenWatch[] }
+}
+
+/** 一帧 Claude 全屏画面：spinner（可选）、输入框和模式行。 */
+function claudeScreen(mode: string, { spinner = '', seq = 1 } = {}) {
+  const lines = ['● 正在改 calc.py', '', ...(spinner ? [spinner, ''] : []), '─'.repeat(40), '❯ ', '─'.repeat(40), `  ⏵⏵ ${mode} on (shift+tab to cycle)`]
+  return { pane_id: 'p1', gen: 1, seq, full: true, lines, total: lines.length } satisfies ScreenFrame
 }
 
 function props(overrides: Record<string, unknown> = {}) {
@@ -187,17 +207,17 @@ describe('latest-message following', () => {
     for (const gap of [0, 24, 48, 100, 128]) {
       size.top = 800 - gap
       fireEvent.scroll(log)
-      expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
     }
     size.top = 500
     fireEvent.scroll(log)
-    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '跳到底部' })).toBeVisible()
     size.top = 710
     fireEvent.scroll(log)
-    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '跳到底部' })).toBeVisible()
     size.top = 750
     fireEvent.scroll(log)
-    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
   })
 
   it('does not resume following a small manual scroll when polling or resizing', async () => {
@@ -210,13 +230,13 @@ describe('latest-message following', () => {
     fireEvent.wheel(log, { deltaY: -48 })
     size.top -= 48
     fireEvent.scroll(log)
-    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
     size.height = 1600
     fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
     await screen.findByText('手动上翻后更新')
     expect(size.top).toBe(752)
-    expect(screen.getByRole('button', { name: '跳到最新' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    expect(screen.getByRole('button', { name: '跳到底部' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '跳到底部' }))
     expect(size.top).toBe(1200)
   })
 
@@ -230,7 +250,7 @@ describe('latest-message following', () => {
     size.height = 1300
     fireEvent.scroll(log)
     expect(size.top).toBe(750)
-    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    fireEvent.click(screen.getByRole('button', { name: '跳到底部' }))
     fireEvent.keyDown(log, { key: 'PageUp' })
     size.top = 850
     size.viewport = 250
@@ -247,7 +267,7 @@ describe('latest-message following', () => {
     fireEvent.scroll(log)
     expect(size.top).toBe(752)
     expect(log.dataset.following).toBe('false')
-    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    fireEvent.click(screen.getByRole('button', { name: '跳到底部' }))
     expect(size.top).toBe(1200)
     expect(log.dataset.following).toBe('true')
     fireEvent.scroll(log)
@@ -289,7 +309,7 @@ describe('latest-message following', () => {
     fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
     await screen.findByText('回答已经变长')
     expect(size.top).toBe(1300)
-    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
   })
 
   it('follows layout resizing but does not pull a historical reader to the bottom', async () => {
@@ -306,15 +326,15 @@ describe('latest-message following', () => {
     size.viewport = 250
     act(() => { for (const callback of callbacks) callback() })
     expect(size.top).toBe(950)
-    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
     size.top = 400
     fireEvent.scroll(log)
     size.height = 1800
     act(() => { for (const callback of callbacks) callback() })
     expect(size.top).toBe(400)
-    fireEvent.click(screen.getByRole('button', { name: '跳到最新' }))
+    fireEvent.click(screen.getByRole('button', { name: '跳到底部' }))
     expect(size.top).toBe(1550)
-    expect(screen.queryByRole('button', { name: '跳到最新' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '跳到底部' })).not.toBeInTheDocument()
   })
 })
 
@@ -344,15 +364,19 @@ describe('candidate selection', () => {
     render(<ChatView {...props({ client })}/>)
     fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
 
-    await waitFor(() => expect(document.querySelectorAll('.chat-message')).toHaveLength(5))
+    await waitFor(() => expect(document.querySelectorAll('.chat-message')).toHaveLength(4))
     const roles = Array.from(document.querySelectorAll('.chat-message')).map((node) => node.getAttribute('data-role'))
-    expect(roles).toEqual(['user', 'assistant', 'tool', 'user', 'assistant'])
-    expect(document.querySelectorAll('.chat-message-user')).toHaveLength(2)
+    expect(roles).toEqual(['user', 'assistant', 'user', 'assistant'])
+    expect(document.querySelectorAll('.chat-turn')).toHaveLength(2)
     expect(document.querySelector('.chat-message-assistant strong')).toHaveTextContent('已开始')
-    const tool = document.querySelector('.chat-tool-call')
-    expect(tool?.querySelector('.chat-tool-name')).toHaveTextContent('Bash')
-    expect(tool?.querySelector('.chat-tool-id')).toHaveTextContent('call-1')
-    expect(tool?.querySelector('.chat-tool-pre')).toHaveTextContent('pnpm test')
+    // 工具调用收进工作组，结果回填到同一行；展开后能看到真实命令与输出。
+    fireEvent.click(screen.getByRole('button', { name: /运行 1 条命令/ }))
+    const tool = document.querySelector('.chat-action[data-tool="Bash"]')
+    expect(tool).toHaveAttribute('data-status', 'done')
+    expect(tool?.querySelector('.chat-action-raw')).toHaveTextContent('pnpm test')
+    fireEvent.click(within(tool as HTMLElement).getByRole('button', { name: /运行命令/ }))
+    expect(tool?.querySelector('.chat-detail-input')).toHaveTextContent('$ pnpm test')
+    expect(tool?.querySelector('.chat-output-pre')).toHaveTextContent('2 passed')
 
     // 第二次请求必须带上被选中的候选，且客户端永不自行拼路径或 cwd。
     const urls = mock.mock.calls.map((call) => String(call[0]))
@@ -769,26 +793,241 @@ describe('verified binding and turn folding', () => {
   })
 
   it('folds the intermediate steps of a finished turn into one expandable line', async () => {
-    transcriptServer(sequence(candidatesPage, boundPage(work)))
+    const timed = work.map((record) => record.id === 'q1' ? { ...record, at: '2026-10-01T08:00:30Z' } : record)
+    transcriptServer(sequence(candidatesPage, boundPage(timed)))
     render(<ChatView {...props()}/>)
     fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
-    const fold = await screen.findByRole('button', { name: '工具 1 · 用时 42 秒' })
+    const fold = await screen.findByRole('button', { name: '已工作 30 秒 · 运行 1 条命令' })
     expect(fold).toHaveAttribute('aria-expanded', 'false')
     const ids = () => Array.from(document.querySelectorAll('.chat-message')).map((node) => node.getAttribute('data-record-id'))
     expect(ids()).toEqual(['u1', 'q1', 'a3'])
     expect(screen.getByText('工作中插入')).toBeVisible()
+    expect(screen.queryByText('先看看')).toBeNull()
 
     fireEvent.click(fold)
     expect(fold).toHaveAttribute('aria-expanded', 'true')
-    expect(ids()).toEqual(['u1', 'a1', 'a2', 't1', 'q1', 'a3'])
+    // 中间文字与工具调用按原顺序出现在工作组里，最终回复与插入的消息仍在外面。
+    const body = document.querySelector('.chat-work-body') as HTMLElement
+    expect(within(body).getByText('先看看')).toBeVisible()
+    expect(body.querySelector('.chat-action[data-tool="Bash"]')).not.toBeNull()
+    expect(ids()).toEqual(['u1', 'q1', 'a3'])
   })
 
-  it('does not fold the latest turn while the agent is still working', async () => {
-    transcriptServer(sequence(candidatesPage, boundPage(work)))
+  it('keeps the newest steps of a working turn open with a live timer', async () => {
+    const live: ChatRecord[] = [
+      ...work.slice(0, 4),
+      { id: 'a4', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'call-2', name: 'Read', input: { file_path: '/srv/app/README.md' } }] },
+    ]
+    transcriptServer(sequence(candidatesPage, boundPage(live)))
     render(<ChatView {...props({ pane: { ...basePane, agent_status: 'working' } })}/>)
     fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
-    await screen.findByText('已补齐')
-    expect(screen.queryByRole('button', { name: /工具 1/ })).toBeNull()
-    expect(document.querySelectorAll('.chat-message')).toHaveLength(6)
+    // 最新正文之后的动作不收起：还在跑的那一步显示运行中。
+    expect(await screen.findByText('先看看')).toBeVisible()
+    const group = screen.getByRole('region', { name: '正在进行的工作' })
+    expect(group).toHaveTextContent('正在工作…')
+    expect(within(group).getByRole('button', { name: /读取 README.md（运行中）/ })).toBeVisible()
+    expect(within(group).getByRole('button', { name: /运行命令（已完成）/ })).toBeVisible()
+    expect(group.querySelector('.chat-work-timer')).not.toBeNull()
+  })
+
+  it('shows a waiting state instead of a spinner while the agent is blocked', async () => {
+    transcriptServer(sequence(candidatesPage, boundPage(work.slice(0, 4))))
+    render(<ChatView {...props({ pane: { ...basePane, agent_status: 'blocked' } })}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('先看看')
+    expect(screen.getByRole('region', { name: '正在进行的工作' })).toHaveTextContent('等待处理…')
+  })
+})
+
+describe('console variant', () => {
+  it('renders the centered console layout and opens the pane in Shell mode', async () => {
+    const onSwitchToTerminal = vi.fn()
+    transcriptServer(sequence(boundPage([text('u1', 'user', '问'), text('a1', 'assistant', '答')], { binding: 'verified', session: 'cand-1' })))
+    render(<ChatView {...props({ onSwitchToTerminal, variant: 'console' })}/>)
+    await screen.findByText('答')
+    const view = screen.getByRole('region', { name: '对话视图' })
+    expect(view).toHaveAttribute('data-variant', 'console')
+    expect(view.querySelector('.chat-log > .chat-column')).not.toBeNull()
+    // 已绑定时不再重复「回答来自会话记录」的说明。
+    expect(screen.queryByRole('note')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '在 Shell 中打开' }))
+    expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('defaults to the pane variant for existing callers, without the console status bar or cards', async () => {
+    transcriptServer(sequence(candidatesPage))
+    const client = createClient()
+    const dialog = vi.spyOn(api, 'paneDialog')
+    render(<ChatView {...props({ client, pane: { ...basePane, agent_status: 'blocked' } })}/>)
+    await screen.findByText('选择此终端的会话记录')
+    expect(screen.getByRole('region', { name: '对话视图' })).toHaveAttribute('data-variant', 'pane')
+    expect(screen.getByRole('button', { name: '显示终端' })).toBeVisible()
+    expect(client.watchScreen).not.toHaveBeenCalled()
+    expect(dialog).not.toHaveBeenCalled()
+    expect(document.querySelector('.console-status')).toBeNull()
+  })
+})
+
+describe('console status bar and interaction cards', () => {
+  const ask: ChatRecord = { id: 'ask', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'call-ask', name: 'AskUserQuestion', input: { questions: [{ header: '测试框架', multiSelect: false, question: '测试框架用 pytest 还是 unittest？', options: [{ label: 'pytest', description: '使用 pytest' }, { label: 'unittest', description: '使用 unittest' }] }] } }] }
+  const question: PaneDialog = { fingerprint: 'fp-q', kind: 'question', title: '测试框架用 pytest 还是 unittest？', lines: [], options: ['pytest', 'unittest', 'Type something.', 'Chat about this'].map((label, index) => ({ index: index + 1, label, selected: index === 0 })) }
+  const verified = (messages: ChatRecord[]) => boundPage(messages, { binding: 'verified', session: 'cand-1' })
+
+  function setVisibility(state: DocumentVisibilityState) {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  afterEach(() => setVisibility('visible'))
+
+  /** 渲染 console 变体，等第一条记录出来；返回假 client 与它的 `call`。 */
+  async function renderConsole(messages: ChatRecord[], pane: Partial<Pane> = {}) {
+    transcriptServer(sequence(verified(messages)))
+    const client = createClient()
+    const call = vi.mocked(client.call).mockResolvedValue({})
+    render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, ...pane } })}/>)
+    await screen.findByText((messages[0].blocks[0] as { text: string }).text)
+    return { client, call }
+  }
+
+  it('shows the working status, the mode and the live screen above the input', async () => {
+    const { client } = await renderConsole([text('u1', 'user', '改一下')], { agent_status: 'working' })
+    expect(client.watchScreen).toHaveBeenCalledTimes(1)
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions', { spinner: '✻ Wibbling… (15s · ↓ 1.2k tokens)' })))
+    // 计时立刻显示；动词按状态文案的节奏（至少停留 1 秒）替换掉「正在运行…」。
+    expect(screen.getByText('15 秒')).toBeInTheDocument()
+    expect(await screen.findByText('Wibbling…', {}, { timeout: 2000 })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /实时画面/ })).toHaveTextContent('● 正在改 calc.py')
+    // 状态栏在输入框上方，输入框照常可用。
+    const compose = document.querySelector('.chat-compose')!
+    expect(compose.querySelector('.console-status')).not.toBeNull()
+    expect(screen.getByRole('textbox', { name: '对话输入内容' })).toBeVisible()
+  })
+
+  it('reads the screen only for a visible Claude pane', async () => {
+    transcriptServer(sequence(verified([text('u1', 'user', '问')])))
+    const client = createClient()
+    const view = render(<ChatView {...props({ client, variant: 'console', pane: { ...basePane, agent: 'codex' } })}/>)
+    await screen.findByText('问')
+    expect(client.watchScreen).not.toHaveBeenCalled()
+    view.rerender(<ChatView {...props({ client, variant: 'console' })}/>)
+    expect(client.watchScreen).toHaveBeenCalledTimes(1)
+    act(() => setVisibility('hidden'))
+    expect(client.watches[0].stopped).toBe(true)
+  })
+
+  it('replaces the input with a question card and brings it back with the draft when the card folds', async () => {
+    transcriptServer(sequence(verified([text('u1', 'user', '问我一个问题'), ask])))
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: question })
+    render(<ChatView {...props({ variant: 'console' })}/>)
+    await screen.findByText('问我一个问题')
+    fireEvent.change(screen.getByRole('textbox', { name: '对话输入内容' }), { target: { value: '没发出去的草稿' } })
+    const card = await screen.findByRole('group', { name: 'Claude 在问：测试框架用 pytest 还是 unittest？' })
+    expect(document.querySelector('.chat-console-controls[data-dock]')).toBeNull()
+    expect(card).toHaveTextContent('使用 unittest')
+    expect(screen.queryByRole('textbox', { name: '对话输入内容' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
+    expect(screen.getByRole('button', { name: /^展开卡片/ })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '对话输入内容' })).toHaveValue('没发出去的草稿')
+    // 没有展开的卡片时，空闲状态栏停到输入区的工具行里。
+    expect(document.querySelector('.chat-console-controls[data-dock] > .console-status[data-state="idle"]')).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^展开卡片/ }))
+    expect(screen.queryByRole('textbox', { name: '对话输入内容' })).toBeNull()
+    expect(readComposerDraft('host', 'p1')).toBe('没发出去的草稿')
+  })
+
+  it('opens the pane in Shell mode from a multi-select question', async () => {
+    const multi: ChatRecord = { ...ask, blocks: [{ type: 'tool-call', call_id: 'call-multi', name: 'AskUserQuestion', input: { questions: [{ question: '选哪些？', multiSelect: true, options: [{ label: 'a' }, { label: 'b' }] }] } }] }
+    transcriptServer(sequence(verified([multi])))
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: null })
+    const onSwitchToTerminal = vi.fn()
+    render(<ChatView {...props({ variant: 'console', onSwitchToTerminal })}/>)
+    const card = await screen.findByRole('group', { name: 'Claude 在等你回答多选题' })
+    expect(card).toHaveTextContent('这道题可以多选')
+    fireEvent.click(within(card).getByRole('button', { name: '在 Shell 中打开' }))
+    expect(onSwitchToTerminal).toHaveBeenCalledTimes(1)
+  })
+
+  it('interrupts with one Esc key press and reports a failure without retrying', async () => {
+    const { call } = await renderConsole([text('u1', 'user', '跑起来')], { agent_status: 'working' })
+    fireEvent.click(screen.getByRole('button', { name: '中断' }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['esc'] }))
+    call.mockRejectedValueOnce(new Error('请求超时'))
+    fireEvent.click(screen.getByRole('button', { name: '中断' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没有确认 Esc 已送达（请求超时），不会自动重发')
+    expect(call).toHaveBeenCalledTimes(2)
+  })
+
+  it('cycles the mode with one Shift+Tab and waits for the mode line to change', async () => {
+    const { client, call } = await renderConsole([text('u1', 'user', '切模式')])
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
+    fireEvent.click(screen.getByRole('button', { name: /当前模式：免授权/ }))
+    await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['shift+tab'] }))
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeDisabled()
+    act(() => client.watches[0].onFrame(claudeScreen('auto mode', { seq: 2 })))
+    await waitFor(() => expect(screen.getByRole('button', { name: /当前模式：自动/ })).toBeEnabled())
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(call).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('new arrivals', () => {
+  function scrolledAway(log: HTMLElement) {
+    const size = { height: 1200, viewport: 400, top: 800 }
+    Object.defineProperties(log, {
+      scrollHeight: { configurable: true, get: () => size.height },
+      clientHeight: { configurable: true, get: () => size.viewport },
+      scrollTop: { configurable: true, get: () => size.top, set: (value: number) => { size.top = Math.max(0, Math.min(value, size.height - size.viewport)) } },
+    })
+    fireEvent.scroll(log)
+    fireEvent.wheel(log, { deltaY: -300 })
+    size.top = 300
+    fireEvent.scroll(log)
+    return size
+  }
+
+  it('counts replies that arrive while reading history and swaps the jump chip for it', async () => {
+    transcriptServer(sequence(candidatesPage,
+      boundPage([text('u1', 'user', '问题'), text('a1', 'assistant', '第一段回答')]),
+      boundPage([{ id: 't1', role: 'tool', blocks: [] }, text('a2', 'assistant', '新回答一'), text('a3', 'assistant', '新回答二')], { next_cursor: 'cur-2' }),
+    ))
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('第一段回答')
+    const size = scrolledAway(screen.getByRole('log', { name: '对话记录' }))
+    expect(screen.getByRole('button', { name: '跳到底部' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
+    await waitFor(() => expect(document.querySelector('.chat-assistant-text[data-record-id="a3"]')).toHaveTextContent('新回答二'))
+    // 同一轮的两条回复算一条新消息；有新消息时「跳到底部」让位。
+    const unread = screen.getByRole('button', { name: '回到底部，查看 1 条新消息' })
+    expect(unread).toHaveTextContent('1 条新消息')
+    expect(screen.queryByRole('button', { name: '跳到底部' })).toBeNull()
+    fireEvent.click(unread)
+    expect(size.top).toBe(800)
+    expect(screen.queryByRole('button', { name: /条新消息/ })).toBeNull()
+    // 回到底部后计数清零：再次离开底部只显示「跳到底部」。
+    fireEvent.wheel(screen.getByRole('log', { name: '对话记录' }), { deltaY: -300 })
+    size.top = 300
+    fireEvent.scroll(screen.getByRole('log', { name: '对话记录' }))
+    expect(screen.getByRole('button', { name: '跳到底部' })).toBeVisible()
+  })
+
+  it('fades in only assistant text that arrives after the first page', async () => {
+    transcriptServer(sequence(candidatesPage,
+      boundPage([text('u1', 'user', '问题'), text('a1', 'assistant', '历史回答')]),
+      boundPage([text('a2', 'assistant', '新到的回答')], { next_cursor: 'cur-2' }),
+    ))
+    render(<ChatView {...props()}/>)
+    fireEvent.click(await screen.findByRole('button', { name: /aaaa1111/ }))
+    await screen.findByText('历史回答')
+    expect(document.querySelectorAll('.chat-word')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: '刷新会话记录' }))
+    // 新到的正文按词包装淡入；淡入不改变正文本身。
+    const fresh = () => document.querySelector('.chat-assistant-text[data-record-id="a2"]')
+    await waitFor(() => expect(fresh()?.querySelectorAll('.chat-word').length).toBeGreaterThan(1))
+    expect(fresh()).toHaveTextContent('新到的回答')
+    expect(document.querySelector('.chat-assistant-text[data-record-id="a1"] .chat-word')).toBeNull()
   })
 })

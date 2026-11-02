@@ -1426,13 +1426,13 @@ describe('TerminalPane chat view', () => {
     fireEvent.click(await within(chatRegion).findByRole('button', { name: /aaaa1111/ }))
     expect(await within(chatRegion).findByText('把 header 高度改成 44')).toBeInTheDocument()
     expect(within(chatRegion).getByText('已改成 44 并补了测试。')).toBeInTheDocument()
-    // 已完成的一轮把中间过程收成一行；展开后工具调用与结果以真实工具名 + call id 呈现，
+    // 已完成的一轮把中间过程收成一行；展开后工具调用与它的结果在同一行里，
     // 且工具结果不会被当成用户问题。
-    expect(within(chatRegion).queryByText('Edit')).toBeNull()
-    fireEvent.click(within(chatRegion).getByRole('button', { name: '工具 1' }))
-    expect(within(chatRegion).getAllByText('Edit')).toHaveLength(2)
-    expect(within(chatRegion).getAllByText('call-1')).toHaveLength(2)
+    expect(within(chatRegion).queryByText('ChatView.css')).toBeNull()
+    fireEvent.click(within(chatRegion).getByRole('button', { name: '工作过程 · 编辑 1 个文件' }))
+    fireEvent.click(within(chatRegion).getByRole('button', { name: /编辑 ChatView.css/ }))
     expect(within(chatRegion).getByText('updated')).toBeInTheDocument()
+    expect(chatRegion.querySelectorAll('.chat-message-user')).toHaveLength(1)
     // 旧行为（用 pane.read 的终端文本冒充对话）必须不存在：Chat 视图一次都没读过终端。
     expect(call.mock.calls.filter(([method]) => method === 'pane.read')).toHaveLength(0)
     expect(chatRegion).not.toHaveTextContent('真实终端文本')
