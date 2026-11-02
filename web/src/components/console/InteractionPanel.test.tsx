@@ -39,9 +39,10 @@ const settle = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(m
 
 function mount(props: { records?: ChatRecord[]; status?: Pane['agent_status']; live?: ConsoleLive; onOpenShell?: () => void } = {}) {
   const onActiveChange = vi.fn()
-  const element = (next: typeof props) => <InteractionPanel hostID="host" pane={pane(next.status)} records={next.records || []} live={next.live || EMPTY_CONSOLE_LIVE} onActiveChange={onActiveChange} onOpenShell={next.onOpenShell}/>
+  const onDialogChange = vi.fn()
+  const element = (next: typeof props) => <InteractionPanel hostID="host" pane={pane(next.status)} records={next.records || []} live={next.live || EMPTY_CONSOLE_LIVE} onActiveChange={onActiveChange} onDialogChange={onDialogChange} onOpenShell={next.onOpenShell}/>
   const view = render(element(props))
-  return { ...view, onActiveChange, update: (next: typeof props) => view.rerender(element(next)) }
+  return { ...view, onActiveChange, onDialogChange, update: (next: typeof props) => view.rerender(element(next)) }
 }
 
 beforeEach(() => {
@@ -244,10 +245,39 @@ describe('InteractionPanel', () => {
     await settle()
     expect(screen.getByRole('heading', { name: '给 calc.py 添加 sub 函数' })).toBeInTheDocument()
     const labels = screen.getAllByRole('listitem').map((item) => item.textContent)
-    expect(labels).toEqual(['批准并保持免授权1', '批准，改动逐个确认2', '提修改意见3'])
-    fireEvent.click(screen.getByRole('button', { name: /批准并保持免授权/ }))
+    expect(labels).toEqual(['批准并切换到免授权', '批准，改动逐个确认', '提修改意见'])
+    // 计划卡只能点击，数字键不作答。
+    fireEvent.keyDown(window, { key: '1' })
+    await settle()
+    expect(answer).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /批准并切换到免授权/ }))
     await settle()
     expect(answer).toHaveBeenCalledWith('host', 'p1', 'fp-plan', 1)
+  })
+
+  it('keeps the plan buttons disabled until the pending plan is in the transcript', async () => {
+    shown = planDialog
+    // 只有一份已经有结果的旧计划：不能拿它配屏幕上新计划的按钮。
+    const view = mount({ records: answered(exitPlan('# 旧计划 A'), 'plan1'), status: 'blocked' })
+    await settle()
+    expect(screen.getByRole('status')).toHaveTextContent('计划加载中')
+    expect(screen.queryByRole('heading', { name: '旧计划 A' })).toBeNull()
+    for (const name of [/批准并切换到免授权/, /批准，改动逐个确认/, /提修改意见/]) expect(screen.getByRole('button', { name })).toBeDisabled()
+    view.update({ records: [...answered(exitPlan('# 旧计划 A'), 'plan1'), { id: 'r-plan2', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'plan2', name: 'ExitPlanMode', input: { plan: '# 新计划 B' } }] }], status: 'blocked' })
+    await settle()
+    expect(screen.getByRole('heading', { name: '新计划 B' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /批准并切换到免授权/ })).toBeEnabled()
+  })
+
+  it('disables the plan buttons when the plan on screen is not the one in the transcript', async () => {
+    shown = { ...planDialog, lines: ['给 calc.py 添加 sub 函数'] }
+    mount({ records: exitPlan('# 把 add 改名为 plus'), status: 'idle' })
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('屏幕上的计划和对话记录里的这份对不上')
+    expect(screen.getByRole('button', { name: /批准并切换到免授权/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /批准并切换到免授权/ }))
+    await settle()
+    expect(answer).not.toHaveBeenCalled()
   })
 
   it('collects plan feedback after moving to the feedback item', async () => {
@@ -310,6 +340,60 @@ describe('InteractionPanel', () => {
     shown = permission
     await settle(INTERACTION_POLL_MS)
     expect(screen.getByRole('group', { name: 'Do you want to proceed?' })).toBeInTheDocument()
+  })
+
+  it('shows only the screen text when the question on screen is not the one in the transcript', async () => {
+    shown = { ...q1, title: '测试框架用哪个？', options: [{ index: 1, label: 'pytest', selected: true, description: '屏幕上的说明' }, ...q1.options.slice(1)] }
+    mount({ records: ask() })
+    await settle()
+    expect(screen.getByRole('group', { name: 'Claude 在问：测试框架用哪个？' })).toBeInTheDocument()
+    expect(screen.queryByText(/第 \d\/\d 题/)).toBeNull()
+    expect(screen.getByRole('button', { name: /^pytest/ })).toHaveTextContent('屏幕上的说明')
+    expect(screen.queryByText('使用 pytest 作为测试框架')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^unittest/ }))
+    await settle()
+    expect(answer).toHaveBeenCalledWith('host', 'p1', 'fp-q1', 2)
+  })
+
+  it('folds away and stops reading after three reads without a dialog, until the transcript or the status changes', async () => {
+    shown = null
+    const multi = ask('multi', { questions: [{ ...questions[0], multiSelect: true }] })
+    const view = mount({ records: multi, status: 'idle' })
+    await settle()
+    // 多选题的说明卡在读不到对话框时出现，连续 3 次读不到就收起。
+    expect(screen.getByText(/这道题可以多选/)).toBeInTheDocument()
+    await settle(INTERACTION_POLL_MS * 2)
+    expect(read).toHaveBeenCalledTimes(3)
+    expect(screen.queryByText(/这道题可以多选/)).toBeNull()
+    expect(view.onActiveChange).toHaveBeenLastCalledWith(false)
+    await settle(INTERACTION_POLL_MS * 4)
+    expect(read).toHaveBeenCalledTimes(3)
+    view.update({ records: multi, status: 'working' })
+    await settle()
+    expect(read).toHaveBeenCalledTimes(4)
+  })
+
+  it('keeps reading a blocked pane however many reads come back empty', async () => {
+    shown = null
+    mount({ records: ask(), status: 'blocked' })
+    await settle()
+    // 一轮一轮推进，让每次读屏后的状态都来得及生效。
+    for (let round = 0; round < 5; round++) await settle(INTERACTION_POLL_MS)
+    expect(read).toHaveBeenCalledTimes(6)
+  })
+
+  it('reports whether a card or a dialog is present', async () => {
+    shown = q1
+    // 收起状态按交互记在模块里：用单独的调用编号，不影响别的用例。
+    const view = mount({ records: ask('ask-presence') })
+    await settle()
+    expect(view.onDialogChange).toHaveBeenLastCalledWith(true)
+    fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
+    // 收成条也算：这时按 Shift+Tab 一样会落进对话框。
+    expect(view.onDialogChange).toHaveBeenLastCalledWith(true)
+    view.update({ records: answered(ask('ask-presence'), 'ask-presence') })
+    await settle()
+    expect(view.onDialogChange).toHaveBeenLastCalledWith(false)
   })
 
   it('guides multi-select questions to the Shell mode', async () => {

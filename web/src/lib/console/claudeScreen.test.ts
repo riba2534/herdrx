@@ -126,6 +126,12 @@ describe('parseMode', () => {
     expect(parseMode(['content', '─'.repeat(20), '❯ ', '─'.repeat(20), `  ${line}`, ''])).toBe(mode)
   })
 
+  it('treats a Claude input box without a mode line as the default mode', () => {
+    expect(parseClaudeScreen(['● 完成。', '─'.repeat(20), '❯ ', '─'.repeat(20), '  ? for shortcuts']).mode).toBe('default')
+    // 对话框挡住输入框时认不出模式。
+    expect(parseClaudeScreen(plain(questionMulti)).mode).toBeNull()
+  })
+
   it('ignores other bottom lines and mode text far above the bottom', () => {
     expect(parseMode(['? for shortcuts'])).toBeNull()
     expect(parseMode(['⏸ plan mode on', 'a', 'b', 'c', 'd', 'e', 'f'])).toBeNull()
