@@ -9,7 +9,8 @@ import type { Pane } from '../../types'
  *
  * - 发送走 `api.panePrompt`（服务端读屏防护），`client_msg_id` 由新建会话的 `request_id` 固定为
  *   `first-<request_id>`，网络断在半路后服务端能认出重复请求。
- * - 读屏看到对话框（或服务端以 `pane_dialog` 拒绝）时什么都没发出去，继续等用户答完。
+ * - 读屏看到对话框，或服务端明确说什么都没打进终端（对话框、输入框里有字、发送太忙、读屏失败、
+ *   Herdr 拒收、可重试的连接错误）时，下次就绪再试，编号不变。
  * - 其余失败和结果不确定的情况都不重发：把原文放回该 pane 的输入草稿并提示。
  * - 超过等待时限仍没就绪、或 pane 已关闭时同样放弃，不往一个普通 Shell 里打字。
  *
@@ -66,6 +67,14 @@ export function cancelFirstMessage(hostID: string, paneID: string) {
   return true
 }
 
+// 服务端明确“什么都没打进终端”、过一会儿可能就好的拒绝（见 internal/httpapi/prompt.go）。
+const RETRY_LATER = new Set(['pane_dialog', 'pane_draft', 'prompt_busy', 'pane_read_failed', 'pane_send_failed'])
+function retryLater(error: unknown) {
+  if (!(error instanceof APIError)) return false
+  // 连接主机失败发生在读屏之前，带 retryable 字段。
+  return RETRY_LATER.has(error.code) || (error.details as { retryable?: unknown } | undefined)?.retryable === true
+}
+
 async function attempt(entry: Entry, pane: Pane | undefined, notify: (notice: FirstMessageNotice) => void, now: number) {
   if (entry.sending) return
   if (!pane) {
@@ -88,8 +97,8 @@ async function attempt(entry: Entry, pane: Pane | undefined, notify: (notice: Fi
     try {
       await api.panePrompt(entry.hostID, entry.paneID, { text: entry.text, submit: true, client_msg_id: entry.clientMsgID })
     } catch (error) {
-      // 服务端读屏时看到了对话框：什么都没打，下一轮再试，同一个编号可以复用。
-      if (error instanceof APIError && error.code === 'pane_dialog') return
+      // 什么都没打进终端：下次就绪再试，同一个编号可以复用。
+      if (retryLater(error)) return
       if (!finish(entry)) return
       restoreDraft(entry)
       const reason = error instanceof APIError ? error.message : '网络中断，没有收到服务端的回应'

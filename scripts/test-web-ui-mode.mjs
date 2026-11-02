@@ -59,7 +59,12 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost')
   const path = url.pathname
   if (await servePanePrompt(req, res, path, state?.onPrompt)) return
-  if (path === `/api/hosts/${HOST}/launchers`) return sendJSON(res, 200, state.launchers)
+  // 读启动器会在远程主机上跑 zsh：和真实服务端一样，没有 CSRF 头就拒绝。
+  if (path === `/api/hosts/${HOST}/launchers`) {
+    if (req.headers['x-csrf-token'] !== 'ui-fixture') return sendJSON(res, 403, { code: 'csrf_failed', error: '缺少 CSRF 头' })
+    state.launcherReads++
+    return sendJSON(res, 200, state.launchers)
+  }
   if (req.method === 'POST' && path === `/api/hosts/${HOST}/sessions`) return sendJSON(res, 200, await state.onSession(await readBody(req)))
   if (/^\/api\/hosts\/[^/]+\/panes\/[^/]+\/dialog$/.test(path)) return sendJSON(res, 200, { dialog: null })
   if (/^\/api\/hosts\/[^/]+\/panes\/[^/]+\/transcript$/.test(path)) {
@@ -87,6 +92,7 @@ async function fixture(browser, options, { appearance, launchers = LAUNCHERS } =
   state = {
     snapshot: initialSnapshot(),
     launchers,
+    launcherReads: 0,
     onPrompt: async (paneID, body) => { prompts.push({ pane: paneID, ...body }); return { delivered: 'sent' } },
     onSession: async (body) => {
       sessions.push(body)
@@ -239,6 +245,7 @@ async function desktop(browser, name) {
     await screenshot(page, `${name}-desktop-1280-new-session-light`)
     await dialog.getByRole('button', { name: '新建会话', exact: true }).click()
     await expect(dialog).toBeHidden()
+    assert.ok(state.launcherReads >= 1, 'launchers must be read with the CSRF header')
     assert.equal(sessions.length, 1)
     assert.deepEqual({ ...sessions[0], request_id: 'id' }, { request_id: 'id', cwd: '/workspace/example', launcher: 'xcc', target: { kind: 'workspace' } })
     const created = initialSnapshot()

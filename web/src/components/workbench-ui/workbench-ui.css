@@ -115,6 +115,9 @@
 .console-launcher-tags { flex: 0 0 auto; display: flex; gap: var(--console-space-1); }
 .console-tag { padding: 1px 8px; border: 1px solid var(--console-line); border-radius: var(--console-radius-pill); background: var(--console-raised); color: var(--console-text-2); font-size: 11px; line-height: 1.5; white-space: nowrap; }
 .console-alert { display: grid; justify-items: start; gap: var(--console-space-2); padding: 10px var(--console-space-3); border: 1px solid var(--console-danger); border-radius: var(--console-radius-md); background: var(--console-danger-bg); color: var(--console-text); font-size: 13px; }
+.console-alert-actions { display: flex; flex-wrap: wrap; gap: var(--console-space-2); max-width: 100%; }
+.console-alert-actions .button.console-button { max-width: 100%; }
+.console-button-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .console-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--console-space-2); }
 
 @media (pointer: coarse) {

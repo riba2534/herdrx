@@ -145,8 +145,12 @@ export const api = {
     request<{ dialog: PaneDialog | null }>(`/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}/dialog`, init),
   answerPaneDialog: (hostID: string, paneID: string, fingerprint: string, option_index: number) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(hostID)}/panes/${encodeURIComponent(paneID)}/dialog/answer`, { method: 'POST', body: JSON.stringify({ fingerprint, option_index }) }),
-  launchers: (hostID: string, init?: RequestInit) =>
-    request<LaunchersResult>(`/api/hosts/${encodeURIComponent(hostID)}/launchers`, init),
+  // 读启动器会在远程主机上跑一段 zsh：服务端和写接口一样要求 CSRF 头。
+  launchers: (hostID: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers)
+    headers.set('X-CSRF-Token', csrfToken)
+    return request<LaunchersResult>(`/api/hosts/${encodeURIComponent(hostID)}/launchers`, { ...init, headers })
+  },
   startSession: (hostID: string, input: StartSessionInput) =>
     request<StartSessionResult>(`/api/hosts/${encodeURIComponent(hostID)}/sessions`, { method: 'POST', body: JSON.stringify(input) }),
   pasteImage: (hostID: string, paneID: string, file: File | Blob, inject = true) => {
