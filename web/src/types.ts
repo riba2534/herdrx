@@ -181,5 +181,54 @@ export type PanePromptResult = { delivered: 'sent' | 'duplicate' }
 
 // A dialog parsed from the pane screen (GET .../dialog). fingerprint pins the
 // exact dialog the user saw; answers against another dialog are rejected.
-export type PaneDialogOption = { index: number; label: string; selected: boolean }
-export type PaneDialog = { fingerprint: string; title?: string; lines: string[]; options: PaneDialogOption[] }
+// description: the indented explanation Claude prints under an option (omitted when none).
+export type PaneDialogOption = { index: number; label: string; selected: boolean; description?: string }
+// kind classifies a recognized Claude dialog; omitted for other dialogs.
+//   question: one AskUserQuestion step   review: the "Review your answers / Submit" step
+//   plan: ExitPlanMode approval           trust: "Do you trust this folder"
+export type PaneDialogKind = 'question' | 'review' | 'plan' | 'trust'
+export type PaneDialog = { fingerprint: string; title?: string; lines: string[]; options: PaneDialogOption[]; kind?: PaneDialogKind }
+
+// Claude launchers discovered on the remote host (GET /api/hosts/{id}/launchers).
+// Only alias names and three flags leave the host: alias bodies carry gateway
+// addresses and keys, so they are parsed where they live and never sent here.
+export type Launcher = {
+  name: string
+  /** The alias passes --dangerously-skip-permissions. */
+  bypass: boolean
+  /** The alias sets CLAUDE_CODE_NO_FLICKER=1 (fullscreen renderer). */
+  fullscreen: boolean
+  /** The alias passes --teammate-mode. */
+  teammate: boolean
+}
+export type LaunchersResult = {
+  launchers: Launcher[]
+  /** false when this host cannot list launchers (an older Tailcat CLI, no zsh, a timeout). */
+  supported: boolean
+  /** Machine-readable reason when supported is false or the list is partial. */
+  reason?: 'unsupported_agent' | 'shell_unavailable' | 'timeout' | 'read_failed'
+}
+
+// POST /api/hosts/{id}/sessions: open a workspace (or a tab in an existing one)
+// in cwd and start Claude there through one launcher, with a session id the
+// workbench picks so the transcript binding is exact.
+export type StartSessionTarget = { kind: 'workspace' } | { kind: 'tab'; workspace_id: string }
+export type StartSessionInput = {
+  /** Client-generated id; repeating it within 10 minutes returns the first result. */
+  request_id: string
+  /** Absolute path on the remote host. */
+  cwd: string
+  /** A discovered launcher name, or "claude". */
+  launcher: string
+  target: StartSessionTarget
+  /** Optional Herdr label for the new workspace or tab. */
+  label?: string
+}
+export type StartSessionResult = {
+  workspace_id: string
+  tab_id: string
+  pane_id: string
+  /** The Claude session id passed as --session-id. */
+  session_id: string
+  launcher: string
+}

@@ -168,13 +168,16 @@ def main():
             assert found, f"missing bundled npm license text: {entry['name']}"
     go_root = Path(run("go", "env", "GOROOT").strip())
     add_notice(go_root / "LICENSE", "Go runtime / LICENSE")
+    # Web UI 对话界面的部分源码改编自 Cindy（Apache-2.0）。改编过的文件在文件头逐个写明来源路径与提交。
+    add_notice(ROOT / "licenses/cindy-19dad9c225-LICENSE.txt", "Cindy@19dad9c225 / LICENSE (web/src 中标注 Adapted from Cindy 的源码)")
+    add_notice(ROOT / "licenses/cindy-19dad9c225-NOTICE.txt", "Cindy@19dad9c225 / NOTICE")
     components.sort(key=lambda component: component["bom-ref"])
     bom = {"bomFormat": "CycloneDX", "specVersion": "1.6", "version": 1,
            "metadata": {"component": {"type": "application", "name": "herdrx", "version": "source", "licenses": [{"license": {"id": "MIT"}}]},
                         "properties": [{"name": "herdrx:" + str(path) + ":sha256", "value": hashlib.sha256((ROOT / path).read_bytes()).hexdigest()} for path in (Path("go.mod"), Path("go.sum"), Path("web/pnpm-lock.yaml"))]
                                       + [{"name": "herdrx:npm:platform-packages-excluded", "value": ",".join(platform_npm_list)}]},
            "components": components}
-    text = "# 第三方依赖声明\n\n本文件由 `scripts/build-dependency-notices.py` 从固定依赖版本生成，保留上游随包附带的许可与声明原文。包含 Linux amd64/arm64 网站与 CLI 的 Go 导入模块，以及前端安装依赖（含构建和测试工具），不表示所有列出的代码都会进入最终二进制。主项目许可单独见 LICENSE。\n\n机器可读清单见 `sbom.cdx.json`。caniuse-lite 的兼容性数据采用 CC-BY-4.0，仅用于前端构建，署名及完整许可保留于下列原文。两个未附独立许可文件的 npm 包保留其真实 package.json 许可声明，具体边界见 `docs/dependency-review-2026-09-07.md`，未生成或冒充上游版权原文。\n\n按平台分发的 npm 可选二进制包（esbuild / rollup / oxlint 等，锁文件里带 `os`/`cpu`/`libc` 约束）不逐平台登记：它们的许可原文与各自父包相同，父包已完整登记；逐平台登记会让本文件随生成机器架构变化。排除集合由 `web/pnpm-lock.yaml` 决定，可在 `sbom.cdx.json` 的 `herdrx:npm:platform-packages-excluded` 属性中查看。\n"
+    text = "# 第三方依赖声明\n\n本文件由 `scripts/build-dependency-notices.py` 从固定依赖版本生成，保留上游随包附带的许可与声明原文。包含 Linux amd64/arm64 网站与 CLI 的 Go 导入模块，以及前端安装依赖（含构建和测试工具），不表示所有列出的代码都会进入最终二进制。主项目许可单独见 LICENSE。\n\n机器可读清单见 `sbom.cdx.json`。caniuse-lite 的兼容性数据采用 CC-BY-4.0，仅用于前端构建，署名及完整许可保留于下列原文。Web UI 对话界面的部分源码改编自 [Cindy](https://github.com/makecindy/cindy)（Apache-2.0，提交 19dad9c225），改编过的文件在文件头注明来源，其许可与 NOTICE 原文见下列条目。两个未附独立许可文件的 npm 包保留其真实 package.json 许可声明，具体边界见 `docs/dependency-review-2026-09-07.md`，未生成或冒充上游版权原文。\n\n按平台分发的 npm 可选二进制包（esbuild / rollup / oxlint 等，锁文件里带 `os`/`cpu`/`libc` 约束）不逐平台登记：它们的许可原文与各自父包相同，父包已完整登记；逐平台登记会让本文件随生成机器架构变化。排除集合由 `web/pnpm-lock.yaml` 决定，可在 `sbom.cdx.json` 的 `herdrx:npm:platform-packages-excluded` 属性中查看。\n"
     for digest, item in sorted(notices.items(), key=lambda pair: sorted(pair[1]["labels"])[0]):
         text += "\n## " + sorted(item["labels"])[0] + "\n\n"
         text += "\n".join("- " + label for label in sorted(item["labels"])) + "\n\n````text\n" + item["text"].rstrip() + "\n````\n"

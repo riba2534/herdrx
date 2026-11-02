@@ -6,6 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_COMPOSER_ARTIFACTS
@@ -47,6 +48,7 @@ const promptDialog = { fingerprint: '0123456789abcdef', title: 'Do you want to p
 
 async function fixture(browser, options, { delayMs = 500, failText = 'FORCE_FAIL', closeOnSend = false, receiptError = '', screen = 'idle' } = {}) {
   const context = await browser.newContext(options)
+  await enterShellMode(context)
   const page = await context.newPage()
   const messages = [], errors = [], prompts = [], answers = []
   page.on('pageerror', (error) => errors.push(error.message))

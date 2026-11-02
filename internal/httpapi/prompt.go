@@ -51,9 +51,11 @@ type promptEntry struct {
 }
 
 // promptLog 是内存里的幂等表，按用户分开、每个用户容量有界；只在增删查时持锁，网络调用不持锁。
+// answers 让同一 pane 的对话框作答串行（dialog.go）。
 type promptLog struct {
-	mu    sync.Mutex
-	users map[string]map[promptKey]*promptEntry
+	mu      sync.Mutex
+	users   map[string]map[promptKey]*promptEntry
+	answers paneLocks
 }
 
 var errPromptBusy = errors.New("too many prompts in flight")

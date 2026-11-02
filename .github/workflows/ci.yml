@@ -41,6 +41,8 @@ jobs:
           pnpm --dir web lint
           pnpm --dir web exec vitest run
           make web-build
+      - name: 安装启动器发现测试所需的 shell
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh busybox
       - name: Go 验证
         run: |
           go mod verify
@@ -65,6 +67,7 @@ jobs:
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-composer.mjs
           HERDRX_TEST_ENGINES=chromium node scripts/test-chat-mode.mjs
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-screen-view.mjs
+          HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-web-ui-mode.mjs
           HERDRX_TEST_ENGINES=chromium node scripts/test-chat-media.mjs "$RUNNER_TEMP/herdrx-browser-test"
           node scripts/test-structured-chat.mjs "$RUNNER_TEMP/herdrx-browser-test"
           HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-desktop-display.mjs

@@ -285,7 +285,8 @@ func TestGeometryTransferFencesOldWindowAndKeepsInput(t *testing.T) {
 	commands := append([]map[string]any(nil), e.commands...)
 	processes := len(e.processes)
 	e.mu.Unlock()
-	if len(commands) != 4 || commands[0]["cols"] != float64(62) || processes != 4 {
+	// One resize, then one one-line wheel command per scrolled line.
+	if len(commands) != 8 || commands[0]["cols"] != float64(62) || commands[1]["lines"] != float64(1) || processes != 4 {
 		t.Fatalf("commands=%v processes=%d", commands, processes)
 	}
 	second.command("terminal.control.release", nil)

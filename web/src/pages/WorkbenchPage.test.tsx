@@ -7,6 +7,7 @@ import { api } from '../lib/api'
 import { clearComposerDrafts } from '../lib/composerDrafts'
 import { KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS } from '../lib/terminalKeys'
 import { clearPaneViewModes, readPaneViewMode } from '../lib/paneViewMode'
+import { resetWorkbenchModeForTest, WORKBENCH_MODE_STORAGE_KEY } from '../lib/workbenchMode'
 import { resetWorkbenchSessionCache } from '../lib/workbenchSession'
 
 const { call, connection, retryNow, snapshotListeners, paneInput } = vi.hoisted(() => ({
@@ -95,6 +96,9 @@ vi.mock('../components/TerminalPane', () => ({
 beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
+  // 这些用例测的是终端工作台：显式进入 Web Shell 模式（默认是 Web UI）。
+  localStorage.setItem(WORKBENCH_MODE_STORAGE_KEY, 'shell')
+  resetWorkbenchModeForTest()
   clearComposerDrafts()
   clearPaneViewModes()
   resetWorkbenchSessionCache()

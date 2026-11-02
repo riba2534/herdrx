@@ -47,3 +47,8 @@ export async function servePanePrompt(req, res, path, handler) {
   res.end(JSON.stringify(payload))
   return true
 }
+
+// 工作台默认打开 Web UI 模式；测终端工作台的脚本用它在页面加载前进入 Web Shell 模式。
+export function enterShellMode(context) {
+  return context.addInitScript(() => localStorage.setItem('herdrx.workbench-mode.v1', 'shell'))
+}

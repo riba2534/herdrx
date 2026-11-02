@@ -25,6 +25,7 @@ func TestParseCommandAllowlist(t *testing.T) {
 		"herdrx-stage-image gif",
 		"herdrx-terminal-geometry 1234",
 		"herdrx-transcript",
+		"herdrx-launchers",
 	}
 	for _, command := range allowed {
 		if _, err := parseCommand(command); err != nil {
@@ -64,6 +65,13 @@ func TestParseCommandAllowlist(t *testing.T) {
 		"herdrx-transcript; id",
 		"python3 -c 'print(1)'",
 		"sh -c herdrx-transcript",
+		"herdrx-launchers extra",
+		"herdrx-launchers xcc",
+		"herdrx-launchers; id",
+		"herdrx-launchers ",
+		" herdrx-launchers",
+		"sh -c herdrx-launchers",
+		"zsh -ic herdrx-launchers",
 	}
 	for _, command := range rejected {
 		if _, err := parseCommand(command); err == nil {

@@ -28,7 +28,6 @@ import {
   type ChatRole,
   type ChatSessionCandidate,
   type ChatSource,
-  type ChatTurn,
   type StructuredChatFetch,
   type StructuredChatQuery,
   type StructuredChatRequest,
@@ -101,6 +100,11 @@ function normalizeBlock(value: unknown): ChatBlock | null {
         output: raw.output,
         is_error: raw.is_error === true,
       }
+    case 'thinking': {
+      if (typeof raw.text !== 'string') return null
+      const duration = optionalNumber(raw.duration_ms)
+      return duration === undefined ? { type: 'thinking', text: raw.text } : { type: 'thinking', text: raw.text, duration_ms: duration }
+    }
     default:
       // 未知块类型直接丢弃：宁可少显示，也不能猜测内容语义。
       return null
@@ -329,62 +333,6 @@ export function prependStructuredChatPage(state: StructuredChatState, page: Stru
   return mergePage(state, page, 'earlier')
 }
 
-/**
- * 轮次分组：连续的 assistant / tool / system 记录归到前一条 user 之下。
- * Agent 工作中插入的消息（`queued`）已被并入正在进行的那一轮，留在该轮里，不另起一轮。
- */
-export function groupChatTurns(messages: readonly ChatRecord[]): ChatTurn[] {
-  const turns: ChatTurn[] = []
-  for (const item of messages) {
-    if (item.role === 'user' && !(item.queued && turns.length)) {
-      turns.push({ key: item.id, user: item, responses: [] })
-      continue
-    }
-    const last = turns[turns.length - 1]
-    if (last) last.responses.push(item)
-    else turns.push({ key: item.id, responses: [item] })
-  }
-  return turns
-}
-
-/** 一轮回复的折叠视图：中间过程收成一行，只露出最后一条助手正文。 */
-export type ChatTurnFold = {
-  /** 被折叠的中间过程（工具调用 / 结果、非最终的助手文本）。 */
-  folded: ChatRecord[]
-  /** 折叠时仍然直接显示的记录，按原顺序：系统提示、工作中插入的消息、最终助手正文及其后的记录。 */
-  visible: ChatRecord[]
-  toolCount: number
-  /** 从提问到最后一条过程记录的用时（毫秒）；时间戳缺失时为 undefined。 */
-  durationMs?: number
-}
-
-function hasText(item: ChatRecord) {
-  return item.blocks.some((block) => block.type === 'text' && block.text.trim() !== '')
-}
-
-/**
- * 折叠一轮回复。最终正文是该轮最后一条带文本的助手记录；它之前的 assistant / tool 记录
- * 是中间过程。系统提示与插入的用户消息不折叠。没有可折叠的过程时返回 null，调用方原样渲染。
- * 正在进行的那一轮由调用方决定不折叠：此时"最后一条正文"还不是最终回答。
- */
-export function foldChatTurn(turn: ChatTurn): ChatTurnFold | null {
-  let final = -1
-  turn.responses.forEach((item, index) => { if (item.role === 'assistant' && hasText(item)) final = index })
-  const end = final < 0 ? turn.responses.length : final
-  const folded: ChatRecord[] = []
-  const visible: ChatRecord[] = []
-  turn.responses.forEach((item, index) => {
-    if (index < end && (item.role === 'assistant' || item.role === 'tool')) folded.push(item)
-    else visible.push(item)
-  })
-  if (!folded.length) return null
-  const toolCount = folded.reduce((count, item) => count + item.blocks.filter((block) => block.type === 'tool-call').length, 0)
-  const start = Date.parse(turn.user?.at || folded[0].at || '')
-  const last = Date.parse((final >= 0 ? turn.responses[final].at : folded[folded.length - 1].at) || '')
-  const durationMs = Number.isNaN(start) || Number.isNaN(last) || last < start ? undefined : last - start
-  return { folded, visible, toolCount, durationMs }
-}
-
 /** 用时文案：秒级精度，超过一分钟带分钟，超过一小时带小时。 */
 export function formatChatDuration(ms: number) {
   const seconds = Math.max(0, Math.round(ms / 1000))
@@ -392,24 +340,6 @@ export function formatChatDuration(ms: number) {
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return seconds % 60 ? `${minutes} 分 ${seconds % 60} 秒` : `${minutes} 分`
   return minutes % 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分` : `${Math.floor(minutes / 60)} 小时`
-}
-
-/** 折叠行的摘要：「工具 N · 用时 X」；没有工具调用时说过程条数。 */
-export function chatFoldSummary(fold: ChatTurnFold) {
-  const parts = [fold.toolCount ? `工具 ${fold.toolCount}` : `过程 ${fold.folded.length} 条`]
-  if (fold.durationMs !== undefined) parts.push(`用时 ${formatChatDuration(fold.durationMs)}`)
-  return parts.join(' · ')
-}
-
-/** 收集会话里所有 tool-call，供只带结果的 tool 记录回填真实工具名与入参。 */
-export function collectToolCalls(messages: readonly ChatRecord[]) {
-  const calls = new Map<string, { name: string; input: unknown }>()
-  for (const item of messages) {
-    for (const block of item.blocks) {
-      if (block.type === 'tool-call' && block.call_id) calls.set(block.call_id, { name: block.name, input: block.input })
-    }
-  }
-  return calls
 }
 
 /** 时间戳展示：今天只显示时分，其余显示月日时分；无法解析时返回空串。 */
@@ -505,6 +435,21 @@ export type StructuredChatSnapshot = {
   error: string
 }
 
+/**
+ * 还没绑定会话时继续按默认查询（不带 `session`）轮询，等服务端用 Herdr 证据认领：新建的
+ * Claude 会话要等收到第一条消息才写下记录文件，第一次读取时通常还没有候选。前一分钟按
+ * 正常间隔轮询，之后放慢到每 10 秒一次。用户点过「重选」后只列候选，不轮询、不自动绑定。
+ */
+const DISCOVERY_FAST_WINDOW_MS = 60_000
+const DISCOVERY_SLOW_POLL_MS = 10_000
+/**
+ * 只有可能自己消失的原因才继续等：还没有记录文件（no_session_candidates）、会话被轮转
+ * （session_unavailable）、取不到 cwd 或日志根目录（Agent 刚启动、第一次写盘会建好）。
+ * 不支持的接入方式 / 程序、读取被拒、格式不认识、超限、服务端内部错误都不会靠等待恢复，
+ * 而每次读取服务端都会记一条审计，这些情形保持只读一次，由用户点「重试」。
+ */
+const RECLAIMABLE_REASONS: ReadonlySet<ChatReason> = new Set<ChatReason>(['no_session_candidates', 'session_unavailable', 'cwd_unavailable', 'log_root_unavailable'])
+
 export type StructuredChatSessionOptions = {
   hostID: string
   paneID: string
@@ -525,6 +470,7 @@ export type StructuredChatSessionOptions = {
  * 会话状态机。职责边界：
  *
  * - **不自动认领候选**：没有显式 `select()`、也没有服务端 verified 认领（Herdr 证据）之前永不发带 `session` 的请求；
+ *   未绑定且原因可能自行消失时继续轮询不带 `session` 的默认查询，等服务端认领（「重选」之后不轮询）；
  * - 一次只跑一个请求（不重叠轮询），`cursor` 递增，不重读全量；
  * - 每个异步结果都绑定「host + pane + 登录身份 + 会话代次」，迟到的旧响应直接丢弃；
  * - `stop()` 与切换候选都会作废在途请求，不串 host / pane / session；
@@ -540,6 +486,8 @@ export class StructuredChatSession {
   private source: ChatSource | undefined
   /** 用户点过「重选」：之后只列候选，不让 Herdr 证据把候选列表又自动绑定回去。 */
   private manual = false
+  /** 这一轮「未绑定、等认领」从什么时候开始；用户的任何选择 / 刷新都重新起算。 */
+  private unboundSince: number | undefined
   private generation = 0
   private running = false
   private active = true
@@ -694,6 +642,7 @@ export class StructuredChatSession {
 
   private invalidate() {
     this.generation++
+    this.unboundSince = undefined
     this.clearTimer()
     this.controller?.abort()
     this.controller = null
@@ -717,8 +666,29 @@ export class StructuredChatSession {
   private async tick() {
     if (!this.running || !this.active || this.inFlight) return
     const { session, nextCursor } = this.snapshotValue.state
-    if (!session) return
-    await this.load(nextCursor ? { session, cursor: nextCursor } : { session })
+    if (session) await this.load(nextCursor ? { session, cursor: nextCursor } : { session })
+    else if (this.waitingForClaim()) await this.load({})
+  }
+
+  /**
+   * 未绑定时是否继续轮询默认查询：用户没有手动「重选」、上一次读取没有传输错误，且原因可能
+   * 自己消失（或者没有原因：列出了候选但还没认领，新会话写下记录后服务端会按证据认领）。
+   */
+  private waitingForClaim() {
+    const { state, error } = this.snapshotValue
+    if (this.manual || error) return false
+    return state.reason === undefined ? state.status !== 'unavailable' : RECLAIMABLE_REASONS.has(state.reason)
+  }
+
+  /** 下一次轮询的间隔：已绑定按正常间隔；未绑定先按正常间隔，一分钟后放慢。 */
+  private nextPollDelay() {
+    if (this.snapshotValue.state.session !== undefined) {
+      this.unboundSince = undefined
+      return this.pollMs
+    }
+    const now = Date.now()
+    this.unboundSince ??= now
+    return now - this.unboundSince < DISCOVERY_FAST_WINDOW_MS ? this.pollMs : Math.max(this.pollMs, DISCOVERY_SLOW_POLL_MS)
   }
 
   private async load(query: StructuredChatQuery, direction: PageDirection = 'forward') {
@@ -778,7 +748,7 @@ export class StructuredChatSession {
           this.earlierQueued = false
           this.loadEarlier()
         } else {
-          this.schedule(this.pollMs)
+          this.schedule(this.nextPollDelay())
         }
       }
     }

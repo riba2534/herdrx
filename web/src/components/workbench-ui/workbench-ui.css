@@ -1,0 +1,129 @@
+/* Web UI 模式（控制台）：主区、新建会话对话框与模式开关。
+   控制台部分只读 console-theme.css 的 --console-* token；模式开关位于两种模式共用的工作台顶栏，
+   跟随顶栏的配色。布局思路参考 Cindy 的阅读宽度与 46px 内容顶栏，代码为本项目重写。 */
+
+/* 分段单选：无边框的胶囊轨道 + 选中项的白色胶囊。颜色由使用处给出。 */
+.segmented { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; max-width: 100%; padding: 2px; border-radius: var(--console-radius-pill); background: var(--seg-track); overflow-x: auto; scrollbar-width: none; }
+.segmented > button { flex: 0 0 auto; height: var(--seg-height, 24px); padding: 0 var(--seg-pad, 10px); border: 1px solid transparent; border-radius: var(--console-radius-pill); background: transparent; color: var(--seg-fg); font: inherit; font-size: 12px; font-weight: 500; line-height: 1; white-space: nowrap; cursor: pointer; transition: background-color var(--console-motion-fast) var(--console-ease-out), color var(--console-motion-fast) var(--console-ease-out); }
+.segmented > button:hover:not(:disabled) { color: var(--seg-fg-active); }
+.segmented > button[aria-checked="true"] { background: var(--seg-selected); border-color: var(--seg-selected-border); color: var(--seg-fg-active); }
+.segmented > button:disabled { opacity: .5; cursor: default; }
+.segmented > button:focus-visible { outline: 2px solid var(--seg-focus, var(--seg-fg-active)); outline-offset: -2px; }
+.mode-switch { --seg-track: var(--panel-strong); --seg-selected: var(--panel); --seg-selected-border: var(--border); --seg-fg: var(--muted); --seg-fg-active: var(--text); --seg-focus: var(--accent); margin: 0 4px; }
+.hostbar > .mode-switch { --seg-height: 22px; --seg-pad: 9px; }
+/* 手机顶栏：与旁边的图标按钮一样是整高的方形触控区（44px，矮视口 32px），选中项用顶栏的强调底色。 */
+.mobile-topbar > .mode-switch { flex: 0 0 auto; gap: 0; margin: 0; padding: 0; border-radius: 0; background: transparent; }
+.mobile-topbar > .mode-switch > button { min-width: 44px; height: 44px; padding: 0 7px; border: 0; border-radius: 0; font-size: 13px; }
+.mobile-topbar > .mode-switch > button[aria-checked="true"] { background: var(--accent-soft); color: var(--text); box-shadow: inset 0 -2px var(--accent); }
+.workbench-short .mobile-topbar > .mode-switch > button { min-width: 32px; height: 32px; }
+/* Shell 模式的手机顶栏放不下 Agent 总览：入口移到切换面板；链接保持挂载，继续同步应用图标角标。
+   极窄屏（< 340px）再收起连接圆点，断线时终端里另有提示。 */
+.mobile-topbar > .mobile-shell-hidden { display: none; }
+@media (max-width: 339px) { .mobile-topbar-shell > .connection { display: none; } }
+.console-segmented { --seg-track: var(--console-raised); --seg-selected: var(--console-card); --seg-selected-border: var(--console-line); --seg-fg: var(--console-text-2); --seg-fg-active: var(--console-text); --seg-focus: var(--console-info); --seg-height: 30px; --seg-pad: 14px; justify-self: start; }
+.console-segmented > button { font-size: 13px; }
+
+/* 主区：沿用工作台的位置，内容按阅读宽度居中。 */
+/* 主区里沿用的工作台组件（画面视图、答题卡片、连接遮罩、按钮与输入框）读的是工作台配色变量，
+   在这一层整体换成控制台的。 */
+.console-surface {
+  --panel: var(--console-card); --panel-strong: var(--console-raised); --surface-raised: var(--console-raised); --text: var(--console-text); --muted: var(--console-text-2); --border: var(--console-line); --accent: var(--console-info); --accent-soft: var(--console-info-bg);
+  --ui-text: var(--console-text); --ui-muted: var(--console-text-2); --ui-raised: var(--console-raised); --ui-selected: var(--console-raised); --ui-input: var(--console-surface); --ui-control-border: var(--console-line);
+  --ui-accent: var(--console-text); --ui-accent-ink: var(--console-card); --ui-accent-hover: var(--console-text-2);
+  --blocked: var(--console-danger); --working: var(--console-running); --done: var(--console-info); --idle: var(--console-success); --unknown: var(--console-text-3);
+  position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--console-surface); color: var(--console-text); font-size: var(--console-font-body); line-height: var(--console-line-body);
+}
+.workbench-compact .console-surface { flex: 1; padding-bottom: env(safe-area-inset-bottom); font-size: var(--console-font-mobile-body); }
+.workbench-keyboard .console-surface { padding-bottom: 0; }
+.console-pane-picker { flex: 0 0 auto; display: flex; align-items: center; gap: var(--console-space-2); min-width: 0; height: 46px; padding: 0 var(--console-space-4); border-bottom: 1px solid var(--console-line); overflow-x: auto; scrollbar-width: none; }
+.console-pane-chip { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; max-width: 240px; height: 28px; padding: 0 12px 0 8px; border: 1px solid var(--console-line); border-radius: var(--console-radius-pill); background: var(--console-card); color: var(--console-text-2); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; transition: background-color var(--console-motion-fast), color var(--console-motion-fast); }
+.console-pane-chip > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.console-pane-chip:hover { color: var(--console-text); }
+.console-pane-chip[aria-pressed="true"] { background: var(--console-raised); border-color: var(--console-text-3); color: var(--console-text); font-weight: 500; }
+.console-pane-chip:focus-visible, .console-link:focus-visible, .console-launcher:focus-visible { outline: 2px solid var(--console-info); outline-offset: 1px; }
+.console-banner { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: var(--console-space-2); width: min(calc(100% - 2 * var(--console-space-4)), var(--console-reading-width)); margin: var(--console-space-3) auto 0; padding: var(--console-space-2) var(--console-space-3); border-radius: var(--console-radius-md); background: var(--console-info-bg); color: var(--console-text); font-size: 13px; }
+.console-banner > span { flex: 1 1 200px; min-width: 0; }
+.console-main { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.console-main > * { flex: 1 1 auto; min-height: 0; }
+
+.console-empty { display: grid; align-content: center; justify-items: center; gap: var(--console-space-2); padding: var(--console-space-6) var(--console-space-5); color: var(--console-text-2); text-align: center; }
+.console-empty h2 { margin: var(--console-space-2) 0 0; color: var(--console-text); font-size: 18px; font-weight: 600; }
+.console-empty p { max-width: 440px; margin: 0; }
+.console-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--console-space-2); margin-top: var(--console-space-3); }
+
+/* 非 Claude pane：只读画面 + 一行命令输入。画面视图沿用自己的样式，只把配色换成控制台的。 */
+.console-screen { display: flex; flex-direction: column; gap: var(--console-space-2); width: min(100%, calc(var(--console-reading-width) + 2 * var(--console-space-4))); margin: 0 auto; padding: var(--console-space-3) var(--console-space-4); }
+.console-surface-compact .console-screen { padding: var(--console-space-2); }
+.console-screen-view { position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid var(--console-line); border-radius: var(--console-radius-md); overflow: hidden; }
+.console-command { flex: 0 0 auto; display: grid; gap: var(--console-space-1); padding: var(--console-space-2) var(--console-space-2) var(--console-space-1) var(--console-space-3); border: 1px solid var(--console-line); border-radius: var(--console-radius-md); background: var(--console-card); }
+/* 焦点画在整块输入卡片上，不在卡片里的文本框上再套一圈。 */
+.console-command:focus-within { border-color: var(--console-text-3); }
+.console-command:has(.console-command-input:focus-visible) { outline: 2px solid var(--console-info); outline-offset: 1px; }
+.console-command .console-command-input:focus-visible { outline: none; }
+.console-command-row { display: flex; align-items: flex-end; gap: var(--console-space-2); min-width: 0; }
+.console-command-prompt { flex: 0 0 auto; align-self: center; color: var(--console-text-3); font: 600 var(--console-font-code) var(--console-font-mono); }
+.console-command-input { flex: 1 1 auto; min-width: 0; min-height: 32px; max-height: 120px; padding: 6px 0; border: 0; background: transparent; color: var(--console-text); font: var(--console-font-code)/1.5 var(--console-font-mono); resize: none; outline: none; field-sizing: content; }
+.console-command-input::placeholder { color: var(--console-placeholder); }
+.console-command-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--console-space-2); min-width: 0; color: var(--console-text-2); font-size: var(--console-font-meta); }
+.console-command-meta > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.console-command .dialog-card { margin-bottom: var(--console-space-2); }
+
+.console-link { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 6px; border: 0; border-radius: var(--console-radius-sm); background: transparent; color: var(--console-text-2); font: inherit; font-size: var(--console-font-meta); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.console-link:hover:not(:disabled) { background: var(--console-raised); color: var(--console-text); }
+.console-link:disabled { opacity: .6; cursor: default; }
+
+/* 胶囊按钮：次要为白底细线，主要为反色中性色。 */
+.button.console-button { flex: 0 0 auto; min-height: 32px; padding: 0 var(--console-space-4); border: 1px solid var(--console-line); border-radius: var(--console-radius-pill); background: var(--console-card); color: var(--console-text); font-size: 13px; font-weight: 500; white-space: nowrap; transition: background-color var(--console-motion-fast), border-color var(--console-motion-fast), opacity var(--console-motion-fast); }
+.button.console-button:hover:not(:disabled) { background: var(--console-raised); }
+.button.console-button-primary { border-color: var(--console-text); background: var(--console-text); color: var(--console-card); }
+.button.console-button-primary:hover:not(:disabled) { border-color: var(--console-text-2); background: var(--console-text-2); }
+.button.console-button:disabled { opacity: .6; }
+.button.console-button:focus-visible { outline: 2px solid var(--console-info); outline-offset: 2px; }
+
+/* 新建会话对话框。 */
+.ui-modal.console-dialog { --modal-width: 560px; padding: var(--console-space-5); border: 1px solid var(--console-line); border-radius: var(--console-radius-md); background: var(--console-card); color: var(--console-text); box-shadow: var(--console-overlay-shadow); font-size: 14px; }
+.ui-modal.console-dialog .modal-header { align-items: center; margin-bottom: var(--console-space-4); }
+.ui-modal.console-dialog .modal-header h2 { margin: 0; color: var(--console-text); font-size: 18px; font-weight: 600; }
+.ui-modal.console-dialog .icon-button { color: var(--console-text-2); border-radius: var(--console-radius-pill); }
+.ui-modal.console-dialog .icon-button:hover { background: var(--console-raised); color: var(--console-text); }
+.console-form { display: grid; gap: var(--console-space-4); min-width: 0; }
+.console-field { display: grid; gap: 6px; min-width: 0; }
+.console-label { color: var(--console-text); font-size: 13px; font-weight: 500; }
+.console-label small { margin-left: 6px; color: var(--console-text-3); font-size: var(--console-font-meta); font-weight: 400; }
+.console-label-row { display: flex; align-items: center; justify-content: space-between; gap: var(--console-space-2); }
+.console-help { color: var(--console-text-2); font-size: var(--console-font-meta); line-height: 1.5; }
+.console-dialog .field-error { color: var(--console-danger); font-size: var(--console-font-meta); }
+.ui-modal.console-dialog .input.console-input { width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--console-line); border-radius: var(--console-radius-sm); background: var(--console-surface); color: var(--console-text); font: inherit; font-size: 14px; }
+.ui-modal.console-dialog .input.console-input:hover { border-color: var(--console-text-3); }
+.ui-modal.console-dialog .input.console-input:focus { border-color: var(--console-text-2); outline: 2px solid var(--console-info); outline-offset: 1px; }
+.ui-modal.console-dialog .input.console-input::placeholder { color: var(--console-placeholder); opacity: 1; }
+.ui-modal.console-dialog .input.console-input.input-error { border-color: var(--console-danger); }
+.ui-modal.console-dialog .console-textarea { min-height: 76px; resize: vertical; line-height: 1.5; }
+.console-combo { position: relative; display: grid; gap: 6px; min-width: 0; }
+.console-combo .input.console-input { font-family: var(--console-font-mono); font-size: var(--console-font-code); }
+.console-combo-list { position: absolute; z-index: 2; top: 40px; left: 0; right: 0; max-height: 200px; margin: 0; padding: var(--console-space-1); overflow-y: auto; list-style: none; border: 1px solid var(--console-line); border-radius: var(--console-radius-md); background: var(--console-card); box-shadow: var(--console-overlay-shadow); }
+.console-combo-list li { padding: 6px 10px; border-radius: var(--console-radius-sm); color: var(--console-text); font: var(--console-font-code)/1.5 var(--console-font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.console-combo-list li:hover, .console-combo-list .console-combo-active { background: var(--console-raised); }
+.console-launchers { display: grid; gap: 2px; max-height: 216px; padding: var(--console-space-1); overflow-y: auto; border: 1px solid var(--console-line); border-radius: var(--console-radius-md); background: var(--console-surface); }
+.console-launcher { display: flex; align-items: center; gap: var(--console-space-2); min-width: 0; min-height: 36px; padding: 6px 10px; border: 1px solid transparent; border-radius: var(--console-radius-sm); background: transparent; color: var(--console-text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.console-launcher::before { content: ''; flex: 0 0 14px; width: 14px; height: 14px; border: 1px solid var(--console-text-3); border-radius: 50%; }
+.console-launcher[aria-checked="true"] { border-color: var(--console-line); background: var(--console-card); }
+.console-launcher[aria-checked="true"]::before { border-color: var(--console-text); box-shadow: inset 0 0 0 4px var(--console-text); }
+.console-launcher:hover { background: var(--console-card); }
+.console-launcher code { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--console-font-code)/1.4 var(--console-font-mono); }
+.console-launcher-tags { flex: 0 0 auto; display: flex; gap: var(--console-space-1); }
+.console-tag { padding: 1px 8px; border: 1px solid var(--console-line); border-radius: var(--console-radius-pill); background: var(--console-raised); color: var(--console-text-2); font-size: 11px; line-height: 1.5; white-space: nowrap; }
+.console-alert { display: grid; justify-items: start; gap: var(--console-space-2); padding: 10px var(--console-space-3); border: 1px solid var(--console-danger); border-radius: var(--console-radius-md); background: var(--console-danger-bg); color: var(--console-text); font-size: 13px; }
+.console-alert-actions { display: flex; flex-wrap: wrap; gap: var(--console-space-2); max-width: 100%; }
+.console-alert-actions .button.console-button { max-width: 100%; }
+.console-button-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.console-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--console-space-2); }
+
+@media (pointer: coarse) {
+  .console-pane-chip, .console-link, .button.console-button, .console-launcher { min-height: var(--console-tap); }
+}
+@media (max-width: 767px) {
+  .ui-modal.console-dialog { padding: var(--console-space-4); }
+  .console-launcher-tags .console-tag { padding: 1px 6px; }
+}

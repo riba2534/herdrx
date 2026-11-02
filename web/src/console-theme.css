@@ -1,0 +1,96 @@
+/*
+ * Web UI 模式（对话控制台）的设计 token。
+ *
+ * 取自 Cindy（https://github.com/makecindy/cindy，Apache-2.0）docs/design-rules/DESIGN.md 的子集：
+ * 暖白底、白卡、1px 细线分层、不用阴影（只有浮层有），圆角只有 8 / 12 / 胶囊三档，
+ * 文字四档灰，动效 80 / 150 / 200 / 250ms。Web UI 模式的页面只读这些变量，不写死颜色和尺寸。
+ * 终端（Web Shell）配色不受影响。
+ */
+:root {
+  --console-surface: #1f1f1e;
+  --console-card: #2c2c2a;
+  --console-raised: #353533;
+  --console-line: #3c3c3a;
+  --console-text: #ececea;
+  --console-text-2: #a8a8a4;
+  --console-text-3: #7d7d79;
+  --console-placeholder: #63635f;
+  --console-info: #6d9be6;
+  --console-running: #f08a46;
+  --console-warning: #f5b740;
+  --console-danger: #ef5466;
+  --console-success: #4fbf72;
+  --console-info-bg: #24324a;
+  --console-danger-bg: #4a2228;
+  --console-warning-bg: #45391f;
+  --console-diff-add-bg: #1f3a29;
+  --console-diff-del-bg: #48262a;
+  --console-diff-add: #7ee2a0;
+  --console-diff-del: #ff9aa2;
+  --console-code-bg: #262624;
+  --console-overlay-shadow: 0 8px 24px #00000066;
+}
+
+:root:not([data-appearance]),
+html[data-appearance="light"],
+html[data-appearance="solarized-light"] {
+  --console-surface: #f8f8f6;
+  --console-card: #ffffff;
+  --console-raised: #f0f0ee;
+  --console-line: #d7d7d4;
+  --console-text: #262626;
+  --console-text-2: #737373;
+  --console-text-3: #a3a3a3;
+  --console-placeholder: #c4c4c4;
+  --console-info: #417cdd;
+  --console-running: #ea6b17;
+  --console-warning: #f3a115;
+  --console-danger: #d91f37;
+  --console-success: #1a7f37;
+  --console-info-bg: #edf3fc;
+  --console-danger-bg: #fdecef;
+  --console-warning-bg: #fef6e6;
+  --console-diff-add-bg: #e6ffec;
+  --console-diff-del-bg: #ffebe9;
+  --console-diff-add: #1a7f37;
+  --console-diff-del: #cf222e;
+  --console-code-bg: #f6f6f4;
+  --console-overlay-shadow: 0 8px 24px #1f1f1e1f;
+}
+
+:root {
+  --console-radius-sm: 8px;
+  --console-radius-md: 12px;
+  --console-radius-pill: 9999px;
+  --console-space-1: 4px;
+  --console-space-2: 8px;
+  --console-space-3: 12px;
+  --console-space-4: 16px;
+  --console-space-5: 24px;
+  --console-space-6: 32px;
+  --console-reading-width: 914px;
+  --console-bubble-width: 488px;
+  --console-font-body: 15px;
+  --console-line-body: 1.6;
+  --console-font-mobile-body: 16px;
+  --console-font-meta: 12px;
+  --console-font-code: 13px;
+  --console-font-mono: 'JetBrains Mono', 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  --console-motion-instant: 80ms;
+  --console-motion-fast: 150ms;
+  --console-motion-base: 200ms;
+  --console-motion-slow: 250ms;
+  --console-ease-out: cubic-bezier(.16, 1, .3, 1);
+  --console-ease-in: cubic-bezier(.4, 0, 1, 1);
+  --console-ease-move: cubic-bezier(.4, 0, .2, 1);
+  --console-tap: 44px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --console-motion-instant: 1ms;
+    --console-motion-fast: 1ms;
+    --console-motion-base: 1ms;
+    --console-motion-slow: 1ms;
+  }
+}

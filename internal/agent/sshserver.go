@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -192,8 +193,15 @@ func (s *SSHServer) handleSession(newChannel ssh.NewChannel, isPairedAtAuth bool
 				_, _ = io.WriteString(channel.Stderr(), "transcript reader failed\n")
 				status = 1
 			}
+		case "launchers":
+			status = ServeLaunchers(context.Background(), channel)
 		default:
-			command := executableCommand(spec, latest.HerdrBin)
+			command, err := executableCommand(spec, latest.HerdrBin)
+			if err != nil {
+				_, _ = io.WriteString(channel.Stderr(), err.Error()+"\n")
+				status = 126
+				break
+			}
 			command.Stdin = channel
 			command.Stdout = channel
 			command.Stderr = channel.Stderr()

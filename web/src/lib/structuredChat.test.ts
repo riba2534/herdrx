@@ -2,13 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APIError, api, currentSessionID, invalidateAuthentication } from './api'
 import {
   applyStructuredChatPage,
-  chatFoldSummary,
-  collectToolCalls,
-  foldChatTurn,
   formatChatDuration,
   fetchStructuredChat,
   formatChatTime,
-  groupChatTurns,
   mergeChatRecords,
   normalizeStructuredChatResponse,
   paneAgentRejectsReadSource,
@@ -286,34 +282,6 @@ describe('page merging', () => {
     const rebuilt = applyStructuredChatPage(more, page({ messages: [textRecord('b', 'user', '新')], binding: 'selected', reset: true }))
     expect(rebuilt.truncated).toBe(0)
     expect(normalizeStructuredChatResponse({ supported: true, messages: [], truncated: 'x' }).truncated).toBeUndefined()
-  })
-})
-
-describe('turn grouping', () => {
-  it('keeps two rounds in order and attaches tools to the round they answer', () => {
-    const messages: ChatRecord[] = [
-      textRecord('u1', 'user', '第一问'),
-      textRecord('a1', 'assistant', '第一答'),
-      { id: 't1', role: 'tool', blocks: [{ type: 'tool-result', call_id: 'c1', output: '结果', is_error: false }] },
-      textRecord('u2', 'user', '第二问'),
-      textRecord('a2', 'assistant', '第二答'),
-    ]
-    const turns = groupChatTurns(messages)
-    expect(turns).toHaveLength(2)
-    expect(turns[0].user?.id).toBe('u1')
-    expect(turns[0].responses.map((item) => item.id)).toEqual(['a1', 't1'])
-    expect(turns[1].user?.id).toBe('u2')
-    expect(turns[1].responses.map((item) => item.id)).toEqual(['a2'])
-  })
-
-  it('keeps records that arrive before any user record in their own turn', () => {
-    const turns = groupChatTurns([textRecord('s1', 'system', '会话开始'), textRecord('u1', 'user', '问')])
-    expect(turns.map((turn) => turn.key)).toEqual(['s1', 'u1'])
-  })
-
-  it('indexes tool calls by call id for result labels', () => {
-    const calls = collectToolCalls([{ id: 'a', role: 'assistant', blocks: [{ type: 'tool-call', call_id: 'c1', name: 'Read', input: { file: 'a.ts' } }] }])
-    expect(calls.get('c1')).toEqual({ name: 'Read', input: { file: 'a.ts' } })
   })
 })
 
@@ -774,51 +742,142 @@ describe('verified binding', () => {
   })
 })
 
-describe('turn folding', () => {
-  function at(record: ChatRecord, time: string): ChatRecord {
-    return { ...record, at: time }
+describe('waiting for a new session to be claimed', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+
+  it('keeps polling the default query until Herdr evidence binds the session, then reads forward', async () => {
+    // 新建的 Claude 会话收到第一条消息才写记录文件：第一次读取时没有候选，之后服务端按证据认领。
+    let written = false
+    const { calls, fetchPage } = recorder((call) => {
+      if (call.session) return page({ binding: 'selected', session_id: 's1', messages: [textRecord('2', 'assistant', '答')], next_cursor: 'c2' })
+      return written
+        ? page({ binding: 'verified', session: 'cand-1', session_id: 's1', candidates: [candidate('cand-1')], messages: [textRecord('1', 'user', '第一条')], next_cursor: 'c1' })
+        : page({ reason: 'no_session_candidates', candidates: [] })
+    })
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(session.getSnapshot().state).toMatchObject({ status: 'idle', reason: 'no_session_candidates', session: undefined })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls).toHaveLength(2)
+    expect(calls[1].session).toBeUndefined()
+    expect(calls[1].manual).toBeUndefined()
+    written = true
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().state).toMatchObject({ status: 'ready', session: 'cand-1', binding: 'verified' })
+    expect(session.getSnapshot().state.messages.map((item) => item.id)).toEqual(['1'])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls.at(-1)).toMatchObject({ session: 'cand-1', cursor: 'c1' })
+    expect(session.getSnapshot().state.messages.map((item) => item.id)).toEqual(['1', '2'])
+    session.stop()
+  })
+
+  it('polls every interval for the first minute, then every 10 seconds', async () => {
+    const { calls, fetchPage } = recorder(() => page({ reason: 'no_session_candidates', candidates: [] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(58_000)
+    expect(calls).toHaveLength(30)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(calls).toHaveLength(31)
+    // 等满一分钟后放慢到 10 秒一次。
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(calls).toHaveLength(31)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toHaveLength(32)
+    // 用户的刷新重新起算：立即取一次，之后又回到正常间隔。
+    session.refresh()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(calls).toHaveLength(35)
+    session.stop()
+  })
+
+  async function pollsWithin(response: () => StructuredChatResponse | Promise<StructuredChatResponse>) {
+    const { calls, fetchPage } = recorder(response)
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(30_000)
+    session.stop()
+    return calls.length
   }
-  const call = (id: string): ChatRecord => ({ id, role: 'assistant', at: '2026-10-01T08:00:20Z', blocks: [{ type: 'tool-call', call_id: id, name: 'Bash', input: {} }] })
-  const result = (id: string): ChatRecord => ({ id: `${id}-r`, role: 'tool', blocks: [{ type: 'tool-result', call_id: id, output: 'ok', is_error: false }] })
 
-  it('keeps a message typed while the agent works inside the running turn', () => {
-    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
-    const turns = groupChatTurns([textRecord('u', 'user', '问'), call('t1'), queued, textRecord('a', 'assistant', '答')])
-    expect(turns).toHaveLength(1)
-    expect(turns[0].responses.map((item) => item.id)).toEqual(['t1', 'q', 'a'])
-    // 没有前一轮时它就是一轮的开头。
-    expect(groupChatTurns([queued])[0].user?.id).toBe('q')
+  it('keeps polling only for reasons that can clear up on their own', async () => {
+    for (const reason of ['no_session_candidates', 'session_unavailable', 'cwd_unavailable', 'log_root_unavailable'] as const) {
+      expect(await pollsWithin(() => page({ reason, candidates: [] })), reason).toBe(16)
+    }
+    // 列出了候选但还没认领（原因为空）：新会话写下记录后服务端会按证据认领。
+    expect(await pollsWithin(() => page({ candidates: [candidate('old')] }))).toBe(16)
   })
 
-  it('folds tools and interim text, leaving the final answer, system notes and queued input visible', () => {
-    const queued: ChatRecord = { ...textRecord('q', 'user', '顺便'), queued: true }
-    const [turn] = groupChatTurns([
-      at(textRecord('u', 'user', '问'), '2026-10-01T08:00:00Z'),
-      textRecord('a1', 'assistant', '先看看'),
-      call('t1'), result('t1'),
-      textRecord('s', 'system', 'API 错误'),
-      queued,
-      call('t2'), result('t2'),
-      at(textRecord('a2', 'assistant', '答'), '2026-10-01T08:01:05Z'),
-      textRecord('s2', 'system', '本轮已被中断'),
-    ])
-    const fold = foldChatTurn(turn)!
-    expect(fold.folded.map((item) => item.id)).toEqual(['a1', 't1', 't1-r', 't2', 't2-r'])
-    expect(fold.visible.map((item) => item.id)).toEqual(['s', 'q', 'a2', 's2'])
-    expect(fold.toolCount).toBe(2)
-    expect(chatFoldSummary(fold)).toBe('工具 2 · 用时 1 分 5 秒')
+  it('reads once and stops for reasons that waiting cannot fix, and after transport errors', async () => {
+    // 这些情形每次读取都会在服务端记一条审计，不能靠轮询灌满审计表。
+    for (const reason of ['unsupported_transport', 'no_agent', 'unsupported_agent', 'read_denied', 'unrecognized_format', 'read_limit_exceeded', 'internal_error'] as const) {
+      expect(await pollsWithin(() => page({ supported: false, reason })), reason).toBe(1)
+      expect(await pollsWithin(() => page({ reason, candidates: [] })), `${reason} (supported)`).toBe(1)
+    }
+    expect(await pollsWithin(() => Promise.reject(new APIError(502, 'bad_gateway', '网关错误')))).toBe(1)
   })
 
-  it('does not fold a turn without intermediate steps and omits unknown durations', () => {
-    expect(foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a', 'assistant', '答')])[0])).toBeNull()
-    const fold = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), textRecord('a1', 'assistant', '想'), textRecord('a2', 'assistant', '答')])[0])!
-    expect(chatFoldSummary(fold)).toBe('过程 1 条')
-    // 没有最终正文（例如被中断）时整段过程都折叠。
-    const interrupted = foldChatTurn(groupChatTurns([textRecord('u', 'user', '问'), call('t1'), textRecord('s', 'system', '中断')])[0])!
-    expect(interrupted.folded.map((item) => item.id)).toEqual(['t1'])
-    expect(interrupted.visible.map((item) => item.id)).toEqual(['s'])
+  it('restarts the fast window when a bound session is lost again', async () => {
+    let phase: 'waiting' | 'bound' | 'lost' = 'waiting'
+    const { calls, fetchPage } = recorder((call) => {
+      if (phase === 'bound') return call.session
+        ? page({ binding: 'selected', session_id: 's1', messages: [], next_cursor: 'c2' })
+        : page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' })
+      if (phase === 'lost' && call.session) return page({ reason: 'session_unavailable', reset: true, candidates: [] })
+      return page({ reason: 'no_session_candidates', candidates: [] })
+    })
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    // 等过一分钟，已经是 10 秒一次的慢速轮询。
+    await vi.advanceTimersByTimeAsync(70_000)
+    phase = 'bound'
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(session.getSnapshot().state.session).toBe('cand-1')
+    phase = 'lost'
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().state).toMatchObject({ session: undefined, reason: 'session_unavailable' })
+    // 失去绑定后重新按正常间隔等认领，而不是沿用之前的慢速。
+    const lost = calls.length
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(calls).toHaveLength(lost + 2)
+    session.stop()
   })
 
+  it('keeps refreshing candidates while waiting and stops while inactive', async () => {
+    let round = 0
+    const { calls, fetchPage } = recorder(() => page({ candidates: round++ ? [candidate('old'), candidate('new')] : [candidate('old')] }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(session.getSnapshot().candidates.map((item) => item.id)).toEqual(['old', 'new'])
+    // 只列候选，绝不自动认领。
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    session.setActive(false)
+    const paused = calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(calls).toHaveLength(paused)
+    session.stop()
+  })
+
+  it('does not poll or auto-bind after the user chose to reselect manually', async () => {
+    const { calls, fetchPage } = recorder((call) => call.manual
+      ? page({ candidates: [candidate('cand-1')] })
+      : page({ binding: 'verified', session: 'cand-1', session_id: 's1', messages: [textRecord('1', 'user', '问')], next_cursor: 'c1' }))
+    const session = new StructuredChatSession({ hostID: 'host', paneID: 'pane', fetchPage, pollMs: 2000 })
+    session.start()
+    await vi.advanceTimersByTimeAsync(0)
+    session.reselect()
+    await vi.advanceTimersByTimeAsync(0)
+    const listed = calls.length
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(calls).toHaveLength(listed)
+    expect(session.getSnapshot().state.session).toBeUndefined()
+    session.stop()
+  })
+})
+
+describe('durations', () => {
   it('formats durations', () => {
     expect(formatChatDuration(4_400)).toBe('4 秒')
     expect(formatChatDuration(120_000)).toBe('2 分')

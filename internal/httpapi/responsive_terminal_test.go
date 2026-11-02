@@ -210,7 +210,8 @@ while True:
 	until(func() bool { value := state(); return value.Cols == 40 && value.Rows == 18 })
 	write(websocket.MessageText, []byte(fmt.Sprintf(`{"t":"call","id":"wheel","method":"terminal.scroll","params":{"stream_id":%d,"lines":-9,"column":10,"row":5}}`, mobile)))
 	read("res")
-	until(func() bool { return state().Position == -3 })
+	// The fixture reports the mouse, so each scrolled line is its own event.
+	until(func() bool { return state().Position == -9 })
 	if got := state(); got.Cols != 40 || got.Rows != 18 || got.PID != pid {
 		t.Fatalf("wheel changed geometry/process: %+v", got)
 	}
@@ -226,7 +227,7 @@ while True:
 	// A wheel from another observer must use the existing controller.
 	sendJSON(map[string]any{"t": "call", "id": "wheel-other", "method": "terminal.scroll", "params": map[string]any{"stream_id": second, "lines": 3, "column": 10, "row": 5}})
 	read("res")
-	until(func() bool { return state().Position == -2 })
+	until(func() bool { return state().Position == -6 })
 	acquire(second, 70, 25, true, "terminal.control.acquired")
 	until(func() bool { return state().Cols == 70 && state().Rows == 25 })
 	resize(mobile, 2, 22, 10)
@@ -299,7 +300,9 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 	}
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
-	if len(endpoint.commands) != 4 {
+	// One resize, then one one-line wheel command per scrolled line: a
+	// mouse-reporting app gets one event per command whatever lines says.
+	if len(endpoint.commands) != 8 {
 		t.Fatal(endpoint.commands)
 	}
 	total := 0
@@ -310,7 +313,7 @@ func TestResponsiveTerminalCommands(t *testing.T) {
 			}
 			continue
 		}
-		if m["type"] != "terminal.scroll" || m["direction"] != "up" || m["source"] != "wheel" || m["column"] != float64(10) || m["row"] != float64(5) || m["lines"].(float64) > 3 {
+		if m["type"] != "terminal.scroll" || m["direction"] != "up" || m["source"] != "wheel" || m["column"] != float64(10) || m["row"] != float64(5) || m["lines"] != float64(1) {
 			t.Fatal(m)
 		}
 		total += int(m["lines"].(float64))

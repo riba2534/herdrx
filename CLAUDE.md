@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主机工作台、xterm 终端及 Agent 状态查看。目标用户是可信管理员管理的个人或小团队，首发为单实例；工作台主机为 Linux amd64/arm64，远程主机受控端支持 Linux amd64/arm64，macOS amd64/arm64 为预览（Apple Silicon 已实机验证，两种架构的终端尺寸与接入回归已进 CI；Intel 完整用户环境未验收，launchd 生命周期未进 CI）。网站不负责下载、升级或停止用户的 Herdr。
+herdrx 是 Herdr 的多用户 Web 客户端，为 Agent 而生：在电脑和手机上用 Web 界面查看和控制多台主机上 Herdr 里的 Claude Code，需要时切到完整的 xterm 终端。目标用户是可信管理员管理的个人或小团队，首发为单实例；工作台主机为 Linux amd64/arm64，远程主机受控端支持 Linux amd64/arm64，macOS amd64/arm64 为预览（Apple Silicon 已实机验证，两种架构的终端尺寸与接入回归已进 CI；Intel 完整用户环境未验收，launchd 生命周期未进 CI）。网站不负责下载、升级或停止用户的 Herdr。
 
 统一称呼：**工作台主机**是部署 herdrx 网站/API/数据库的机器；**远程主机**是用户通过工作台接入、独立运行 Herdr 和任务的其他机器；**浏览器**是访问工作台的客户端。避免单独使用“服务器”混指前两者。Herdr 服务端运行于远程主机，herdrx Web 服务端运行于工作台主机。
 
@@ -20,6 +20,15 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 - 受控机 CLI：`cmd/herdrx`；`cmd/herdrx-agent` 是兼容包装。
 - 接入方式：原生运行时的本机 Herdr、基础 SSH、Tailcat。
 - `../herdr`、`../tailcat`、`../orca`、`../paseo` 是只读参考仓库。产品改动只写本仓库。
+
+## 两种工作台模式
+
+**工作台有两种模式，默认 Web UI 模式。** 两者看的是同一份 Herdr workspace/tab/pane，切换只改变网页视图，不调用 Herdr 接口、不改 Herdr 状态。
+
+- **Web UI 模式**：结构化控制台。Claude pane 显示对话（来自 Claude 自己写的会话记录）、运行状态栏、提问/计划/信任目录等交互卡片和输入框；其他 pane 显示只读画面和一行命令输入。第一版只为 Claude Code 做对话视图，其他 Agent 在 Web Shell 里使用。对话界面的展示与交互借鉴 Cindy（Apache-2.0），移植的代码在文件头注明来源，许可见 THIRD_PARTY_NOTICES。
+- **Web Shell 模式**：完整的 xterm 终端工作台（分屏、Herdr 快捷键、尺寸控制、滚动、图片粘贴），能力不得因 Web UI 回退。
+- 新建 Claude 会话按远程主机 `~/.zshrc` 里的 alias（启动器）启动：在新 pane 的交互 shell 输入 `<alias> --session-id <uuid>`。**alias 正文常含网关地址和密钥，只能在远程主机本地解析**，只有名字和免授权/全屏/队友三个开关离开远程主机，不进数据库、日志、审计、错误信息、界面和测试夹具。
+- 不注入 Claude hooks、不改远程 `~/.claude/settings.json`。交互卡片内容取会话记录里待处理的 tool_use，作答一律走读屏校验后的按键；结果不确定不重按。Herdr 对计划审批报 idle，判断“需要你”不能只看 Herdr 状态。
 
 ## PWA 客户端要求
 
@@ -52,9 +61,10 @@ herdrx 是 Herdr 的多用户 Web 客户端，提供电脑和手机上的多主�
 | `internal/httpapi` | HTTP、认证、主机管理、配对任务、终端 WebSocket |
 | `internal/store`、`internal/secure` | SQLite、凭据加密、密码与密钥 |
 | `internal/herdr`、`internal/hostruntime` | Herdr 协议适配与主机连接 |
+| `internal/screenparse`、`internal/agentlog`、`internal/launchers` | 读屏识别对话框、Agent 会话记录解析、远程启动器发现 |
 | `internal/agent`、`internal/agentcli`、`internal/tunnel` | 受控端、IPC、服务管理、Tailcat 与绑定状态机 |
 | `internal/updater` | CLI 签名更新及回滚 |
-| `web/src` | React/TypeScript/xterm 前端 |
+| `web/src` | React/TypeScript 前端：`pages/WorkbenchPage` 双模式工作台、`components/workbench-ui` 控制台框架、`components/chat` 与 `ChatView` 对话流、`components/console` 状态栏与交互卡片、`TerminalPane` xterm 终端 |
 | `internal/webassets/dist` | Go embed 前端资源，由 `make web-build` 更新；仅 `.gitkeep` 进入 Git |
 | `deploy/`、`.github/workflows/`、`scripts/` | Docker、发布及部署验收 |
 | `docs/` | 安装、运维、设计决策与发版验收 |
@@ -92,6 +102,7 @@ node scripts/test-terminal-rendering.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-terminal-themes.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-workbench-display.mjs
 HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-screen-view.mjs
+HERDRX_TEST_ENGINES=chromium,firefox,webkit node scripts/test-web-ui-mode.mjs
 ```
 
 Docker 变更需构建候选镜像并运行 `python3 scripts/smoke-image.py <镜像> [预期版本]`。脚本需要当前用户能使用 Docker 和无交互 sudo，仅操作隔离临时目录和测试容器。
@@ -105,7 +116,7 @@ Docker 变更需构建候选镜像并运行 `python3 scripts/smoke-image.py <镜
 - 身份、PSK、binding、epoch 的持久化和撤销是核心数据。迁移失败不能悄悄生成新身份，回滚不能复活已撤销授权。
 - 慢网络请求不持全局锁；终端输入结果不确定时不自动重放；共享连接变更必须考虑并发、重启及失效恢复。
 - 保留 Herdr 的 workspace/tab/pane/BSP 心智模型；原版 TUI 嵌套入口已退役。
-- 本机、SSH、Tailcat 的终端操作、中文、Shift+Enter、滚动、分屏和图片粘贴需保持一致。
+- 本机、SSH、Tailcat 的终端操作、中文、Shift+Enter、滚动、分屏和图片粘贴需保持一致（Web Shell 模式）；Web UI 模式的会话读取、启动器发现、新建会话与卡片作答同样需三种接入方式一致，旧 Tailcat 受控端不支持时如实降级并提示升级。
 - 用户界面及项目文档优先简体中文；错误应说明用户下一步可执行的动作，不能推荐未实现的命令。
 
 ## 协作与文档

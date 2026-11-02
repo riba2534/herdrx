@@ -26,7 +26,7 @@
 推荐直接复制网站第一步提供的 **GitHub 一行安装命令**。页面自动填写可用版本，无需替换工作台地址；当前预发布版示例：
 
 ```sh
-curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.3/install-herdrx.sh | sh -s -- --version v0.1.0-rc.3
+curl -fsSL https://github.com/riba2534/herdrx/releases/download/v0.1.0-rc.4/install-herdrx.sh | sh -s -- --version v0.1.0-rc.4
 ```
 
 页面选择附件齐全的最新正式版本；只有预发布时自动选择 RC，并将脚本下载地址与安装版本固定到同一标签。脚本和安装包均直接从 GitHub 获取，安装过程不依赖任何工作台或个人域名。脚本自动识别架构、下载、校验并安装，不需要手动填写版本或配置 PATH。
@@ -120,8 +120,8 @@ launchctl print "gui/$(id -u)/com.riba2534.herdrx" | head -5
 已安装的 CLI 可以直接从 GitHub 检查和安装签名版本：
 
 ```sh
-~/.local/bin/herdrx update --version v0.1.0-rc.3 --check
-~/.local/bin/herdrx update --version v0.1.0-rc.3
+~/.local/bin/herdrx update --version v0.1.0-rc.4 --check
+~/.local/bin/herdrx update --version v0.1.0-rc.4
 ~/.local/bin/herdrx status
 ```
 

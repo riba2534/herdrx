@@ -6,7 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
-import { chooseOption, servePanePrompt } from './browser-controls.mjs'
+import { chooseOption, servePanePrompt, enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_DESKTOP_ARTIFACTS
@@ -60,6 +60,7 @@ const base = `http://127.0.0.1:${server.address().port}`
 async function fixture(browser, options, snapshot = splitSnapshot) {
   let live = structuredClone(snapshot)
   const context = await browser.newContext({ hasTouch: false, isMobile: false, ...options })
+  await enterShellMode(context)
   const page = await context.newPage()
   const messages = []
   const errors = []

@@ -53,21 +53,16 @@ func sendScrollPerGesture(ctx context.Context, endpoint Endpoint, paneID string,
 		if frame.Type != "terminal.frame" {
 			continue
 		}
-		direction := "down"
-		if lines < 0 {
-			direction = "up"
-			lines = -lines
-		}
 		encoder := json.NewEncoder(process.Stdin())
-		for lines > 0 {
+		// The same commands ScrollController sends, so the latency comparison
+		// covers the same wheel events.
+		for _, command := range ScrollCommands(lines, min(column, rect.Width-1), min(row, rect.Height-1)) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			step := min(lines, 3)
-			if err := encoder.Encode(map[string]any{"type": "terminal.scroll", "direction": direction, "lines": step, "source": "wheel", "column": min(column, rect.Width-1), "row": min(row, rect.Height-1)}); err != nil {
+			if err := encoder.Encode(command); err != nil {
 				return fmt.Errorf("send terminal scroll: %w", err)
 			}
-			lines -= step
 		}
 		if err := encoder.Encode(map[string]any{"type": "terminal.release"}); err != nil {
 			return err

@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createConnection, createServer } from 'node:net'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { enterShellMode } from './browser-controls.mjs'
 
 assert.ok(process.env.HERDRX_TEST_HERDR, 'HERDRX_TEST_HERDR must point to a verified real binary')
 const binary = resolve(process.argv[2] || 'bin/herdrx-server')
@@ -53,6 +54,7 @@ async function state() { return JSON.parse(await readFile(join(dir, 'state.json'
 const geometry = (value) => ({ cols: value.cols, rows: value.rows })
 const password = 'terminal-control-test-password'
 async function instrument(context) {
+  await enterShellMode(context)
   await context.addInitScript(() => {
     const NativeSocket = window.WebSocket
     window.__terminalWire = { sent: [], received: [], frames: [], socket: null }

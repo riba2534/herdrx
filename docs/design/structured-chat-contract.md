@@ -153,8 +153,9 @@ Claude 的日志目录名编码规则是「每个非字母数字字符替换为�
 ## 5. 记录、块与角色
 
 - 记录：`{id, role, at?, blocks}`；块只有三种：`text`、`tool-call`、`tool-result`。
-- 角色闭集合：`user | assistant | tool | system`。**没有 `reasoning`**——provider 记录里的
-  思考过程 / 思想链在服务端直接省略，**不计入 `skipped`**（省略是设计行为，不是格式畸形）。
+- 角色闭集合：`user | assistant | tool | system`。**没有 `reasoning` 角色**。Claude 的 `thinking`
+  块（2026-11-02 起）作为 assistant 记录里的 `{type:"thinking", text, duration_ms?}` 块下发，供 Web UI
+  默认折叠展示；正文为空的加密思考省略。其他 provider 的思考过程仍在服务端省略，**不计入 `skipped`**。
 - **`tool` 是派生角色**：provider 里 `type:'user'` 且 blocks 全部是 `tool-result` 的记录重判为
   `tool`。因此**工具结果永远不会被当成用户问题**渲染到右侧；只要该 user 记录里还夹着任何非
   tool-result 块，它就仍然是 `user`。

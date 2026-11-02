@@ -10,6 +10,7 @@ import { join, resolve } from 'node:path'
 import { createServer, createConnection } from 'node:net'
 import { once } from 'node:events'
 import { chromium, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { enterShellMode } from './browser-controls.mjs'
 const run = promisify(execFile)
 const herdr = process.env.HERDRX_TEST_HERDR
 assert.ok(herdr, 'HERDRX_TEST_HERDR must specify the test binary')
@@ -89,6 +90,7 @@ while True:
       website = spawn(resolve(binary), [], { env: { ...env, HERDRX_DATA_DIR: data, HERDRX_HERDR_BIN: herdr, HERDRX_ADDR: `127.0.0.1:${port}`, HERDRX_PUBLIC_URL: base, HERDRX_COOKIE_SECURE: 'false', HERDRX_BOOTSTRAP_TOKEN: '', HERDRX_ALLOWED_ORIGINS: '', HERDRX_TRUSTED_PROXIES: '' }, stdio: 'ignore' })
       await expect.poll(async () => fetch(base + '/healthz').then((r) => r.ok).catch(() => false)).toBe(true)
       context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+      await enterShellMode(context)
       const bootstrap = await context.request.post(base + '/api/bootstrap', { data: { email: 'scroll@example.test', display_name: 'Scroll test', password: 'isolated-scroll-password', token: (await readFile(join(data, 'bootstrap-token'), 'utf8')).trim() }, headers: { Origin: base } })
       assert.ok(bootstrap.ok(), await bootstrap.text())
       const auth = await bootstrap.json()
