@@ -937,6 +937,17 @@ describe('console status bar and interaction cards', () => {
     expect(readComposerDraft('host', 'p1')).toBe('没发出去的草稿')
   })
 
+  it('locks the mode pill while a card is up, folded or not', async () => {
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: question })
+    const { client, call } = await renderConsole([text('u1', 'user', '问我一个问题'), ask])
+    act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
+    await screen.findByRole('group', { name: /Claude 在问/ })
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '收起卡片' }))
+    expect(screen.getByRole('button', { name: /当前模式：免授权/ })).toBeDisabled()
+    expect(call).not.toHaveBeenCalled()
+  })
+
   it('opens the pane in Shell mode from a multi-select question', async () => {
     const multi: ChatRecord = { ...ask, blocks: [{ type: 'tool-call', call_id: 'call-multi', name: 'AskUserQuestion', input: { questions: [{ question: '选哪些？', multiSelect: true, options: [{ label: 'a' }, { label: 'b' }] }] } }] }
     transcriptServer(sequence(verified([multi])))
@@ -950,6 +961,7 @@ describe('console status bar and interaction cards', () => {
   })
 
   it('interrupts with one Esc key press and reports a failure without retrying', async () => {
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: null })
     const { call } = await renderConsole([text('u1', 'user', '跑起来')], { agent_status: 'working' })
     fireEvent.click(screen.getByRole('button', { name: '中断' }))
     await waitFor(() => expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['esc'] }))
@@ -960,6 +972,7 @@ describe('console status bar and interaction cards', () => {
   })
 
   it('cycles the mode with one Shift+Tab and waits for the mode line to change', async () => {
+    vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: null })
     const { client, call } = await renderConsole([text('u1', 'user', '切模式')])
     act(() => client.watches[0].onFrame(claudeScreen('bypass permissions')))
     fireEvent.click(screen.getByRole('button', { name: /当前模式：免授权/ }))

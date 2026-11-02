@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { MessageSquareWarning } from 'lucide-react'
-import { findPendingInteraction, latestPlan } from '../../lib/console/interaction'
+import { findPendingInteraction, planShownOnScreen } from '../../lib/console/interaction'
 import type { ConsoleLive } from '../../lib/console/useConsoleLive'
 import { useDialogSession } from '../../lib/console/useDialogSession'
 import type { ChatRecord } from '../../lib/structuredChatTypes'
@@ -24,7 +24,12 @@ export type InteractionPanelProps = {
   onActiveChange: (active: boolean) => void
   /** 多选题、认不出的情况引导去 Shell 模式；不传时只显示文字说明。 */
   onOpenShell?: () => void
+  /** 有卡片（展开或收起）或读屏认出对话框时为 true：这时不能往终端按 Esc、Shift+Tab。 */
+  onDialogChange?: (present: boolean) => void
 }
+
+/** 连续这么多次读不到对话框、pane 又不是 blocked，就收起卡片、停止读屏（Claude 被杀等拿不到结果的情况）。 */
+export const MISSES_BEFORE_IDLE = 3
 
 // 收起只影响这台设备的这一页：按「主机 + pane + 这次交互」记在内存里，新的提问自动展开。
 const collapsedCards = new Set<string>()
@@ -39,12 +44,19 @@ export function InteractionPanel(props: InteractionPanelProps) {
   return <InteractionPanelBody key={`${props.hostID}\n${props.pane.pane_id}`} {...props}/>
 }
 
-function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onOpenShell }: InteractionPanelProps) {
+function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onOpenShell, onDialogChange }: InteractionPanelProps) {
   const paneID = pane.pane_id
   const pending = useMemo(() => findPendingInteraction(records), [records])
-  const wanted = Boolean(pending) || pane.agent_status === 'blocked'
+  const blocked = pane.agent_status === 'blocked'
+  // 读不到对话框时停下来，等对话记录或 pane 状态有变化再恢复。
+  const [idleSince, setIdleSince] = useState<{ records: readonly ChatRecord[]; status: string } | null>(null)
+  const idle = idleSince !== null && idleSince.records === records && idleSince.status === pane.agent_status
+  const wanted = (Boolean(pending) || blocked) && !idle
   const session = useDialogSession({ hostID, paneID, enabled: wanted })
   const { dialog, phase } = session
+  useEffect(() => {
+    if (session.misses >= MISSES_BEFORE_IDLE && !blocked && phase.kind === 'idle') setIdleSince({ records, status: pane.agent_status })
+  }, [session.misses, blocked, phase.kind, records, pane.agent_status])
   const [, setCollapseVersion] = useState(0)
   // 兜底卡片（DialogCard）自己读屏，对话框消失时也会调用 onClose：只在这个对话框还在时保持收起。
   const [fallbackFolded, setFallbackFolded] = useState('')
@@ -76,7 +88,11 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
   let card: ReactNode = null
   if (dialog?.kind === 'question') card = <QuestionCard dialog={dialog} questions={questions} draftScope={interaction} onOpenShell={onOpenShell} {...common}/>
   else if (dialog?.kind === 'review') card = <ReviewCard dialog={dialog} {...common}/>
-  else if (dialog?.kind === 'plan') card = <PlanCard dialog={dialog} plan={pending?.tool === 'ExitPlanMode' ? pending.plan : latestPlan(records)} draftScope={interaction} {...common}/>
+  else if (dialog?.kind === 'plan') {
+    // 只用还没有结果的那次 ExitPlanMode：旧计划配上屏幕上新计划的按钮，会批准一份没看过的计划。
+    const plan = pending?.tool === 'ExitPlanMode' ? pending.plan : ''
+    card = <PlanCard dialog={dialog} plan={plan} matches={planShownOnScreen(plan, dialog, live.preview)} draftScope={interaction} {...common}/>
+  }
   else if (dialog?.kind === 'trust') card = <TrustCard dialog={dialog} {...common}/>
   else if (fallback) {
     // 其他对话框（如权限确认）由现有卡片兜底；它自己的「收起」在这里变成 44px 的条。
@@ -98,12 +114,19 @@ function InteractionPanelBody({ hostID, pane, records, live, onActiveChange, onO
 
   const shown = card !== null
   const active = shown && !folded
-  const notifyRef = useRef(onActiveChange)
-  notifyRef.current = onActiveChange
+  const present = shown || dialog !== null
+  const notifyRef = useRef({ onActiveChange, onDialogChange })
+  notifyRef.current = { onActiveChange, onDialogChange }
   useEffect(() => {
-    notifyRef.current(active)
+    notifyRef.current.onActiveChange(active)
   }, [active])
-  useEffect(() => () => notifyRef.current(false), [])
+  useEffect(() => {
+    notifyRef.current.onDialogChange?.(present)
+  }, [present])
+  useEffect(() => () => {
+    notifyRef.current.onActiveChange(false)
+    notifyRef.current.onDialogChange?.(false)
+  }, [])
 
   // 卡片已经消失（比如对话框已在电脑上回答）时，结果说明在原处单独显示一会儿。
   const [orphan, setOrphan] = useState('')

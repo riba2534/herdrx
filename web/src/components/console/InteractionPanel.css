@@ -89,6 +89,7 @@
 }
 
 .console-card-note p { margin: 0; }
+.console-card-warning { color: var(--console-warning); }
 
 .console-card-path {
   margin: 0;

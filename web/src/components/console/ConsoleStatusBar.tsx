@@ -14,6 +14,7 @@ export const STATUS_LINGER_MS = 1000
 export const STATUS_FADE_MS = 250
 
 export const CONSOLE_MODE_LABELS: Record<ConsoleMode, string> = {
+  default: '默认',
   bypass: '免授权',
   auto: '自动',
   manual: '手动确认',
@@ -54,8 +55,10 @@ function useAction(run: () => Promise<void>, fallback: string) {
 
 export type ConsoleStatusBarProps = {
   live: ConsoleLive
-  /** 调用方判断的「工作中」（如 Herdr 报 working）；读屏看到 spinner 时也算工作中。 */
+  /** 调用方判断的「工作中」（如 Herdr 报 working）；读屏看到 spinner 时也显示运行状态，但只有 working 时才能中断。 */
   working: boolean
+  /** 有对话框时的说明：模式胶囊和「中断」都停用，免得按键落进对话框。 */
+  locked?: string
   /** 中断当前这一轮（调用方实现为发一次 Esc）。 */
   onInterrupt: () => Promise<void>
   /** 切到下一个模式（调用方实现为按一次 Shift+Tab，再等模式行变化）。 */
@@ -68,7 +71,7 @@ export type ConsoleStatusBarProps = {
  * 工作中上方还有「实时画面」折叠条。数字全部来自读屏，不在本地计时。空闲时根节点 `data-state="idle"`，
  * 只剩模式胶囊，调用方可以把它停到输入区的工具行里。
  */
-export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: ConsoleStatusBarProps) {
+export function ConsoleStatusBar({ live, working, locked, onInterrupt, onCycleMode }: ConsoleStatusBarProps) {
   const active = working || Boolean(live.spinner)
   // 读屏偶尔有一帧没有 spinner（重绘中）：工作中保留上一次读到的内容。
   const [spinner, setHeld] = useState<ConsoleSpinner | null>(live.spinner)
@@ -116,10 +119,10 @@ export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: Co
           type="button"
           className="console-mode"
           data-mode={mode}
-          disabled={cycle.pending}
+          disabled={cycle.pending || Boolean(locked)}
           aria-busy={cycle.pending || undefined}
           aria-label={`当前模式：${CONSOLE_MODE_LABELS[mode]}。点击切换到下一个模式`}
-          data-tooltip="切换到下一个模式（相当于按一次 Shift+Tab）"
+          data-tooltip={locked || '切换到下一个模式（相当于按一次 Shift+Tab）'}
           onClick={() => void cycle.trigger()}
         >
           {cycle.pending ? <LoaderCircle className="console-spin" size={13} aria-hidden="true"/> : <span className="console-mode-dot" aria-hidden="true"/>}
@@ -128,9 +131,9 @@ export function ConsoleStatusBar({ live, working, onInterrupt, onCycleMode }: Co
         {active && <button
           type="button"
           className="console-button console-interrupt"
-          disabled={interrupt.pending}
+          disabled={interrupt.pending || !working || Boolean(locked)}
           aria-busy={interrupt.pending || undefined}
-          data-tooltip="中断这一轮（相当于按一次 Esc），不会关闭终端"
+          data-tooltip={locked || (working ? '中断这一轮（相当于按一次 Esc），不会关闭终端' : 'Herdr 还没报告运行中，暂不能中断')}
           onClick={() => void interrupt.trigger()}
         >
           {interrupt.pending ? <LoaderCircle className="console-spin" size={13} aria-hidden="true"/> : <Square size={12} aria-hidden="true"/>}中断

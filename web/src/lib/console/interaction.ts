@@ -70,35 +70,35 @@ export function findPendingInteraction(records: readonly ChatRecord[]): PendingI
   return { tool: 'AskUserQuestion', callID: call.call_id, questions: parseQuestions(call.input) }
 }
 
-/** 记录里最近一份计划正文（对话框是计划确认、但对应的工具调用已有结果或还没读到时用）。 */
-export function latestPlan(records: readonly ChatRecord[]) {
-  for (let index = records.length - 1; index >= 0; index--) {
-    for (const block of records[index].blocks) {
-      const plan = block.type === 'tool-call' && block.name === 'ExitPlanMode' ? text(record(block.input)?.plan) : ''
-      if (plan.trim()) return plan
-    }
-  }
-  return ''
+// 计划批准框里不属于计划正文的固定文案。
+const PLAN_CHROME = /^(?:ready to code\?|here is claude's plan:?|claude has written up a plan\b.*|would you like to proceed\?)$/i
+// 比较屏幕上的计划行与 Markdown 原文：屏幕已经渲染掉了标题、强调、代码标记和列表符号，表格画成
+// 框线，长行也会折开；两边都去掉这些再比。
+const squash = (value: string) => value.replace(/[\s#*_`>|~•·⎿\-─━│┃┌┐└┘├┤┬┴┼]/g, '')
+
+/**
+ * 屏幕上看得见的计划行（对话框说明行，以及读屏里问句上方的正文）是否出自这份计划：第一行可见
+ * 正文去掉空白和 Markdown 符号后要能在计划原文里找到。屏幕上看不到任何正文时无从比对，返回 true。
+ */
+export function planShownOnScreen(plan: string, dialog: PaneDialog, preview: readonly string[] = []) {
+  const title = squash(dialog.title || '')
+  const question = title ? preview.findIndex((line) => squash(line).includes(title)) : -1
+  const visible = [...dialog.lines, ...(question >= 0 ? preview.slice(0, question) : [])]
+  const first = visible.map((line) => line.trim()).find((line) => squash(line) && !PLAN_CHROME.test(line))
+  return first === undefined || squash(plan).includes(squash(first))
 }
 
-const normalize = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase()
+const normalize = (value: string) => value.replace(/\s+/g, ' ').trim()
 
-function sameLabel(screen: string, input: string) {
-  const left = normalize(screen), right = normalize(input)
-  if (!left || !right) return false
-  // 屏幕上过长的标签可能被截断成省略号。
-  const cut = left.replace(/(?:…|\.\.\.)$/, '')
-  return left === right || (cut !== left && cut.length >= 4 && right.startsWith(cut))
-}
-
-/** 对话框当前页对应第几题；认不出时返回 -1。 */
+/**
+ * 对话框当前页对应第几题；对不上时返回 -1。题干要完全一致（只规范化空白），题目选项的标签
+ * 也要按顺序与屏幕上的前几项完全一致——差一点都不拿对话记录去套，卡片只用屏幕上的文字。
+ */
 export function matchQuestion(dialog: PaneDialog, questions: readonly AskQuestion[]) {
-  const screen = normalize([dialog.title || '', ...dialog.lines].join('\n'))
-  const byText = questions.findIndex((question) => screen.includes(normalize(question.question)))
-  if (byText >= 0) return byText
-  const byOptions = questions.findIndex((question) => question.options.length > 0 && question.options.every((option) => dialog.options.some((item) => sameLabel(item.label, option.label))))
-  if (byOptions >= 0) return byOptions
-  return questions.length === 1 ? 0 : -1
+  const title = normalize(dialog.title || '')
+  return questions.findIndex((question) => normalize(question.question) === title
+    && question.options.length > 0
+    && question.options.every((option, position) => normalize(dialog.options[position]?.label || '') === normalize(option.label)))
 }
 
 export type OptionRole = 'answer' | 'free' | 'chat'
@@ -108,9 +108,9 @@ const FREE_TEXT = /^type something/i
 const CHAT = /^chat about this/i
 
 /**
- * 题目的选项：编号取自屏幕。知道题目时按位置对应——Claude 按原顺序列出题目选项，其后是
- * 自由填写（`Type something.`，用户在电脑上打过字时会原地变成那段文字）和 `Chat about this`——
- * 标签和说明取对话记录的原文；不知道题目时只认得出这两个固定项。
+ * 题目的选项：标签、编号取自屏幕。`question` 只在 matchQuestion 对上时传入，此时前几项与题目
+ * 选项逐一相同，补上对话记录里的说明；紧随其后的是自由填写（`Type something.`，用户在电脑上
+ * 打过字时会原地变成那段文字）和 `Chat about this`。对不上时只认得出这两个固定项。
  */
 export function questionOptions(dialog: PaneDialog, question?: AskQuestion): OptionView[] {
   return dialog.options.map((option, position) => {
@@ -118,8 +118,8 @@ export function questionOptions(dialog: PaneDialog, question?: AskQuestion): Opt
     let role: OptionRole = 'answer'
     if (CHAT.test(option.label)) role = 'chat'
     else if (!known && (FREE_TEXT.test(option.label) || position === question?.options.length)) role = 'free'
-    const description = known ? known.description : option.description
-    return { index: option.index, label: known?.label || option.label, ...(description ? { description } : {}), role }
+    const description = known?.description || option.description
+    return { index: option.index, label: option.label, ...(description ? { description } : {}), role }
   })
 }
 
@@ -142,7 +142,7 @@ export type PlanAction = { index: number; label: string; screenLabel: string; to
 
 const FEEDBACK = { pattern: /^tell claude what to change/i, label: '提修改意见', tone: 'secondary' as const, free: true }
 const PLAN_ACTIONS: Array<{ pattern: RegExp; label: string; tone: 'primary' | 'secondary'; free?: boolean }> = [
-  { pattern: /^yes,? and switch to bypass/i, label: '批准并保持免授权', tone: 'primary' },
+  { pattern: /^yes,? and switch to bypass/i, label: '批准并切换到免授权', tone: 'primary' },
   { pattern: /^yes,? manually approve edits/i, label: '批准，改动逐个确认', tone: 'secondary' },
   FEEDBACK,
 ]

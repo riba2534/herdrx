@@ -22,14 +22,15 @@ export const ConsoleControls = memo(function ConsoleControls({ hostID, pane, cli
   onOpenShell: () => void
 }) {
   const live = useConsoleLive({ hostID, paneID: pane.pane_id, client, enabled: pane.agent === 'claude' })
-  const controls = useConsoleControls({ client, paneID: pane.pane_id, mode: live.mode })
+  const controls = useConsoleControls({ client, hostID, paneID: pane.pane_id, mode: live.mode })
   const [expanded, setExpanded] = useState(false)
+  const [dialog, setDialog] = useState(false)
   const report = useCallback((active: boolean) => {
     setExpanded(active)
     onActiveChange(active)
   }, [onActiveChange])
   return <div className="chat-console-controls" data-dock={!expanded || undefined}>
-    <ConsoleStatusBar live={live} working={pane.agent_status === 'working'} onInterrupt={controls.interrupt} onCycleMode={controls.cycleMode}/>
-    <InteractionPanel hostID={hostID} pane={pane} records={records} live={live} onActiveChange={report} onOpenShell={onOpenShell}/>
+    <ConsoleStatusBar live={live} working={pane.agent_status === 'working'} locked={dialog ? '终端正弹着对话框，先处理它再切换模式或中断' : undefined} onInterrupt={controls.interrupt} onCycleMode={controls.cycleMode}/>
+    <InteractionPanel hostID={hostID} pane={pane} records={records} live={live} onActiveChange={report} onDialogChange={setDialog} onOpenShell={onOpenShell}/>
   </div>
 })

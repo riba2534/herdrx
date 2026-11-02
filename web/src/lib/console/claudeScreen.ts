@@ -2,7 +2,8 @@
 // 以及 spinner 上方最近的几行正文（给「实时画面」折叠条）。读屏只用于展示状态，不代替对话记录；
 // 认不出的一律返回空值，不猜。输入是去掉 ANSI 的行（见 ansiScreen.plainScreenLine）。
 
-export type ConsoleMode = 'bypass' | 'auto' | 'manual' | 'acceptEdits' | 'plan'
+// default：没开免授权时的默认模式，屏幕上没有模式行。
+export type ConsoleMode = 'default' | 'bypass' | 'auto' | 'manual' | 'acceptEdits' | 'plan'
 
 export type ConsoleSpinner = {
   /** spinner 动词（Claude 随机挑选），不含省略号，如 `Wibbling`。 */
@@ -137,7 +138,8 @@ export function parseClaudeScreen(input: readonly string[]): ClaudeScreen {
   const found = spinnerAt(lines, end)
   return {
     spinner: found?.spinner || null,
-    mode: parseMode(lines),
+    // 没有模式行但有 Claude 的输入框：默认模式。被对话框挡住（没有输入框）时认不出，返回 null。
+    mode: parseMode(lines) ?? (top >= 0 ? 'default' : null),
     preview: screenPreview(lines, found ? found.index : end),
   }
 }

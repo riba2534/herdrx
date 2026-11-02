@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatRecord } from '../structuredChatTypes'
 import type { PaneDialog } from '../../types'
-import { findPendingInteraction, latestPlan, matchQuestion, parseQuestions, planActions, questionOptions, reviewAnswers } from './interaction'
+import { plainScreenLine } from '../ansiScreen'
+import { parseClaudeScreen } from './claudeScreen'
+import { findPendingInteraction, matchQuestion, parseQuestions, planActions, planShownOnScreen, questionOptions, reviewAnswers } from './interaction'
+import planDialogScreen from './__fixtures__/plan-dialog.text.txt?raw'
 
 const questions = [
   { header: '测试框架', multiSelect: false, question: '测试框架用 pytest 还是 unittest？', options: [{ label: 'pytest', description: '使用 pytest 作为测试框架' }, { label: 'unittest', description: '使用 unittest 作为测试框架' }] },
@@ -31,7 +34,6 @@ describe('findPendingInteraction', () => {
   it('reads the plan from any copy of the same call and pairs calls without ids by position', () => {
     const records = [call('1', 'p', 'ExitPlanMode', { plan: '# 计划\n\n正文' }), call('2', 'p', 'ExitPlanMode', {})]
     expect(findPendingInteraction(records)).toEqual({ tool: 'ExitPlanMode', callID: 'p', plan: '# 计划\n\n正文' })
-    expect(latestPlan([...records, result('3', 'p')])).toBe('# 计划\n\n正文')
     const anonymous = [result('0', ''), call('1', '', 'AskUserQuestion', { questions })]
     expect(findPendingInteraction(anonymous)).toMatchObject({ callID: '' })
     expect(findPendingInteraction([...anonymous, result('2', '')])).toBeNull()
@@ -49,12 +51,17 @@ describe('parseQuestions', () => {
 })
 
 describe('matchQuestion', () => {
-  it('finds the current page by its text, then by its options', () => {
-    expect(matchQuestion(dialog('要不要加类型注解？', ['要', '不要']), questions)).toBe(1)
-    expect(matchQuestion({ ...dialog('', ['pytest', 'unittest']), lines: ['测试框架用 pytest 还是', 'unittest？'] }, questions)).toBe(0)
-    expect(matchQuestion(dialog('另一个标题', ['要', '不要', 'Type something.']), questions)).toBe(1)
-    expect(matchQuestion(dialog('另一个标题', ['x']), questions)).toBe(-1)
-    expect(matchQuestion(dialog('另一个标题', ['x']), questions.slice(0, 1))).toBe(0)
+  it('needs the exact question and the same option labels in order', () => {
+    expect(matchQuestion(dialog('要不要加类型注解？', ['要', '不要', 'Type something.', 'Chat about this']), questions)).toBe(1)
+    // 空白不同照样算；用户在自由填写项里打过字不影响前面的选项。
+    expect(matchQuestion(dialog('  测试框架用 pytest\n还是 unittest？ ', ['pytest', 'unittest', 'nose2', 'Chat about this']), questions)).toBe(0)
+    // 选项集合对得上但题干不同、题干对得上但选项不同或顺序不同、单题也不兜底。
+    expect(matchQuestion(dialog('另一个标题', ['要', '不要', 'Type something.']), questions)).toBe(-1)
+    expect(matchQuestion(dialog('要不要加类型注解？', ['不要', '要']), questions)).toBe(-1)
+    expect(matchQuestion(dialog('要不要加类型注解？', ['要', '不加']), questions)).toBe(-1)
+    expect(matchQuestion(dialog('另一个标题', ['x']), questions.slice(0, 1))).toBe(-1)
+    // 题干只是开头相同也不算。
+    expect(matchQuestion(dialog('测试框架用哪个？', ['pytest', 'unittest']), questions)).toBe(-1)
   })
 })
 
@@ -78,9 +85,13 @@ describe('questionOptions', () => {
     expect(questionOptions(dialog('?', ['a', 'toml', 'Type something.'])).map((option) => option.role)).toEqual(['answer', 'answer', 'free'])
   })
 
-  it('matches labels the screen cut short', () => {
-    const options = questionOptions(dialog('q', ['A very long option labe…']), { question: 'q', multiSelect: false, options: [{ label: 'A very long option label that wraps', description: 'd' }] })
-    expect(options[0]).toMatchObject({ label: 'A very long option label that wraps', description: 'd', role: 'answer' })
+  it('uses only the screen text when the question does not match', () => {
+    const screen: PaneDialog = { ...dialog('q', ['pytest', 'Type something.', 'Chat about this']), options: [{ index: 1, label: 'pytest', selected: true, description: '屏幕上的说明' }, { index: 2, label: 'Type something.', selected: false }, { index: 3, label: 'Chat about this', selected: false }] }
+    expect(questionOptions(screen)).toEqual([
+      { index: 1, label: 'pytest', description: '屏幕上的说明', role: 'answer' },
+      { index: 2, label: 'Type something.', role: 'free' },
+      { index: 3, label: 'Chat about this', role: 'chat' },
+    ])
   })
 })
 
@@ -89,7 +100,7 @@ describe('planActions', () => {
 
   it('names the three plan actions in Chinese', () => {
     expect(planActions(plan('Tell Claude what to change'))).toEqual([
-      { index: 1, label: '批准并保持免授权', screenLabel: 'Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session', tone: 'primary', free: false },
+      { index: 1, label: '批准并切换到免授权', screenLabel: 'Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session', tone: 'primary', free: false },
       { index: 2, label: '批准，改动逐个确认', screenLabel: 'Yes, manually approve edits', tone: 'secondary', free: false },
       { index: 3, label: '提修改意见', screenLabel: 'Tell Claude what to change', tone: 'secondary', free: true },
     ])
@@ -106,5 +117,33 @@ describe('reviewAnswers', () => {
   it('pairs every question with its answer', () => {
     const review: PaneDialog = { ...dialog('Ready to submit your answers?', ['Submit answers', 'Cancel']), kind: 'review', lines: ['Review your answers', ' ● 测试框架用 pytest 还是 unittest？', '   → pytest', ' ● 要不要加类型注解？', 'Ready to submit your answers?'] }
     expect(reviewAnswers(review)).toEqual([{ question: '测试框架用 pytest 还是 unittest？', answer: 'pytest' }, { question: '要不要加类型注解？', answer: '' }])
+  })
+})
+
+describe('planShownOnScreen', () => {
+  // plan-dialog 夹具上的计划（会话记录里第一次 ExitPlanMode 的正文）。
+  const shownPlan = '# 将 calc.py 中的 add 函数改名为 plus\n\n## Context\n\n用户要求把 `calc.py` 中的 `add` 函数改名为 `plus`。\n\n## 改动\n\n修改 `/tmp/herdrx-spike/proj/calc.py:1`：\n\n```python\ndef plus(a, b):\n    return a + b\n```\n\n仅改函数定义名，函数体与参数不变。\n\n## 验证\n\n```bash\npython3 -c "import sys; sys.path.insert(0, \'/tmp/herdrx-spike/proj\'); import calc; assert calc.plus(2, 3) == 5; assert not hasattr(calc, \'add\')"\n```\n\n验证 `plus` 可用且 `add` 已不存在。\n'
+  const otherPlan = '# 给 calc.py 添加 sub 函数\n\n新增 `sub`，并补 pytest 用例。\n'
+  const planDialog: PaneDialog = { fingerprint: 'p', kind: 'plan', title: 'Claude has written up a plan and is ready to execute. Would you like to proceed?', lines: [], options: [] }
+
+  it('checks the plan text visible above the question on the live screen', () => {
+    const preview = parseClaudeScreen(planDialogScreen.split('\n').map(plainScreenLine)).preview
+    expect(planShownOnScreen(shownPlan, planDialog, preview)).toBe(true)
+    expect(planShownOnScreen(otherPlan, planDialog, preview)).toBe(false)
+  })
+
+  it('checks the first plan line in the dialog lines, skipping the fixed wording', () => {
+    const withLines = { ...planDialog, lines: ['Ready to code?', "Here is Claude's plan:", '给 calc.py 添加 sub 函数', '新增 sub，并补 pytest 用例。'] }
+    expect(planShownOnScreen(otherPlan, withLines)).toBe(true)
+    expect(planShownOnScreen(shownPlan, withLines)).toBe(false)
+  })
+
+  it('ignores table borders and Markdown marks on screen', () => {
+    const table = '| 文件 | 改动 |\n|---|---|\n| `calc.py` | 新增 **sub** |\n'
+    expect(planShownOnScreen(table, { ...planDialog, lines: ['│ calc.py │ 新增 sub │'] })).toBe(true)
+  })
+
+  it('cannot compare when no plan text is visible', () => {
+    expect(planShownOnScreen(otherPlan, planDialog, ['1. Yes', '2. No'])).toBe(true)
   })
 })

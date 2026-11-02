@@ -1,17 +1,25 @@
 import { act, renderHook } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { api } from '../api'
 import type { WorkbenchClient } from '../workbench'
 import type { ConsoleMode } from './claudeScreen'
 import { MODE_CHANGE_TIMEOUT_MS, useConsoleControls } from './useConsoleControls'
 
 function mount(call = vi.fn().mockResolvedValue({})) {
   const client = { call } as unknown as WorkbenchClient
-  const view = renderHook((props: { mode: ConsoleMode | null }) => useConsoleControls({ client, paneID: 'p1', ...props }), { initialProps: { mode: 'bypass' } })
+  const view = renderHook((props: { mode: ConsoleMode | null }) => useConsoleControls({ client, hostID: 'host', paneID: 'p1', ...props }), { initialProps: { mode: 'bypass' } })
   return { call, view }
 }
 
+let dialog: MockInstance<typeof api.paneDialog>
+
+beforeEach(() => {
+  dialog = vi.spyOn(api, 'paneDialog').mockResolvedValue({ dialog: null })
+})
+
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('useConsoleControls', () => {
@@ -21,6 +29,21 @@ describe('useConsoleControls', () => {
     expect(call).toHaveBeenCalledWith('pane.send_keys', { pane_id: 'p1', keys: ['esc'] })
     await expect(view.result.current.interrupt()).rejects.toThrow('没有确认 Esc 已送达（请求超时），不会自动重发')
     expect(call).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the screen first and presses nothing while a dialog is up or the read fails', async () => {
+    const { call, view } = mount()
+    // 计划批准框里光标停在反馈项时，Shift+Tab 会直接批准计划。
+    dialog.mockResolvedValueOnce({ dialog: { fingerprint: 'f', kind: 'plan', lines: [], options: [] } })
+    await expect(view.result.current.cycleMode()).rejects.toThrow('终端正弹着对话框，没有按 Shift+Tab')
+    dialog.mockResolvedValueOnce({ dialog: { fingerprint: 'f', kind: 'question', lines: [], options: [] } })
+    await expect(view.result.current.interrupt()).rejects.toThrow('终端正弹着对话框，没有按 Esc')
+    dialog.mockRejectedValueOnce(new Error('pane_read_failed'))
+    await expect(view.result.current.cycleMode()).rejects.toThrow('读不到终端画面，没有按 Shift+Tab')
+    dialog.mockRejectedValueOnce(new Error('pane_read_failed'))
+    await expect(view.result.current.interrupt()).rejects.toThrow('读不到终端画面，没有按 Esc')
+    expect(dialog).toHaveBeenCalledWith('host', 'p1')
+    expect(call).not.toHaveBeenCalled()
   })
 
   it('cycles the mode with one Shift+Tab and resolves once the mode line changes', async () => {
@@ -39,9 +62,10 @@ describe('useConsoleControls', () => {
 
   it('accepts a mode change that arrives before the key press is acknowledged', async () => {
     let acknowledge: () => void = () => {}
-    const { view } = mount(vi.fn(() => new Promise((resolve) => { acknowledge = () => resolve({}) })))
+    const { call, view } = mount(vi.fn(() => new Promise((resolve) => { acknowledge = () => resolve({}) })))
     let cycling: Promise<void> = Promise.resolve()
     act(() => { cycling = view.result.current.cycleMode() })
+    await vi.waitFor(() => expect(call).toHaveBeenCalled())
     view.rerender({ mode: 'auto' })
     acknowledge()
     await act(() => cycling)

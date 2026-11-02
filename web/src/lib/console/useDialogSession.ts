@@ -26,6 +26,8 @@ export type DialogSession = {
   dialog: PaneDialog | null
   /** 这一轮读屏至少完成过一次。 */
   loaded: boolean
+  /** 连续读到“没有对话框”的次数；读到对话框或停止读屏时归零。 */
+  misses: number
   phase: DialogPhase
   /** 正在按键、确认或提交：卡片上的作答按钮此时不可点。 */
   busy: boolean
@@ -55,6 +57,7 @@ const isBusy = (phase: DialogPhase) => phase.kind === 'answering' || phase.kind 
 export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; paneID: string; enabled: boolean }): DialogSession {
   const [dialog, setDialog] = useState<PaneDialog | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [misses, setMisses] = useState(0)
   const [phase, setPhaseState] = useState<DialogPhase>(IDLE)
   const [notice, setNotice] = useState('')
   const phaseRef = useRef<DialogPhase>(IDLE)
@@ -81,6 +84,7 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     dialogRef.current = next
     setDialog(next)
     setLoaded(true)
+    setMisses((count) => (next ? 0 : count + 1))
     const current = phaseRef.current
     if ((current.kind === 'typing' || current.kind === 'sending') && (!next || (next.title || '') !== current.title)) {
       // 输入期间对话框没了或换了题：输入框跟着收起（草稿由卡片保留）。发送中的请求自己收尾。
@@ -134,6 +138,7 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     dialogRef.current = null
     setDialog(null)
     setLoaded(false)
+    setMisses(0)
   }, [polling, run])
 
   // 对话记录已经有结果（或 pane 不再阻塞）：交互已结束，进行中的确认随之结束。
@@ -204,5 +209,5 @@ export function useDialogSession({ hostID, paneID, enabled }: { hostID: string; 
     if (phaseRef.current.kind === 'typing') setPhase(IDLE)
   }, [setPhase])
 
-  return { dialog, loaded, phase, busy: isBusy(phase), notice, answer, submitText, cancelTyping, refresh }
+  return { dialog, loaded, misses, phase, busy: isBusy(phase), notice, answer, submitText, cancelTyping, refresh }
 }

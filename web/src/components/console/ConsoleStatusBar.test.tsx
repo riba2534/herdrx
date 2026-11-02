@@ -25,12 +25,26 @@ describe('ConsoleStatusBar', () => {
     expect(screen.getByRole('button', { name: '中断' })).toBeEnabled()
   })
 
-  it('counts a visible spinner as working and keeps the last one through a frame without it', () => {
+  it('shows a visible spinner as running and keeps the last one through a frame without it', () => {
     const view = render(<ConsoleStatusBar live={live()} working={false} onInterrupt={noop} onCycleMode={noop}/>)
     expect(screen.getByRole('button', { name: '中断' })).toBeInTheDocument()
     view.rerender(<ConsoleStatusBar live={live({ spinner: null })} working onInterrupt={noop} onCycleMode={noop}/>)
     expect(screen.getByText('Wibbling…')).toBeInTheDocument()
     expect(screen.getByText('15 秒')).toBeInTheDocument()
+  })
+
+  it('locks the mode pill and interrupt while a dialog is up, and interrupts only while Herdr reports working', () => {
+    const view = render(<ConsoleStatusBar live={live()} working locked="终端正弹着对话框" onInterrupt={noop} onCycleMode={noop}/>)
+    const pill = screen.getByRole('button', { name: /当前模式/ })
+    expect(pill).toBeDisabled()
+    expect(pill).toHaveAttribute('data-tooltip', '终端正弹着对话框')
+    expect(screen.getByRole('button', { name: '中断' })).toBeDisabled()
+    // 只看到 spinner、Herdr 没报运行中：显示运行状态，但不能中断。
+    view.rerender(<ConsoleStatusBar live={live()} working={false} onInterrupt={noop} onCycleMode={noop}/>)
+    expect(screen.getByRole('button', { name: '中断' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /当前模式/ })).toBeEnabled()
+    view.rerender(<ConsoleStatusBar live={live()} working onInterrupt={noop} onCycleMode={noop}/>)
+    expect(screen.getByRole('button', { name: '中断' })).toBeEnabled()
   })
 
   it('interrupts once per click and explains a failure without retrying', async () => {

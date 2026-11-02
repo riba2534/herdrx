@@ -81,6 +81,18 @@ describe('useConsoleLive', () => {
     expect(result.current.preview.at(-1)).toContain('Esc to cancel')
   })
 
+  it('switches to the default mode when the mode line goes away above an input box', () => {
+    const { client, watches } = fakeClient()
+    const { result } = renderHook(() => useConsoleLive({ hostID: 'h', paneID: 'p1', client, enabled: true }))
+    act(() => watches[0].onFrame(full('p1', working1)))
+    expect(result.current.mode).toBe('bypass')
+    const defaultScreen = ['● 完成。', '─'.repeat(20), '❯ ', '─'.repeat(20), '  ? for shortcuts'].join('\n')
+    act(() => watches[0].onFrame(full('p1', defaultScreen, 2)))
+    expect(result.current.mode).toBe('default')
+    act(() => watches[0].onFrame(full('p1', questionMulti, 3)))
+    expect(result.current.mode).toBe('default')
+  })
+
   it('shares one watch per pane and stops it after the last subscriber leaves', () => {
     const { client, watches } = fakeClient()
     const first = renderHook(() => useConsoleLive({ hostID: 'h', paneID: 'p1', client, enabled: true }))
