@@ -1,10 +1,10 @@
 // Apply the saved appearance before the application and its stylesheet paint.
 // manifest.webmanifest keeps the site-default theme_color (#f7f8fa). This script
 // and appearance.ts update the theme-color meta at runtime for the active scope
-// (workbench defaults to dark #142c3c).
+// (both sections default to light #f7f8fa).
 (() => {
 const workbench = /^\/h\/[^/]+$/.test(location.pathname) && !location.hash.startsWith('#pair=')
-let choice = workbench ? 'dark' : 'light'
+let choice = 'light'
 try {
   const saved = localStorage.getItem(workbench ? 'herdrx.workbench-appearance.v1' : 'herdrx.site-appearance.v1')
   if (saved === 'dark' || saved === 'light' || (workbench && saved === 'solarized-light')) choice = saved

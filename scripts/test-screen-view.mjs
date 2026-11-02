@@ -14,7 +14,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
-import { servePanePrompt } from './browser-controls.mjs'
+import { servePanePrompt, enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_SCREEN_ARTIFACTS
@@ -56,6 +56,7 @@ const base = `http://127.0.0.1:${server.address().port}`
 
 async function fixture(browser, options) {
   const context = await browser.newContext(options)
+  await enterShellMode(context)
   const page = await context.newPage()
   page.setDefaultTimeout(10_000)
   const messages = [], errors = []

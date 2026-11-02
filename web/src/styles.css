@@ -202,6 +202,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 .workspace-branch { color: var(--muted); }
 .workspace-row .status-dot, .workspace-number, .workspace-count { flex-shrink: 0; }
 .sidebar-section-title .workspace-create { width: auto; padding: 0 7px; display: flex; gap: 3px; color: var(--text); background: var(--panel-strong); }
+.sidebar-section-actions { display: flex; align-items: center; gap: 4px; }
+.tabbar .tabbar-new-session { gap: 5px; white-space: nowrap; }
 .workspace-create:disabled { opacity: .5; cursor: wait; }
 .workspace-number { min-width: 14px; color: var(--muted); font-size: 11px; }
 .workspace-count { margin-left: auto; padding: 0 3px; }
@@ -593,7 +595,8 @@ code, pre { font-family: "JetBrains Mono", ui-monospace, Menlo, "Roboto Mono", "
 /* 手机顶栏的视图开关：只保留滑块和 Chat 字样，整块仍是 44 px 的触控目标。 */
 .mobile-topbar > .mobile-view-toggle { flex: 0 0 auto; padding: 0 6px; border-radius: 0; }
 .mobile-topbar > .mobile-view-toggle .pane-view-toggle-label-terminal { display: none; }
-@media (max-width: 359px) { .mobile-topbar > .mobile-view-toggle .pane-view-toggle-label { display: none; } }
+/* 顶栏还要放模式开关：窄于 390px 时视图开关只留滑块。 */
+@media (max-width: 389px) { .mobile-topbar > .mobile-view-toggle .pane-view-toggle-label { display: none; } }
 /* 软键盘盖住 Home 指示条时，底部安全区留白只会挤掉终端行数。 */
 .workbench-keyboard .workbench-dock, .workbench-keyboard .chat-compose { padding-bottom: 0; }
 .workbench-compact .history-navigation .tool-button { min-height: 44px; min-width: 60px; }

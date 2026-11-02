@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chooseOption, acceptConfirmation } from './browser-controls.mjs'
+import { chooseOption, acceptConfirmation, enterShellMode } from './browser-controls.mjs'
 // Isolated browser data only; never connects to Herdr or an existing user pane.
 // Chromium uses trusted CDP touch input. WebKit uses TouchEvent dispatch to
 // check routing/cancellation; native iOS scrolling still needs a device check.
@@ -122,6 +122,7 @@ async function controllerChecks(browser, engine) {
 
 async function workbenchChecks(browser, engine, history) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+  await enterShellMode(context)
   const page = await context.newPage()
   // Fixed source geometry is intentional here: this suite tests viewport-edge handoff.
   await page.addInitScript(() => localStorage.setItem('herdrx.terminal-display.v2', JSON.stringify({ mobile: { mode: 'fixed', fontSize: 14, zoom: 100 } })))

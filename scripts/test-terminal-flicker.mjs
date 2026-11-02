@@ -8,6 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const cols = 150, rows = 45
@@ -55,6 +56,7 @@ try {
     try {
       for (const mobile of [false, true]) {
         const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1500, height: 950 }, deviceScaleFactor: mobile ? 3 : 1, hasTouch: mobile, ...(name !== 'firefox' ? { isMobile: mobile } : {}) })
+        await enterShellMode(context)
         const page = await context.newPage()
         await page.addInitScript(() => {
           // This suite exercises fixed source frames; reflow has its own geometry tests.

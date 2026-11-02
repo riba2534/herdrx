@@ -7,6 +7,7 @@ import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { chromium, firefox, webkit, expect } from '../web/node_modules/@playwright/test/index.mjs'
+import { enterShellMode } from './browser-controls.mjs'
 
 const dist = fileURLToPath(new URL('../web/dist/', import.meta.url))
 const artifacts = process.env.HERDRX_SPACE_ARTIFACTS
@@ -60,6 +61,7 @@ const results = []
 
 async function fixture(browser, options, fixtureSnapshot = snapshot) {
   const context = await browser.newContext(options)
+  await enterShellMode(context)
   const page = await context.newPage()
   const messages = [], errors = []
   page.on('pageerror', (error) => errors.push(error.message))
