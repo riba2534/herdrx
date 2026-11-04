@@ -345,6 +345,27 @@ func transcriptRelAllowed(agent, cwd, sessionID, rel string) bool {
 	return false
 }
 
+// transcriptPathIdentity 给出 Cursor 与 Grok 的会话身份。这两个 reader 的 jsonl 里没有
+// cwd 和会话 id，身份只能从路径推导：Cursor 的 cwd 只认同级 `.workspace-trusted` 的
+// workspacePath，Grok 的 cwd 是第一段目录名的百分号解码；会话 id 都是路径里的那一段。
+//
+// handled 为 false 表示该 agent 的身份写在记录内容里，调用方照常读 shape。handled 为 true
+// 时，cwd 或 sessionID 为空表示路径证明不了归属，调用方必须当作不属于这个 pane，
+// 不能改用目录名或 mtime 猜。cwd 是否等于 pane cwd 由调用方用 cwdMatch 核对。
+func transcriptPathIdentity(ctx context.Context, files transcriptFS, agent, rel string) (cwd, sessionID string, handled bool, err error) {
+	switch agent {
+	case agentlog.AgentCursor:
+		workspace, err := cursorWorkspace(ctx, files, rel)
+		if err != nil {
+			return "", "", true, err
+		}
+		return workspace, agentlog.CursorSessionID(rel), true, nil
+	case agentlog.AgentGrok:
+		return agentlog.GrokCWD(rel), agentlog.GrokSessionID(rel), true, nil
+	}
+	return "", "", false, nil
+}
+
 // ── 入口 ──
 
 // readTranscript 是共用引擎：判定 agent / cwd → 解析候选或会话 → 按游标切片 → 返回记录。
@@ -730,24 +751,15 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 				continue
 			}
 			shape := shapes[position]
-			if agent == agentlog.AgentCursor {
-				workspace, err := cursorWorkspace(ctx, files, entry.Rel)
+			if pathCWD, pathID, handled, err := transcriptPathIdentity(ctx, files, agent, entry.Rel); handled {
 				if err != nil {
 					return nil, false, err
 				}
-				if workspace == "" {
+				if pathCWD == "" || pathID == "" {
 					continue
 				}
-				shape.CWD = workspace
-				shape.SessionID = agentlog.CursorSessionID(entry.Rel)
-			}
-			if agent == agentlog.AgentGrok {
-				decoded := agentlog.GrokCWD(entry.Rel)
-				if decoded == "" || !cwdMatch(files, decoded, cwd) {
-					continue
-				}
-				shape.CWD = decoded
-				shape.SessionID = agentlog.GrokSessionID(entry.Rel)
+				shape.CWD = pathCWD
+				shape.SessionID = pathID
 			}
 			if agent == agentlog.AgentGemini {
 				// 单个文件读不了（过大、正在被替换）只跳过它，不中止整次扫描。
@@ -766,18 +778,14 @@ func collectCandidatesIn(ctx context.Context, files transcriptFS, codec transcri
 			switch agent {
 			case agentlog.AgentClaude:
 				sessionID = agentlog.SessionStem(baseName(entry.Rel))
-			case agentlog.AgentCursor:
-				sessionID = agentlog.CursorSessionID(entry.Rel)
+			case agentlog.AgentCursor, agentlog.AgentGrok:
+				// 会话 id 已由 transcriptPathIdentity 从路径取出，且不为空。
 			case agentlog.AgentGemini:
 				if sessionID == "" {
 					continue
 				}
 			case agentlog.AgentPi:
 				if sessionID == "" || agentlog.PiSessionID(baseName(entry.Rel)) != sessionID {
-					continue
-				}
-			case agentlog.AgentGrok:
-				if sessionID == "" {
 					continue
 				}
 			case agentlog.AgentDSH:
@@ -956,23 +964,14 @@ func transcriptMessages(ctx context.Context, files transcriptFS, codec transcrip
 		return transcriptSessionLost(ctx, files, codec, agent, cwd)
 	}
 	shape := shapes[0]
-	if agent == agentlog.AgentCursor {
-		workspace, err := cursorWorkspace(ctx, files, rel)
+	if pathCWD, pathID, handled, err := transcriptPathIdentity(ctx, files, agent, rel); handled {
 		if err != nil {
 			return transcriptDegradeFromError(err, agent)
 		}
-		if workspace == "" || !cwdMatch(files, workspace, cwd) {
+		if pathCWD == "" || pathID != sessionID || !cwdMatch(files, pathCWD, cwd) {
 			return transcriptSessionLost(ctx, files, codec, agent, cwd)
 		}
-		shape.CWD = workspace
-		shape.SessionID = sessionID
-	}
-	if agent == agentlog.AgentGrok {
-		decoded := agentlog.GrokCWD(rel)
-		if decoded == "" || !cwdMatch(files, decoded, cwd) || agentlog.GrokSessionID(rel) != sessionID {
-			return transcriptSessionLost(ctx, files, codec, agent, cwd)
-		}
-		shape.CWD = decoded
+		shape.CWD = pathCWD
 		shape.SessionID = sessionID
 	}
 	// 空文件（或还没有任何完整行）是正常的「空会话」，不是降级，也不能因此判定归属；
